@@ -750,46 +750,117 @@ const AdminDashboard = () => {
   
   // Save draft and published sessions to localStorage
   // Helper function to clean up old localStorage data
-  const cleanupOldData = () => {
+  const cleanupOldData = (aggressive = false) => {
     try {
-      // Clean up old draft sessions (keep only last 10)
+      let cleanedBytes = 0;
+      
+      // Clean up old draft sessions (keep only last 5 if aggressive, 10 otherwise)
       const drafts = localStorage.getItem('draft_sessions');
       if (drafts) {
         const parsed = JSON.parse(drafts);
-        if (parsed.length > 10) {
-          const cleaned = parsed.slice(0, 10);
+        const keepCount = aggressive ? 5 : 10;
+        if (parsed.length > keepCount) {
+          const cleaned = parsed.slice(0, keepCount);
+          const oldSize = drafts.length;
           localStorage.setItem('draft_sessions', JSON.stringify(cleaned));
-          console.log(`Cleaned up ${parsed.length - 10} old draft sessions`);
+          cleanedBytes += oldSize - JSON.stringify(cleaned).length;
+          console.log(`Cleaned up ${parsed.length - keepCount} old draft sessions`);
         }
       }
       
-      // Clean up old published sessions (remove completed ones older than 30 days)
+      // Clean up old published sessions (remove completed ones older than 14 days if aggressive, 30 days otherwise)
       const published = localStorage.getItem('published_sessions');
       if (published) {
         const parsed = JSON.parse(published);
-        const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+        const daysAgo = aggressive ? 14 : 30;
+        const cutoffTime = Date.now() - (daysAgo * 24 * 60 * 60 * 1000);
         const cleaned = parsed.filter(session => {
           // Keep active/in-progress sessions
           if (session.status && session.status !== 'completed') return true;
           // Keep recent completed sessions
           const completedAt = session.completedAt ? new Date(session.completedAt).getTime() : 0;
-          return completedAt > thirtyDaysAgo;
+          return completedAt > cutoffTime;
         });
         if (cleaned.length < parsed.length) {
+          const oldSize = published.length;
           localStorage.setItem('published_sessions', JSON.stringify(cleaned));
+          cleanedBytes += oldSize - JSON.stringify(cleaned).length;
           console.log(`Cleaned up ${parsed.length - cleaned.length} old published sessions`);
         }
       }
       
-      // Clean up old activities (keep only last 100)
+      // Clean up old activities (keep only last 50 if aggressive, 100 otherwise)
       const activities = localStorage.getItem('admin_activities');
       if (activities) {
         const parsed = JSON.parse(activities);
-        if (parsed.length > 100) {
-          const cleaned = parsed.slice(0, 100);
+        const keepCount = aggressive ? 50 : 100;
+        if (parsed.length > keepCount) {
+          const cleaned = parsed.slice(0, keepCount);
+          const oldSize = activities.length;
           localStorage.setItem('admin_activities', JSON.stringify(cleaned));
-          console.log(`Cleaned up ${parsed.length - 100} old activities`);
+          cleanedBytes += oldSize - JSON.stringify(cleaned).length;
+          console.log(`Cleaned up ${parsed.length - keepCount} old activities`);
         }
+      }
+      
+      // Clean up saved assessments (keep only last 20 if aggressive, 50 otherwise)
+      const assessments = localStorage.getItem('saved_assessments');
+      if (assessments) {
+        const parsed = JSON.parse(assessments);
+        const keepCount = aggressive ? 20 : 50;
+        if (parsed.length > keepCount) {
+          const cleaned = parsed.slice(0, keepCount);
+          const oldSize = assessments.length;
+          localStorage.setItem('saved_assessments', JSON.stringify(cleaned));
+          cleanedBytes += oldSize - JSON.stringify(cleaned).length;
+          console.log(`Cleaned up ${parsed.length - keepCount} old assessments`);
+        }
+      }
+      
+      // Clean up saved sessions (keep only last 50 if aggressive, 100 otherwise)
+      const savedSessions = localStorage.getItem('admin_saved_sessions');
+      if (savedSessions) {
+        const parsed = JSON.parse(savedSessions);
+        const keepCount = aggressive ? 50 : 100;
+        if (parsed.length > keepCount) {
+          const cleaned = parsed.slice(0, keepCount);
+          const oldSize = savedSessions.length;
+          localStorage.setItem('admin_saved_sessions', JSON.stringify(cleaned));
+          cleanedBytes += oldSize - JSON.stringify(cleaned).length;
+          console.log(`Cleaned up ${parsed.length - keepCount} old saved sessions`);
+        }
+      }
+      
+      // Clean up old notifications (keep only last 50 if aggressive, 100 otherwise)
+      const notifications = localStorage.getItem('admin_notifications');
+      if (notifications) {
+        const parsed = JSON.parse(notifications);
+        const keepCount = aggressive ? 50 : 100;
+        if (parsed.length > keepCount) {
+          const cleaned = parsed.slice(0, keepCount);
+          const oldSize = notifications.length;
+          localStorage.setItem('admin_notifications', JSON.stringify(cleaned));
+          cleanedBytes += oldSize - JSON.stringify(cleaned).length;
+          console.log(`Cleaned up ${parsed.length - keepCount} old notifications`);
+        }
+      }
+      
+      // Clean up old session certifications (keep only last 100 if aggressive, 200 otherwise)
+      const certifications = localStorage.getItem('session_certifications');
+      if (certifications) {
+        const parsed = JSON.parse(certifications);
+        const keepCount = aggressive ? 100 : 200;
+        if (parsed.length > keepCount) {
+          const cleaned = parsed.slice(0, keepCount);
+          const oldSize = certifications.length;
+          localStorage.setItem('session_certifications', JSON.stringify(cleaned));
+          cleanedBytes += oldSize - JSON.stringify(cleaned).length;
+          console.log(`Cleaned up ${parsed.length - keepCount} old certifications`);
+        }
+      }
+      
+      if (cleanedBytes > 0) {
+        console.log(`Total storage cleaned: ${(cleanedBytes / 1024).toFixed(2)} KB`);
       }
       
       return true;
@@ -813,20 +884,54 @@ const AdminDashboard = () => {
       return true;
     } catch (error) {
       if (error.name === 'QuotaExceededError' || error.code === 22) {
-        console.error(`localStorage quota exceeded for ${key}. Attempting to clean up...`);
-        // Try to clean up old data
-        if (cleanupOldData()) {
+        console.error(`localStorage quota exceeded for ${key}. Attempting aggressive cleanup...`);
+        // Try aggressive cleanup first
+        if (cleanupOldData(true)) {
           try {
-            // Try again after cleanup
+            // Try again after aggressive cleanup
             localStorage.setItem(key, JSON.stringify(value));
+            console.log(`Successfully saved ${key} after aggressive cleanup`);
             return true;
           } catch (retryError) {
-            console.error(`Failed to save ${key} even after cleanup:`, retryError);
-            alert(`Storage limit reached. Please clear some old sessions or refresh the page.`);
+            console.error(`Failed to save ${key} even after aggressive cleanup:`, retryError);
+            // Try one more time with even more aggressive cleanup
+            try {
+              // Remove oldest 50% of data from each category
+              const allKeys = Object.keys(localStorage);
+              let totalCleaned = 0;
+              for (const storageKey of allKeys) {
+                if (storageKey.startsWith('admin_') || storageKey.includes('session') || storageKey.includes('assessment')) {
+                  try {
+                    const data = localStorage.getItem(storageKey);
+                    if (data) {
+                      const parsed = JSON.parse(data);
+                      if (Array.isArray(parsed) && parsed.length > 10) {
+                        const keepCount = Math.max(10, Math.floor(parsed.length * 0.5));
+                        const cleaned = parsed.slice(0, keepCount);
+                        localStorage.setItem(storageKey, JSON.stringify(cleaned));
+                        totalCleaned += data.length - JSON.stringify(cleaned).length;
+                      }
+                    }
+                  } catch (e) {
+                    // Skip if can't parse
+                  }
+                }
+              }
+              if (totalCleaned > 0) {
+                console.log(`Emergency cleanup freed ${(totalCleaned / 1024).toFixed(2)} KB`);
+                localStorage.setItem(key, JSON.stringify(value));
+                return true;
+              }
+            } catch (finalError) {
+              console.error(`Final attempt failed:`, finalError);
+            }
+            const message = `Storage limit reached. The app has automatically cleaned up old data, but storage is still full.\n\nPlease:\n1. Refresh the page to reload data\n2. Or manually clear old sessions from the dashboard\n\nYour current work will be saved in memory but may be lost on refresh.`;
+            alert(message);
             return false;
           }
         } else {
-          alert(`Storage limit reached. Please clear some old sessions or refresh the page.`);
+          const message = `Storage limit reached. Unable to clean up automatically.\n\nPlease:\n1. Refresh the page\n2. Or clear browser storage manually\n\nYour current work will be saved in memory but may be lost on refresh.`;
+          alert(message);
           return false;
         }
       }
@@ -855,11 +960,8 @@ useEffect(() => {
   }, [activities]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem('session_certifications', JSON.stringify(sessionCertifications));
+    if (safeSetLocalStorage('session_certifications', sessionCertifications)) {
       window.dispatchEvent(new Event('session-certifications-updated'));
-    } catch (error) {
-      console.error('Failed to persist session certifications', error);
     }
   }, [sessionCertifications]);
 
@@ -907,20 +1009,23 @@ useEffect(() => {
         return file;
       })
     }));
-    localStorage.setItem('admin_saved_sessions', JSON.stringify(serializableSessions));
-    console.log('Saved sessions to localStorage:', serializableSessions);
+    if (safeSetLocalStorage('admin_saved_sessions', serializableSessions)) {
+      console.log('Saved sessions to localStorage:', serializableSessions);
+    }
   }, [savedSessions]);
 
   // Save employees to localStorage whenever they change
   useEffect(() => {
-    localStorage.setItem('admin_employees', JSON.stringify(employees));
-    console.log('Saved employees to localStorage:', employees);
+    if (safeSetLocalStorage('admin_employees', employees)) {
+      console.log('Saved employees to localStorage:', employees);
+    }
   }, [employees]);
 
   // Save notifications to localStorage whenever they change
   useEffect(() => {
-    localStorage.setItem('admin_notifications', JSON.stringify(notifications));
-    console.log('Saved notifications to localStorage:', notifications);
+    if (safeSetLocalStorage('admin_notifications', notifications)) {
+      console.log('Saved notifications to localStorage:', notifications);
+    }
   }, [notifications]);
 
   // Real-time updates: Listen for storage changes (cross-tab communication)
