@@ -130,9 +130,19 @@ const Sidebar = styled(Box)(({ theme }) => ({
   backgroundColor: 'white',
   color: '#374151',
   padding: theme.spacing(2),
+  paddingTop: 0,
   display: 'flex',
   flexDirection: 'column',
   borderRight: '1px solid #e5e7eb',
+  position: 'sticky',
+  top: 0,
+  height: '100vh',
+  overflowY: 'auto',
+  '&::-webkit-scrollbar': {
+    display: 'none'
+  },
+  scrollbarWidth: 'none',
+  msOverflowStyle: 'none'
 }));
 
 const MainContent = styled(Box)(({ theme }) => ({
@@ -1070,9 +1080,10 @@ useEffect(() => {
     const totalSessionCount = savedSessions.length;
     
     return [
-      { label: 'Completed', value: completedSessions, percentage: totalSessionCount > 0 ? Math.round((completedSessions / totalSessionCount) * 100) : 0 },
-      { label: 'In Progress', value: inProgressSessions, percentage: totalSessionCount > 0 ? Math.round((inProgressSessions / totalSessionCount) * 100) : 0 },
+      { label: 'All', value: totalSessionCount, percentage: 100 },
       { label: 'Scheduled', value: scheduledSessions, percentage: totalSessionCount > 0 ? Math.round((scheduledSessions / totalSessionCount) * 100) : 0 },
+      { label: 'In Progress', value: inProgressSessions, percentage: totalSessionCount > 0 ? Math.round((inProgressSessions / totalSessionCount) * 100) : 0 },
+      { label: 'Completed', value: completedSessions, percentage: totalSessionCount > 0 ? Math.round((completedSessions / totalSessionCount) * 100) : 0 },
       { label: 'Draft', value: draftSessionsCount, percentage: totalSessionCount > 0 ? Math.round((draftSessionsCount / totalSessionCount) * 100) : 0 }
     ];
   }, [savedSessions]);
@@ -1258,7 +1269,7 @@ useEffect(() => {
 
   const navigationItems = [
     { id: 'dashboard', label: 'Dashboard', icon: <BarChartIcon /> },
-    { id: 'manage-session', label: 'Manage', icon: <LightbulbIcon /> },
+    { id: 'manage-session', label: 'Manage sessions', icon: <LightbulbIcon /> },
     { id: 'course-library', label: 'Session Library', icon: <LibraryBooksIcon /> },
     { id: 'approvals', label: 'Approvals', icon: <CheckCircleIcon /> },
     { id: 'employees', label: 'Employee Management', icon: <GroupIcon /> },
@@ -1329,6 +1340,34 @@ useEffect(() => {
       setSelectedAllSessionItem(null);
       setShowPublishDialog(false);
       setSessionToPublish(null);
+    }
+  };
+
+  // Helper function to get the next step in the flow
+  const getNextStep = (currentStep) => {
+    const stepOrder = ['create', 'content-creator', 'assessment', 'certification', 'all-sessions', 'schedule'];
+    const currentIndex = stepOrder.indexOf(currentStep);
+    if (currentIndex >= 0 && currentIndex < stepOrder.length - 1) {
+      return stepOrder[currentIndex + 1];
+    }
+    return currentStep; // If already at last step, stay there
+  };
+
+  // Handler for Skip button - moves to next step
+  const handleSkipToNextStep = () => {
+    const nextStep = getNextStep(manageSessionTab);
+    setManageSessionTab(nextStep);
+    setManageSessionView(nextStep);
+    
+    // Handle step-specific setup
+    if (nextStep === 'content-creator') {
+      setShowContentCreator(true);
+    } else if (nextStep === 'assessment') {
+      setShowContentCreator(false);
+      setShowQuizForm(false);
+    } else if (nextStep === 'certification') {
+      setShowContentCreator(false);
+      setShowQuizForm(false);
     }
   };
 
@@ -1603,7 +1642,7 @@ useEffect(() => {
   };
 
   const handleContentCreatorCancel = () => {
-    setActiveTab('dashboard');
+    setActiveTab('course-library');
     setContentCreatorView('main');
     setShowContentCreator(false);
     setSelectedFiles([]);
@@ -1795,7 +1834,11 @@ useEffect(() => {
   };
 
   const handleFileInputClick = () => {
-    document.getElementById('file-upload-input').click();
+    const inputId = contentCreatorView === 'upload-file' ? 'file-upload-input-main' : 'file-upload-input';
+    const input = document.getElementById(inputId);
+    if (input) {
+      input.click();
+    }
   };
 
   const handleDragOver = (e) => {
@@ -2212,7 +2255,7 @@ useEffect(() => {
         setContentCreatorView('main');
       } else {
         // Otherwise, go back to dashboard
-      setActiveTab('dashboard');
+      setActiveTab('course-library');
         setManageSessionView(null);
     }
     }
@@ -2730,10 +2773,10 @@ useEffect(() => {
             handleManageSessionClick('create');
           }}
           sx={{
-            backgroundColor: '#153B1A',
+            backgroundColor: '#114417DB',
             color: 'white',
             '&:hover': {
-              backgroundColor: '#0d2a12',
+              backgroundColor: '#0a2f0e',
             },
             textTransform: 'none',
             fontWeight: 600,
@@ -2773,20 +2816,21 @@ useEffect(() => {
             <Typography variant="h6" fontWeight="bold" gutterBottom>
               Session Status Overview
             </Typography>
-            <Box display="flex" alignItems="flex-start" justifyContent="space-between" mt={3} flex={1} sx={{ overflowY: 'auto', maxHeight: '350px', pr: 1 }}>
-              <Box flex={1}>
+            <Box display="flex" flexDirection="column" mt={3} flex={1} sx={{ justifyContent: 'space-between' }}>
+              <Box flex={1} display="flex" flexDirection="column" justifyContent="space-between">
                 {sessionStatusData.map((item, index) => {
                   const getColor = () => {
                     switch(item.label) {
-                      case 'Completed': return '#10b981';
-                      case 'In Progress': return '#f59e0b';
+                      case 'All': return '#114417DB';
                       case 'Scheduled': return '#3b82f6';
+                      case 'In Progress': return '#f59e0b';
+                      case 'Completed': return '#10b981';
                       case 'Draft': return '#ef4444';
                       default: return '#6b7280';
                     }
                   };
                   return (
-                    <Box key={index} mb={2}>
+                    <Box key={index} sx={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                       <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
                         <Typography variant="body2" fontWeight="medium">
                           {item.label}
@@ -2869,7 +2913,16 @@ useEffect(() => {
                 </Typography>
               </Box>
             ) : (
-              <Box sx={{ flex: 1, overflowY: 'auto', maxHeight: '350px' }}>
+              <Box sx={{ 
+                flex: 1, 
+                overflowY: 'auto', 
+                maxHeight: '350px',
+                '&::-webkit-scrollbar': {
+                  display: 'none'
+                },
+                scrollbarWidth: 'none',
+                msOverflowStyle: 'none'
+              }}>
                 <List sx={{ pt: 0 }}>
                   {topPerformers.map((employee) => (
                       <ListItem 
@@ -2936,7 +2989,7 @@ useEffect(() => {
         <Grid container spacing={3}>
           {/* Draft Sessions */}
           <Grid item xs={12} md={4}>
-            <ActivityCard>
+            <ActivityCard sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
               <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
                 <Typography variant="h6" fontWeight="bold">
                   Draft Sessions
@@ -2947,7 +3000,7 @@ useEffect(() => {
                   size="small"
                 />
               </Box>
-              <List>
+              <List sx={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                 {draftCoursesList.slice(0, 3).map((session) => (
                   <ListItem 
                     key={session.id} 
@@ -2972,7 +3025,7 @@ useEffect(() => {
                   </ListItem>
                 ))}
                 {draftCoursesList.length === 0 && (
-                  <Typography variant="body2" color="text.secondary" sx={{ pl: 4 }}>
+                  <Typography variant="body2" color="text.secondary" sx={{ pl: 4, flex: 1, display: 'flex', alignItems: 'center' }}>
                     No draft sessions
                   </Typography>
                 )}
@@ -2993,7 +3046,7 @@ useEffect(() => {
 
           {/* Popular Sessions */}
           <Grid item xs={12} md={4}>
-            <ActivityCard>
+            <ActivityCard sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
               <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
                 <Typography variant="h6" fontWeight="bold">
                   Popular Sessions
@@ -3004,7 +3057,7 @@ useEffect(() => {
                   size="small"
                 />
               </Box>
-              <List>
+              <List sx={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                 {popularCoursesList.slice(0, 3).map((session) => (
                   <ListItem key={session.id} sx={{ px: 0, py: 1 }}>
                     <ListItemIcon>
@@ -3017,7 +3070,7 @@ useEffect(() => {
                   </ListItem>
                 ))}
                 {popularCoursesList.length === 0 && (
-                  <Typography variant="body2" color="text.secondary" sx={{ pl: 4 }}>
+                  <Typography variant="body2" color="text.secondary" sx={{ pl: 4, flex: 1, display: 'flex', alignItems: 'center' }}>
                     No completed sessions yet
                   </Typography>
                 )}
@@ -3038,7 +3091,7 @@ useEffect(() => {
 
           {/* Newly Added Sessions */}
           <Grid item xs={12} md={4}>
-            <ActivityCard>
+            <ActivityCard sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
               <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
                 <Typography variant="h6" fontWeight="bold">
                   Newly Added Sessions
@@ -3049,7 +3102,7 @@ useEffect(() => {
                   size="small"
                 />
               </Box>
-              <List>
+              <List sx={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                 {newlyAddedCoursesList.slice(0, 3).map((session) => (
                   <ListItem key={session.id} sx={{ px: 0, py: 1 }}>
                     <ListItemIcon>
@@ -3062,7 +3115,7 @@ useEffect(() => {
                   </ListItem>
                 ))}
                 {newlyAddedCoursesList.length === 0 && (
-                  <Typography variant="body2" color="text.secondary" sx={{ pl: 4 }}>
+                  <Typography variant="body2" color="text.secondary" sx={{ pl: 4, flex: 1, display: 'flex', alignItems: 'center' }}>
                     No sessions added yet
                   </Typography>
                 )}
@@ -3248,13 +3301,7 @@ useEffect(() => {
   const renderLiveTrainingsContentCreator = () => (
     <Box p={3}>
       <Box mb={4}>
-        <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-          <Button
-            startIcon={<ArrowBackIcon />}
-            onClick={() => setContentCreatorView('main')}
-          >
-            Back to Content Creator
-          </Button>
+        <Box display="flex" justifyContent="flex-end" alignItems="center" mb={2}>
           <Box display="flex" gap={2}>
             <Button
               variant="outlined"
@@ -3275,11 +3322,7 @@ useEffect(() => {
             </Button>
             <Button
               variant="outlined"
-              onClick={() => {
-                setShowContentCreator(false);
-                setActiveTab('manage-session');
-                setManageSessionTab('all-sessions');
-              }}
+              onClick={handleSkipToNextStep}
               sx={{
                 borderColor: '#6b7280',
                 color: '#6b7280',
@@ -3802,11 +3845,7 @@ useEffect(() => {
             </Button>
             <Button
               variant="outlined"
-              onClick={() => {
-                setActiveTab('manage-session');
-                setManageSessionTab('all-sessions');
-                setManageSessionView('all-sessions');
-              }}
+              onClick={handleSkipToNextStep}
               sx={{
                 borderColor: '#6b7280',
                 color: '#6b7280',
@@ -4469,61 +4508,7 @@ useEffect(() => {
 
   const renderCreateSession = () => (
     <Box p={3}>
-      <Box mb={4} display="flex" justifyContent="space-between" alignItems="flex-start">
-        <Box>
-          <Typography variant="h4" fontWeight="bold" gutterBottom>
-            Create New Session
-          </Typography>
-          <Typography variant="body1" color="text.secondary">
-            Generate comprehensive learning materials from keywords
-          </Typography>
-        </Box>
-        <Box display="flex" gap={2}>
-          <Button 
-            variant="outlined" 
-            startIcon={<SaveIcon />}
-            onClick={handleSaveSession}
-            sx={{ 
-              borderColor: '#10b981', 
-              color: '#10b981', 
-              '&:hover': { 
-                borderColor: '#059669', 
-                backgroundColor: '#d1fae5' 
-              },
-              textTransform: 'none',
-              fontWeight: 600
-            }}
-          >
-            Save as Draft
-          </Button>
-          <Button
-            variant="outlined"
-            onClick={() => {
-              setActiveTab('manage-session');
-              setManageSessionTab('all-sessions');
-            }}
-            sx={{
-              borderColor: '#6b7280',
-              color: '#6b7280',
-              '&:hover': {
-                borderColor: '#4b5563',
-                backgroundColor: '#f3f4f6'
-              },
-              textTransform: 'none',
-              fontWeight: 600
-            }}
-          >
-            Skip
-          </Button>
-        </Box>
-      </Box>
-
-      <Grid container spacing={3} justifyContent="center">
-        <Grid item xs={12} md={8} lg={6}>
-          <Card sx={{ p: 3 }}>
-            <Typography variant="h6" fontWeight="bold" gutterBottom>
-              Session Details
-            </Typography>
+      <Card sx={{ p: 3, maxWidth: '100%' }}>
             <TextField
               label="Session Title"
               value={sessionFormData.title}
@@ -4571,99 +4556,86 @@ useEffect(() => {
                           rows={3}
                           margin="normal"
                         />
-            <Box display="flex" gap={2} mt={3}>
+            <Box display="flex" gap={2} mt={3} justifyContent="center">
               <Button 
                 variant="outlined" 
-                fullWidth
-                onClick={() => setActiveTab('dashboard')}
-                sx={{ borderColor: '#ef4444', color: '#ef4444', '&:hover': { borderColor: '#dc2626', backgroundColor: '#fef2f2' } }}
+                startIcon={<SaveIcon />}
+                onClick={handleSaveSession}
+                sx={{ 
+                  borderColor: '#10b981', 
+                  color: '#10b981', 
+                  '&:hover': { 
+                    borderColor: '#059669', 
+                    backgroundColor: '#d1fae5' 
+                  },
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  minWidth: 150
+                }}
+              >
+                Save as Draft
+              </Button>
+              <Button
+                variant="outlined"
+                onClick={() => {
+                  setManageSessionTab('content-creator');
+                  setManageSessionView('content-creator');
+                  setShowContentCreator(true);
+                }}
+                sx={{
+                  borderColor: '#6b7280',
+                  color: '#6b7280',
+                  '&:hover': {
+                    borderColor: '#4b5563',
+                    backgroundColor: '#f3f4f6'
+                  },
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  minWidth: 150
+                }}
+              >
+                Skip
+              </Button>
+              <Button 
+                variant="outlined" 
+                onClick={() => setActiveTab('course-library')}
+                sx={{ 
+                  borderColor: '#ef4444', 
+                  color: '#ef4444', 
+                  '&:hover': { 
+                    borderColor: '#dc2626', 
+                    backgroundColor: '#fef2f2' 
+                  },
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  minWidth: 150
+                }}
               >
                 Cancel
               </Button>
               <Button 
                 variant="contained" 
-                fullWidth
                 onClick={handleCreateSession}
-                sx={{ backgroundColor: '#3b82f6', '&:hover': { backgroundColor: '#2563eb' } }}
+                sx={{ 
+                  backgroundColor: '#114417DB', 
+                  '&:hover': { 
+                    backgroundColor: '#0a2f0e' 
+                  },
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  minWidth: 150
+                }}
               >
-                Create Session
+                Create
               </Button>
             </Box>
           </Card>
-        </Grid>
-      </Grid>
     </Box>
   );
 
   // Main Content Creator Menu
   const renderContentCreatorMain = () => (
     <Box p={3}>
-      <Box mb={4}>
-        <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-          <Button
-            startIcon={<ArrowBackIcon />}
-            onClick={() => {
-              if (manageSessionView === 'content-creator') {
-                setActiveTab('dashboard');
-              } else {
-                setShowContentCreator(false);
-              }
-            }}
-          >
-            Back
-          </Button>
-          <Box display="flex" gap={2}>
-            <Button
-              variant="outlined"
-              onClick={handleSaveSession}
-              startIcon={<SaveIcon />}
-              sx={{
-                borderColor: '#10b981',
-                color: '#10b981',
-                '&:hover': {
-                  borderColor: '#059669',
-                  backgroundColor: '#d1fae5'
-                },
-                textTransform: 'none',
-                fontWeight: 600
-              }}
-            >
-              Save as Draft
-            </Button>
-            <Button
-              variant="outlined"
-              onClick={() => {
-                setShowContentCreator(false);
-                setActiveTab('manage-session');
-                setManageSessionTab('all-sessions');
-              }}
-              sx={{
-                borderColor: '#6b7280',
-                color: '#6b7280',
-                '&:hover': {
-                  borderColor: '#4b5563',
-                  backgroundColor: '#f3f4f6'
-                },
-                textTransform: 'none',
-                fontWeight: 600
-              }}
-            >
-              Skip
-            </Button>
-          </Box>
-        </Box>
-        <Box display="flex" justifyContent="space-between" alignItems="flex-start">
-          <Box>
-            <Typography variant="h4" fontWeight="bold" gutterBottom>
-              Content Creator
-            </Typography>
-            <Typography variant="body1" color="text.secondary">
-              Generate comprehensive learning materials from keywords
-            </Typography>
-          </Box>
-        </Box>
-      </Box>
-
       <Grid container spacing={3}>
         {/* AI Content Creator Option */}
         <Grid item xs={12} md={4}>
@@ -4692,33 +4664,6 @@ useEffect(() => {
           </Card>
         </Grid>
 
-        {/* Content Creation Modes Option */}
-        <Grid item xs={12} md={4}>
-          <Card 
-            sx={{ 
-              p: 4, 
-              textAlign: 'center', 
-              cursor: 'pointer', 
-              height: '100%',
-              transition: 'all 0.3s',
-              '&:hover': { 
-                backgroundColor: '#f8fafc',
-                transform: 'translateY(-4px)',
-                boxShadow: '0 8px 24px rgba(0,0,0,0.12)'
-              } 
-            }}
-            onClick={() => setContentCreatorView('creation-modes')}
-          >
-            <LightbulbIcon sx={{ fontSize: 64, color: '#3b82f6', mb: 2 }} />
-            <Typography variant="h5" fontWeight="bold" gutterBottom>
-              Content Creation Modes
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Create presentations, documents, and training videos using various tools
-            </Typography>
-          </Card>
-        </Grid>
-
         {/* Upload File Option */}
         <Grid item xs={12} md={4}>
           <Card 
@@ -4734,7 +4679,13 @@ useEffect(() => {
                 boxShadow: '0 8px 24px rgba(0,0,0,0.12)'
               } 
             }}
-            onClick={() => setContentCreatorView('upload-file')}
+            onClick={() => {
+              if (contentCreatorView === 'upload-file') {
+                setContentCreatorView('main');
+              } else {
+                setContentCreatorView('upload-file');
+              }
+            }}
           >
             <CloudUploadIcon sx={{ fontSize: 64, color: '#10b981', mb: 2 }} />
             <Typography variant="h5" fontWeight="bold" gutterBottom>
@@ -4774,8 +4725,83 @@ useEffect(() => {
         </Grid>
       </Grid>
 
-      {/* Uploaded Files Display */}
-      {selectedFiles.length > 0 && (
+      {/* Upload Section - Shown when Upload File is selected */}
+      {contentCreatorView === 'upload-file' && (
+        <Box mt={4}>
+          <Card sx={{ p: 3 }}>
+            <Box
+              sx={{
+                border: '2px dashed #d1d5db',
+                borderRadius: 2,
+                p: 4,
+                textAlign: 'center',
+                backgroundColor: dragOver ? '#f3f4f6' : 'transparent',
+                cursor: 'pointer',
+                transition: 'all 0.3s',
+                '&:hover': {
+                  backgroundColor: '#f9fafb',
+                  borderColor: '#3b82f6',
+                },
+              }}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              onClick={handleFileInputClick}
+            >
+              <CloudUploadIcon sx={{ fontSize: 64, color: '#6b7280', mb: 2 }} />
+              <Typography variant="h6" fontWeight="medium" gutterBottom>
+                Drag and drop files here, or click to browse
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Supports PDF, DOC, PPT, MP4, and more. You can upload multiple files.
+              </Typography>
+              <input
+                type="file"
+                id="file-upload-input-main"
+                multiple
+                accept=".pdf,.doc,.docx,.ppt,.pptx,.mp4,.avi,.mov"
+                onChange={handleFileSelect}
+                style={{ display: 'none' }}
+              />
+            </Box>
+            <Button
+              variant="outlined"
+              fullWidth
+              onClick={handleFileInputClick}
+              sx={{ mt: 3 }}
+              size="large"
+            >
+              Choose Files
+            </Button>
+            
+            {selectedFiles.length > 0 && (
+              <Box mt={3}>
+                <Typography variant="h6" fontWeight="bold" gutterBottom>
+                  Selected Files ({selectedFiles.length}):
+                </Typography>
+                {selectedFiles.map((file, index) => (
+                  <Box key={index} display="flex" justifyContent="space-between" alignItems="center" mb={2} p={2} sx={{ backgroundColor: '#f8fafc', borderRadius: 1 }}>
+                    <Box>
+                      <Typography variant="body1" fontWeight="medium">
+                        {file.name}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {formatFileSize(file.size)}
+                      </Typography>
+                    </Box>
+                    <IconButton size="small" onClick={() => removeFile(index)} color="error">
+                      <CloseIcon />
+                    </IconButton>
+                  </Box>
+                ))}
+              </Box>
+            )}
+          </Card>
+        </Box>
+      )}
+
+      {/* Uploaded Files Display - Show when files are uploaded but upload section is not active */}
+      {selectedFiles.length > 0 && contentCreatorView !== 'upload-file' && (
         <Box mt={4}>
           <Card sx={{ p: 3 }}>
             <Typography variant="h6" fontWeight="bold" gutterBottom>
@@ -4794,39 +4820,81 @@ useEffect(() => {
                 <Chip label="Uploaded" color="success" size="small" />
               </Box>
             ))}
-
-            {/* Cancel and Proceed Buttons */}
-            <Box display="flex" gap={2} mt={3}>
-              <Button
-                variant="outlined"
-                fullWidth
-                size="large"
-                onClick={handleContentCreatorCancel}
-                sx={{
-                  borderColor: '#ef4444',
-                  color: '#ef4444',
-                  '&:hover': { borderColor: '#dc2626', backgroundColor: '#fef2f2' }
-                }}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="contained"
-                fullWidth
-                size="large"
-                onClick={handleProceedFromMainToQuiz}
-                startIcon={<QuizIcon />}
-                sx={{
-                  backgroundColor: '#153B1A',
-                  '&:hover': { backgroundColor: '#0d2a12' }
-                }}
-              >
-                Proceed
-              </Button>
-            </Box>
           </Card>
         </Box>
       )}
+
+      {/* Bottom Buttons */}
+      <Box display="flex" gap={2} mt={4} justifyContent="center">
+        <Button
+          variant="outlined"
+          startIcon={<SaveIcon />}
+          onClick={handleSaveSession}
+          sx={{
+            borderColor: '#10b981',
+            color: '#10b981',
+            '&:hover': {
+              borderColor: '#059669',
+              backgroundColor: '#d1fae5'
+            },
+            textTransform: 'none',
+            fontWeight: 600,
+            minWidth: 150
+          }}
+        >
+          Save as Draft
+        </Button>
+        <Button
+          variant="outlined"
+          onClick={handleSkipToNextStep}
+          sx={{
+            borderColor: '#6b7280',
+            color: '#6b7280',
+            '&:hover': {
+              borderColor: '#4b5563',
+              backgroundColor: '#f3f4f6'
+            },
+            textTransform: 'none',
+            fontWeight: 600,
+            minWidth: 150
+          }}
+        >
+          Skip
+        </Button>
+        <Button
+          variant="outlined"
+          onClick={() => setActiveTab('course-library')}
+          sx={{
+            borderColor: '#ef4444',
+            color: '#ef4444',
+            '&:hover': {
+              borderColor: '#dc2626',
+              backgroundColor: '#fef2f2'
+            },
+            textTransform: 'none',
+            fontWeight: 600,
+            minWidth: 150
+          }}
+        >
+          Cancel
+        </Button>
+        <Button
+          variant="contained"
+          onClick={handleProceedFromMainToQuiz}
+          startIcon={<QuizIcon />}
+          sx={{
+            backgroundColor: '#114417DB',
+            '&:hover': {
+              backgroundColor: '#0a2f0e'
+            },
+            textTransform: 'none',
+            fontWeight: 600,
+            minWidth: 150
+          }}
+        >
+          Proceed
+        </Button>
+      </Box>
     </Box>
   );
 
@@ -4834,13 +4902,7 @@ useEffect(() => {
   const renderAIContentCreator = () => (
     <Box p={3}>
       <Box mb={4}>
-        <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-          <Button
-            startIcon={<ArrowBackIcon />}
-            onClick={() => setContentCreatorView('main')}
-          >
-            Back to Content Creator
-          </Button>
+        <Box display="flex" justifyContent="flex-end" alignItems="center" mb={2}>
           <Box display="flex" gap={2}>
             <Button
               variant="outlined"
@@ -4861,11 +4923,7 @@ useEffect(() => {
             </Button>
             <Button
               variant="outlined"
-              onClick={() => {
-                setShowContentCreator(false);
-                setActiveTab('manage-session');
-                setManageSessionTab('all-sessions');
-              }}
+              onClick={handleSkipToNextStep}
               sx={{
                 borderColor: '#6b7280',
                 color: '#6b7280',
@@ -4961,209 +5019,12 @@ useEffect(() => {
     </Box>
   );
 
-  // Content Creation Modes Page
-  const renderContentCreationModes = () => (
-    <Box p={3}>
-      <Box mb={4}>
-        <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-          <Button
-            startIcon={<ArrowBackIcon />}
-            onClick={() => setContentCreatorView('main')}
-          >
-            Back to Content Creator
-          </Button>
-          <Box display="flex" gap={2}>
-            <Button
-              variant="outlined"
-              onClick={handleSaveSession}
-              startIcon={<SaveIcon />}
-              sx={{
-                borderColor: '#10b981',
-                color: '#10b981',
-                '&:hover': {
-                  borderColor: '#059669',
-                  backgroundColor: '#d1fae5'
-                },
-                textTransform: 'none',
-                fontWeight: 600
-              }}
-            >
-              Save as Draft
-            </Button>
-            <Button
-              variant="outlined"
-              onClick={() => {
-                setShowContentCreator(false);
-                setActiveTab('manage-session');
-                setManageSessionTab('all-sessions');
-              }}
-              sx={{
-                borderColor: '#6b7280',
-                color: '#6b7280',
-                '&:hover': {
-                  borderColor: '#4b5563',
-                  backgroundColor: '#f3f4f6'
-                },
-                textTransform: 'none',
-                fontWeight: 600
-              }}
-            >
-              Skip
-            </Button>
-          </Box>
-        </Box>
-        <Box display="flex" justifyContent="space-between" alignItems="flex-start">
-          <Box>
-            <Typography variant="h4" fontWeight="bold" gutterBottom>
-              Content Creation Modes
-            </Typography>
-            <Typography variant="body1" color="text.secondary">
-              Choose a tool to create your content
-            </Typography>
-          </Box>
-        </Box>
-      </Box>
-
-      <Grid container spacing={3}>
-        <Grid item xs={12} sm={6} md={4}>
-          <Card sx={{ 
-            p: 3, 
-            textAlign: 'center', 
-            cursor: 'pointer', 
-            border: selectedCreationMode === 'powerpoint' ? '2px solid #3b82f6' : '1px solid #e5e7eb',
-            backgroundColor: selectedCreationMode === 'powerpoint' ? '#eff6ff' : 'white',
-            '&:hover': { backgroundColor: '#f8fafc' } 
-          }}>
-            <DescriptionIcon sx={{ fontSize: 48, color: '#3b82f6', mb: 2 }} />
-            <Typography variant="h6" fontWeight="bold" gutterBottom>
-              PowerPoint
-            </Typography>
-            <Typography variant="body2" color="text.secondary" mb={2}>
-              Create engaging presentations with slides, animations, and interactive elements.
-            </Typography>
-            <Button 
-              variant={selectedCreationMode === 'powerpoint' ? 'contained' : 'outlined'} 
-              fullWidth 
-              onClick={() => {
-                handleOpenPowerPoint();
-                setSelectedCreationMode('powerpoint');
-              }}
-            >
-              Create Presentation
-            </Button>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={4}>
-          <Card sx={{ 
-            p: 3, 
-            textAlign: 'center', 
-            cursor: 'pointer', 
-            border: selectedCreationMode === 'word' ? '2px solid #10b981' : '1px solid #e5e7eb',
-            backgroundColor: selectedCreationMode === 'word' ? '#f0fdf4' : 'white',
-            '&:hover': { backgroundColor: '#f8fafc' } 
-          }}>
-            <ArticleIcon sx={{ fontSize: 48, color: '#10b981', mb: 2 }} />
-            <Typography variant="h6" fontWeight="bold" gutterBottom>
-              Word Document
-            </Typography>
-            <Typography variant="body2" color="text.secondary" mb={2}>
-              Create comprehensive documents with text, images, and formatting.
-            </Typography>
-            <Button 
-              variant={selectedCreationMode === 'word' ? 'contained' : 'outlined'} 
-              fullWidth 
-              onClick={() => {
-                handleOpenWord();
-                setSelectedCreationMode('word');
-              }}
-            >
-              Create Document
-            </Button>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={4}>
-          <Card sx={{ 
-            p: 3, 
-            textAlign: 'center', 
-            cursor: 'pointer', 
-            border: selectedCreationMode === 'video' ? '2px solid #f59e0b' : '1px solid #e5e7eb',
-            backgroundColor: selectedCreationMode === 'video' ? '#fffbeb' : 'white',
-            '&:hover': { backgroundColor: '#f8fafc' } 
-          }}>
-            <VideoLibraryIcon sx={{ fontSize: 48, color: '#f59e0b', mb: 2 }} />
-            <Typography variant="h6" fontWeight="bold" gutterBottom>
-              Training Videos
-            </Typography>
-            <Typography variant="body2" color="text.secondary" mb={2}>
-              Create engaging video content with narration, animations, and interactive elements.
-            </Typography>
-            <Button 
-              variant={selectedCreationMode === 'video' ? 'contained' : 'outlined'} 
-              fullWidth 
-              onClick={() => {
-                handleOpenVideoEditor();
-                setSelectedCreationMode('video');
-              }}
-            >
-              Create Video
-            </Button>
-          </Card>
-        </Grid>
-      </Grid>
-
-      {selectedCreationMode && (
-        <Box mt={3} p={2} sx={{ backgroundColor: '#d1fae5', borderRadius: 2 }}>
-          <Typography variant="body1" color="success.main" fontWeight="medium">
-            ✓ {selectedCreationMode === 'powerpoint' ? 'PowerPoint' : selectedCreationMode === 'word' ? 'Word Document' : 'Training Video'} selected. 
-            Please open the application to create your content, then proceed.
-          </Typography>
-        </Box>
-      )}
-
-      {/* Cancel and Proceed Buttons */}
-      <Box display="flex" gap={2} mt={4}>
-        <Button
-          variant="outlined"
-          fullWidth
-          size="large"
-          onClick={handleContentCreatorCancel}
-          sx={{
-            borderColor: '#ef4444',
-            color: '#ef4444',
-            '&:hover': { borderColor: '#dc2626', backgroundColor: '#fef2f2' }
-          }}
-        >
-          Cancel
-        </Button>
-        <Button
-          variant="contained"
-          fullWidth
-          size="large"
-          onClick={handleContentCreatorProceed}
-          disabled={!selectedCreationMode}
-          sx={{
-            backgroundColor: '#10b981',
-            '&:hover': { backgroundColor: '#059669' },
-            '&:disabled': { backgroundColor: '#d1d5db', color: '#9ca3af' }
-          }}
-        >
-          Proceed
-        </Button>
-      </Box>
-    </Box>
-  );
 
   // Upload File Page
   const renderUploadFile = () => (
     <Box p={3}>
       <Box mb={4}>
-        <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-          <Button
-            startIcon={<ArrowBackIcon />}
-            onClick={() => setContentCreatorView('main')}
-          >
-            Back to Content Creator
-          </Button>
+        <Box display="flex" justifyContent="flex-end" alignItems="center" mb={2}>
           <Box display="flex" gap={2}>
             <Button
               variant="outlined"
@@ -5184,11 +5045,7 @@ useEffect(() => {
             </Button>
             <Button
               variant="outlined"
-              onClick={() => {
-                setShowContentCreator(false);
-                setActiveTab('manage-session');
-                setManageSessionTab('all-sessions');
-              }}
+              onClick={handleSkipToNextStep}
               sx={{
                 borderColor: '#6b7280',
                 color: '#6b7280',
@@ -5323,10 +5180,6 @@ useEffect(() => {
     switch (contentCreatorView) {
       case 'ai-creator':
         return renderAIContentCreator();
-      case 'creation-modes':
-        return renderContentCreationModes();
-      case 'upload-file':
-        return renderUploadFile();
       case 'live-trainings':
         return renderLiveTrainingsContentCreator();
       default:
@@ -5431,8 +5284,8 @@ useEffect(() => {
                 onClick={handleProceedToQuiz}
                 startIcon={<QuizIcon />}
                 sx={{
-                  backgroundColor: '#153B1A',
-                  '&:hover': { backgroundColor: '#0d2a12' }
+                  backgroundColor: '#114417DB',
+                  '&:hover': { backgroundColor: '#0a2f0e' }
                 }}
               >
                 Create Questionnaire (Checkpoint Assessment)
@@ -5537,7 +5390,7 @@ useEffect(() => {
     setShowCalendar(false);
     
     // Navigate back to dashboard
-    setActiveTab('dashboard');
+    setActiveTab('course-library');
     
     alert(`Session scheduled successfully! Calendar invites sent to ${employeeEmails.length} employees.`);
   };
@@ -5582,11 +5435,11 @@ useEffect(() => {
                 <IconButton
                   onClick={() => setScheduleSessionsViewMode('grid')}
                   sx={{
-                    backgroundColor: scheduleSessionsViewMode === 'grid' ? '#153B1A' : 'transparent',
+                    backgroundColor: scheduleSessionsViewMode === 'grid' ? '#114417DB' : 'transparent',
                     color: scheduleSessionsViewMode === 'grid' ? 'white' : '#666',
                     border: '1px solid #e5e7eb',
                     '&:hover': {
-                      backgroundColor: scheduleSessionsViewMode === 'grid' ? '#0d2a12' : '#f0fdf4'
+                      backgroundColor: scheduleSessionsViewMode === 'grid' ? '#0a2f0e' : '#f0fdf4'
                     }
                   }}
                 >
@@ -5595,11 +5448,11 @@ useEffect(() => {
                 <IconButton
                   onClick={() => setScheduleSessionsViewMode('list')}
                   sx={{
-                    backgroundColor: scheduleSessionsViewMode === 'list' ? '#153B1A' : 'transparent',
+                    backgroundColor: scheduleSessionsViewMode === 'list' ? '#114417DB' : 'transparent',
                     color: scheduleSessionsViewMode === 'list' ? 'white' : '#666',
                     border: '1px solid #e5e7eb',
                     '&:hover': {
-                      backgroundColor: scheduleSessionsViewMode === 'list' ? '#0d2a12' : '#f0fdf4'
+                      backgroundColor: scheduleSessionsViewMode === 'list' ? '#0a2f0e' : '#f0fdf4'
                     }
                   }}
                 >
@@ -5673,7 +5526,7 @@ useEffect(() => {
                                       label="Published"
                                       size="small"
                                       sx={{
-                                        backgroundColor: '#153B1A',
+                                        backgroundColor: '#114417DB',
                                         color: 'white',
                                         fontWeight: 'medium',
                                         fontSize: '0.7rem'
@@ -5701,9 +5554,9 @@ useEffect(() => {
                                   startIcon={<CalendarIcon />}
                                   onClick={() => handleOpenScheduleDialog(session)}
                                   sx={{
-                                    backgroundColor: isScheduled ? '#10b981' : '#153B1A',
+                                    backgroundColor: isScheduled ? '#10b981' : '#114417DB',
                                     '&:hover': { 
-                                      backgroundColor: isScheduled ? '#059669' : '#0d2a12' 
+                                      backgroundColor: isScheduled ? '#059669' : '#0a2f0e' 
                                     }
                                   }}
                                 >
@@ -5798,9 +5651,9 @@ useEffect(() => {
                                   startIcon={<CalendarIcon />}
                                   onClick={() => handleOpenScheduleDialog(session)}
                                   sx={{
-                                    backgroundColor: isScheduled ? '#10b981' : '#153B1A',
+                                    backgroundColor: isScheduled ? '#10b981' : '#114417DB',
                                     '&:hover': { 
-                                      backgroundColor: isScheduled ? '#059669' : '#0d2a12' 
+                                      backgroundColor: isScheduled ? '#059669' : '#0a2f0e' 
                                     },
                                     flex: 1
                                   }}
@@ -5888,11 +5741,11 @@ useEffect(() => {
                 <IconButton
                   onClick={() => setScheduleSessionsViewMode('grid')}
                   sx={{
-                    backgroundColor: scheduleSessionsViewMode === 'grid' ? '#153B1A' : 'transparent',
+                    backgroundColor: scheduleSessionsViewMode === 'grid' ? '#114417DB' : 'transparent',
                     color: scheduleSessionsViewMode === 'grid' ? 'white' : '#666',
                     border: '1px solid #e5e7eb',
                     '&:hover': {
-                      backgroundColor: scheduleSessionsViewMode === 'grid' ? '#0d2a12' : '#f0fdf4'
+                      backgroundColor: scheduleSessionsViewMode === 'grid' ? '#0a2f0e' : '#f0fdf4'
                     }
                   }}
                 >
@@ -5901,11 +5754,11 @@ useEffect(() => {
                 <IconButton
                   onClick={() => setScheduleSessionsViewMode('list')}
                   sx={{
-                    backgroundColor: scheduleSessionsViewMode === 'list' ? '#153B1A' : 'transparent',
+                    backgroundColor: scheduleSessionsViewMode === 'list' ? '#114417DB' : 'transparent',
                     color: scheduleSessionsViewMode === 'list' ? 'white' : '#666',
                     border: '1px solid #e5e7eb',
                     '&:hover': {
-                      backgroundColor: scheduleSessionsViewMode === 'list' ? '#0d2a12' : '#f0fdf4'
+                      backgroundColor: scheduleSessionsViewMode === 'list' ? '#0a2f0e' : '#f0fdf4'
                     }
                   }}
                 >
@@ -6301,8 +6154,8 @@ useEffect(() => {
                 onClick={handleConfirmSchedule}
                 disabled={!scheduleDate || !scheduleTime || !scheduleDueDate || !scheduleDueTime}
                 sx={{
-                  backgroundColor: '#153B1A',
-                  '&:hover': { backgroundColor: '#0d2a12' }
+                  backgroundColor: '#114417DB',
+                  '&:hover': { backgroundColor: '#0a2f0e' }
                 }}
               >
                 Confirm Date & Time
@@ -10372,7 +10225,7 @@ useEffect(() => {
       { label: 'Content Creator', value: 'content-creator' },
       { label: 'Checkpoint Assessment', value: 'assessment' },
       { label: 'Certification', value: 'certification' },
-      { label: 'Manage Sessions', value: 'all-sessions' },
+      { label: 'Preview Session', value: 'all-sessions' },
       { label: 'Schedule', value: 'schedule' }
     ];
 
@@ -10382,24 +10235,27 @@ useEffect(() => {
     // Custom Step Connector for better styling
     const CustomStepConnector = styled(StepConnector)(({ theme }) => ({
       [`&.${stepConnectorClasses.alternativeLabel}`]: {
-        top: 22,
+        top: 18,
       },
       [`&.${stepConnectorClasses.active}`]: {
         [`& .${stepConnectorClasses.line}`]: {
-          borderColor: '#3b82f6',
+          borderColor: '#114417DB',
           borderTopWidth: 3,
+          transition: 'border-color 0.5s ease, border-width 0.5s ease',
         },
       },
       [`&.${stepConnectorClasses.completed}`]: {
         [`& .${stepConnectorClasses.line}`]: {
-          borderColor: '#10b981',
+          borderColor: '#114417DB',
           borderTopWidth: 3,
+          transition: 'border-color 0.5s ease, border-width 0.5s ease',
         },
       },
       [`& .${stepConnectorClasses.line}`]: {
         borderColor: '#e5e7eb',
         borderTopWidth: 2,
         borderRadius: 1,
+        transition: 'border-color 0.5s ease, border-width 0.5s ease',
       },
     }));
 
@@ -10407,25 +10263,25 @@ useEffect(() => {
     const StepIcon = ({ active, completed, stepNumber }) => (
       <Box
         sx={{
-          width: 44,
-          height: 44,
+          width: 36,
+          height: 36,
           borderRadius: '50%',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: completed ? '#10b981' : active ? '#3b82f6' : '#e5e7eb',
+          backgroundColor: completed ? '#114417DB' : active ? '#114417DB' : '#e5e7eb',
           color: (completed || active) ? 'white' : '#9ca3af',
           fontWeight: 'bold',
-          fontSize: '1.1rem',
+          fontSize: '0.9rem',
           transition: 'all 0.3s ease',
           cursor: 'pointer',
           '&:hover': {
             transform: 'scale(1.1)',
-            boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)',
+            boxShadow: '0 4px 12px rgba(17, 68, 23, 0.3)',
           }
         }}
       >
-        {completed ? <CheckCircleIcon /> : stepNumber}
+        {completed ? <CheckCircleIcon sx={{ fontSize: 20 }} /> : stepNumber}
       </Box>
     );
 
@@ -10433,11 +10289,8 @@ useEffect(() => {
       <Box>
         {/* Numbered Progress Bar */}
         <Box sx={{ 
-          backgroundColor: 'white', 
-          py: 4, 
-          px: 3,
-          borderBottom: '1px solid #e5e7eb',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+          py: 2, 
+          px: 3
         }}>
           <Stepper 
             activeStep={currentStepIndex >= 0 ? currentStepIndex : steps.length - 1} 
@@ -10468,14 +10321,14 @@ useEffect(() => {
                   sx={{
                     '& .MuiStepLabel-label': {
                       fontWeight: currentStepIndex === index ? 600 : 400,
-                      color: currentStepIndex === index ? '#3b82f6' : currentStepIndex > index ? '#10b981' : '#6b7280',
-                      fontSize: '0.9rem',
-                      mt: 1,
+                      color: currentStepIndex === index ? '#114417DB' : currentStepIndex > index ? '#114417DB' : '#6b7280',
+                      fontSize: '0.8rem',
+                      mt: 0.5,
                       '&.Mui-active': {
-                        color: '#3b82f6',
+                        color: '#114417DB',
                       },
                       '&.Mui-completed': {
-                        color: '#10b981',
+                        color: '#114417DB',
                       }
                     }
                   }}
@@ -10548,8 +10401,10 @@ useEffect(() => {
             display: 'flex', 
             alignItems: 'center', 
             gap: 1.5,
-            mb: 2,
-            height: 64
+            height: 64,
+            py: 1,
+            mt: 0,
+            px: 2
           }}
         >
           <Box
@@ -10558,14 +10413,14 @@ useEffect(() => {
             alt="GrowGrid logo"
             sx={{ 
               width: 'auto', 
-              height: 64, 
-              maxWidth: '80px',
+              height: 48, 
+              maxWidth: '60px',
               display: 'block',
               objectFit: 'contain',
               flexShrink: 0
             }}
           />
-          <Box>
+          <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', height: '64px' }}>
             <Typography 
               variant="h5" 
               fontWeight="bold" 
@@ -10592,7 +10447,7 @@ useEffect(() => {
             </Typography>
           </Box>
         </Box>
-        <Divider sx={{ my: 2, backgroundColor: '#e5e7eb' }} />
+        <Divider sx={{ mt: 0, mb: 2, backgroundColor: '#e5e7eb' }} />
         <List>
           {navigationItems.map((item) => (
             <ListItem 
@@ -10627,13 +10482,13 @@ useEffect(() => {
                 }
               }}
               sx={{
-                backgroundColor: activeTab === item.id ? '#10b981' : 'transparent',
+                backgroundColor: activeTab === item.id ? '#114417DB' : 'transparent',
                 borderRadius: 1,
                 mb: 1,
                 position: 'relative',
                 cursor: 'pointer',
                 '&:hover': {
-                  backgroundColor: activeTab === item.id ? '#10b981' : '#f0fdf4',
+                  backgroundColor: activeTab === item.id ? '#114417DB' : '#f0fdf4',
                 },
               }}
             >
@@ -10718,9 +10573,21 @@ useEffect(() => {
 
       <MainContent>
         {/* Header */}
-        <HeaderBar position="static">
-          <Toolbar sx={{ minHeight: '64px !important' }}>
-            <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
+        <HeaderBar position="fixed" sx={{ top: 0, left: '280px', right: 0, zIndex: 1100 }}>
+          <Toolbar sx={{ minHeight: '64px !important', height: '64px', paddingTop: 0, paddingBottom: 0 }}>
+            <Typography 
+              variant="h6" 
+              component="div" 
+              sx={{ 
+                flexGrow: 1,
+                height: '64px',
+                display: 'flex',
+                alignItems: 'center',
+                fontSize: '1rem',
+                lineHeight: '64px',
+                fontFamily: '"Poppins", sans-serif'
+              }}
+            >
               Welcome back, Admin
             </Typography>
             <IconButton 
@@ -10757,6 +10624,7 @@ useEffect(() => {
         </HeaderBar>
 
         {/* Content */}
+        <Box sx={{ mt: '64px' }}>
         {showContentPreview ? renderContentPreview() :
          showSavedSessionsFolder ? renderSavedSessionsFolder() :
          showPasswordManager ? renderPasswordManager() :
@@ -10775,6 +10643,7 @@ useEffect(() => {
          activeTab === 'analytics' ? renderAnalytics() :
          activeTab === 'settings' ? renderSettings() :
          renderOtherTabs()}
+        </Box>
 
         {/* Profile Menu */}
         <Menu

@@ -70,9 +70,19 @@ const Sidebar = styled(Box)(({ theme }) => ({
   backgroundColor: 'white',
   color: '#374151',
   padding: theme.spacing(2),
+  paddingTop: 0,
   display: 'flex',
   flexDirection: 'column',
   borderRight: '1px solid #e5e7eb',
+  position: 'sticky',
+  top: 0,
+  height: '100vh',
+  overflowY: 'auto',
+  '&::-webkit-scrollbar': {
+    display: 'none'
+  },
+  scrollbarWidth: 'none',
+  msOverflowStyle: 'none'
 }));
 
 const MainContent = styled(Box)(({ theme }) => ({
@@ -117,7 +127,7 @@ const HeaderBar = styled(AppBar)(({ theme }) => ({
   boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
 }));
 
-const MetricsCard = styled(Card)(({ theme, color = '#153B1A' }) => ({
+const MetricsCard = styled(Card)(({ theme, color = '#114417DB' }) => ({
   padding: theme.spacing(2),
   textAlign: 'center',
   backgroundColor: 'white',
@@ -257,11 +267,21 @@ const EmployeeDashboard = () => {
 
   useEffect(() => {
     const syncPublished = () => {
+      console.log('Employee dashboard: Syncing published sessions...');
       const loaded = loadPublishedSessions();
       console.log('Employee dashboard: Published sessions updated', loaded.length, 'sessions');
+      console.log('Sessions status breakdown:', loaded.map(s => ({ 
+        title: s.title, 
+        isLocked: s.isLocked, 
+        status: s.status 
+      })));
       setPublishedSessions(loaded);
     };
 
+    // Initial load
+    syncPublished();
+
+    // Listen for updates
     window.addEventListener('published-sessions-updated', syncPublished);
     const handleStorage = (event) => {
       if (event.key === 'published_sessions') {
@@ -481,7 +501,7 @@ const EmployeeDashboard = () => {
     { 
       label: 'Total Sessions', 
       value: totalSessionsStarted, 
-      color: '#153B1A', 
+      color: '#114417DB', 
       icon: <CheckCircleIcon /> 
     },
     { 
@@ -550,7 +570,7 @@ const EmployeeDashboard = () => {
         action: isCompleted ? 'Completed session' : isLocked ? 'Session locked' : 'Upcoming session',
         session: session.title || 'Untitled session',
         time: formatRelativeTime(referenceDate),
-                  icon: isCompleted ? <CheckCircleIcon sx={{ color: '#10b981' }} /> : isLocked ? <LockIcon sx={{ color: '#ef4444' }} /> : <ScheduleIcon sx={{ color: '#153B1A' }} />,
+                  icon: isCompleted ? <CheckCircleIcon sx={{ color: '#10b981' }} /> : isLocked ? <LockIcon sx={{ color: '#ef4444' }} /> : <ScheduleIcon sx={{ color: '#114417DB' }} />,
         sortDate: referenceDate ? referenceDate.getTime() : Date.now()
       };
     });
@@ -798,8 +818,8 @@ const EmployeeDashboard = () => {
                 startIcon={<PlayIcon />}
                 onClick={handleJoinSession}
                 sx={{ 
-                  backgroundColor: '#153B1A', 
-                  '&:hover': { backgroundColor: '#0d2a12' },
+                  backgroundColor: '#114417DB', 
+                  '&:hover': { backgroundColor: '#0a2f0e' },
                   px: 4,
                   py: 1.5
                 }}
@@ -918,7 +938,7 @@ const EmployeeDashboard = () => {
               variant="contained"
               startIcon={<EditIcon />}
               onClick={handleEditProfile}
-              sx={{ backgroundColor: '#153B1A', '&:hover': { backgroundColor: '#0d2a12' } }}
+              sx={{ backgroundColor: '#114417DB', '&:hover': { backgroundColor: '#0a2f0e' } }}
             >
               Edit Profile
             </Button>
@@ -1088,7 +1108,7 @@ const EmployeeDashboard = () => {
           <Button
             variant="contained"
             onClick={handleProfileSave}
-            sx={{ backgroundColor: '#153B1A', '&:hover': { backgroundColor: '#0d2a12' } }}
+            sx={{ backgroundColor: '#114417DB', '&:hover': { backgroundColor: '#0a2f0e' } }}
           >
             Save Changes
           </Button>
@@ -1113,8 +1133,10 @@ const EmployeeDashboard = () => {
             display: 'flex', 
             alignItems: 'center', 
             gap: 1.5,
-            mb: 2,
-            height: 64
+            height: 64,
+            mb: 0,
+            pt: 0,
+            mt: 0
           }}
         >
           <Box
@@ -1123,14 +1145,14 @@ const EmployeeDashboard = () => {
             alt="GrowGrid logo"
             sx={{ 
               width: 'auto', 
-              height: 64, 
-              maxWidth: '80px',
+              height: 48, 
+              maxWidth: '60px',
               display: 'block',
               objectFit: 'contain',
               flexShrink: 0
             }}
           />
-          <Box>
+          <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', height: '64px' }}>
             <Typography 
               variant="h5" 
               fontWeight="bold" 
@@ -1157,7 +1179,7 @@ const EmployeeDashboard = () => {
             </Typography>
           </Box>
         </Box>
-        <Divider sx={{ my: 2, backgroundColor: '#e5e7eb' }} />
+        <Divider sx={{ mt: 0, mb: 2, backgroundColor: '#e5e7eb' }} />
         <List>
           {navigationItems.map((item) => (
             <ListItem 
@@ -1165,11 +1187,11 @@ const EmployeeDashboard = () => {
               button 
               onClick={() => handleTabChange(item.id)}
               sx={{
-                backgroundColor: activeTab === item.id ? '#153B1A' : 'transparent',
+                backgroundColor: activeTab === item.id ? '#114417DB' : 'transparent',
                 borderRadius: 1,
                 mb: 1,
                 '&:hover': {
-                  backgroundColor: activeTab === item.id ? '#153B1A' : '#f0fdf4',
+                  backgroundColor: activeTab === item.id ? '#114417DB' : '#f0fdf4',
                 },
               }}
             >
@@ -1190,9 +1212,21 @@ const EmployeeDashboard = () => {
 
       <MainContent>
         {/* Header */}
-        <HeaderBar position="static">
-          <Toolbar sx={{ minHeight: '64px !important' }}>
-            <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
+        <HeaderBar position="static" sx={{ top: 0 }}>
+          <Toolbar sx={{ minHeight: '64px !important', height: '64px', paddingTop: 0, paddingBottom: 0 }}>
+            <Typography 
+              variant="h6" 
+              component="div" 
+              sx={{ 
+                flexGrow: 1,
+                height: '64px',
+                display: 'flex',
+                alignItems: 'center',
+                fontSize: '1rem',
+                lineHeight: '64px',
+                fontFamily: '"Poppins", sans-serif'
+              }}
+            >
               Welcome back, {profileData.firstName}!
             </Typography>
             

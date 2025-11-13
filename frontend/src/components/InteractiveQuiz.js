@@ -414,104 +414,6 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
 
   return (
     <Box sx={{ width: '100%', p: 3 }}>
-      {/* Page Header */}
-      <Box mb={4} display="flex" justifyContent="space-between" alignItems="center">
-        <Box>
-          <Typography variant="h4" fontWeight="bold" gutterBottom>
-            Quiz & Assessment Creator
-          </Typography>
-          <Typography variant="body1" color="text.secondary">
-            Create, manage, and deploy training assessments
-          </Typography>
-        </Box>
-        
-        {/* Action Buttons - Top Right */}
-        {/* Show Save as Draft and Skip buttons when onSkip is provided (for assessment page) */}
-        {onSaveDraft && onSkip && (
-          <Box display="flex" gap={2} alignItems="center">
-            <Button
-              variant="outlined"
-              onClick={() => onSaveDraft(buildQuizData())}
-              startIcon={<SaveIcon />}
-              sx={{
-                borderColor: '#10b981',
-                color: '#10b981',
-                '&:hover': {
-                  borderColor: '#059669',
-                  backgroundColor: '#d1fae5'
-                },
-                textTransform: 'none',
-                fontWeight: 600
-              }}
-            >
-              Save as Draft
-            </Button>
-            <Button
-              variant="outlined"
-              onClick={onSkip}
-              sx={{
-                borderColor: '#6b7280',
-                color: '#6b7280',
-                '&:hover': {
-                  borderColor: '#4b5563',
-                  backgroundColor: '#f3f4f6'
-                },
-                textTransform: 'none',
-                fontWeight: 600
-              }}
-            >
-              Skip
-            </Button>
-          </Box>
-        )}
-        
-        {/* Show Save as Draft and Proceed to Publish buttons when onPreview and onPublish are provided (for other quiz contexts) */}
-        {onSaveDraft && onPreview && onPublish && !onSkip && (
-          <Box display="flex" gap={1.5} alignItems="center">
-            <Button
-              variant="outlined"
-              size="medium"
-              onClick={() => onSaveDraft(buildQuizData())}
-              sx={{
-                borderColor: '#f59e0b',
-                color: '#f59e0b',
-                px: 2,
-                py: 1,
-                fontWeight: 500,
-                '&:hover': { borderColor: '#d97706', backgroundColor: '#fffbeb' }
-              }}
-            >
-              Save as Draft
-            </Button>
-            
-            <Button
-              variant="contained"
-              size="medium"
-              onClick={() => onPublish(buildQuizData())}
-              sx={{
-                backgroundColor: '#10b981',
-                px: 2,
-                py: 1,
-                fontWeight: 600,
-                '&:hover': { backgroundColor: '#059669' }
-              }}
-            >
-              Proceed to Publish
-            </Button>
-          </Box>
-        )}
-      </Box>
-
-      {/* Back Button */}
-      <Box mb={3}>
-        <Button 
-          startIcon={<ArrowBackIcon />}
-          onClick={onCancel}
-          sx={{ color: '#666' }}
-        >
-          Back to Dashboard
-        </Button>
-      </Box>
 
       {/* Main Content - Grid Layout */}
       <Grid container spacing={3} sx={{ pt: 2, pb: 4 }}>
@@ -1004,6 +906,79 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
         <MenuItem>Get prefilled link</MenuItem>
         <MenuItem>Go to section based on answer</MenuItem>
       </Menu>
+
+      {/* Bottom Buttons */}
+      {onSaveDraft && onSkip && (
+        <Box display="flex" gap={2} mt={4} justifyContent="center">
+          <Button
+            variant="outlined"
+            startIcon={<SaveIcon />}
+            onClick={() => onSaveDraft(buildQuizData())}
+            sx={{
+              borderColor: '#10b981',
+              color: '#10b981',
+              '&:hover': {
+                borderColor: '#059669',
+                backgroundColor: '#d1fae5'
+              },
+              textTransform: 'none',
+              fontWeight: 600,
+              minWidth: 150
+            }}
+          >
+            Save as Draft
+          </Button>
+          <Button
+            variant="outlined"
+            onClick={onSkip}
+            sx={{
+              borderColor: '#6b7280',
+              color: '#6b7280',
+              '&:hover': {
+                borderColor: '#4b5563',
+                backgroundColor: '#f3f4f6'
+              },
+              textTransform: 'none',
+              fontWeight: 600,
+              minWidth: 150
+            }}
+          >
+            Skip
+          </Button>
+          <Button
+            variant="outlined"
+            onClick={onCancel}
+            sx={{
+              borderColor: '#ef4444',
+              color: '#ef4444',
+              '&:hover': {
+                borderColor: '#dc2626',
+                backgroundColor: '#fef2f2'
+              },
+              textTransform: 'none',
+              fontWeight: 600,
+              minWidth: 150
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            onClick={handleSaveQuiz}
+            sx={{
+              backgroundColor: '#114417DB',
+              '&:hover': {
+                backgroundColor: '#0a2f0e'
+              },
+              textTransform: 'none',
+              fontWeight: 600,
+              minWidth: 150
+            }}
+          >
+            Save
+          </Button>
+        </Box>
+      )}
     </Box>
   );
 };

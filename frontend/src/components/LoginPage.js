@@ -11,10 +11,6 @@ import {
   CircularProgress,
   InputAdornment,
   IconButton,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
   Link
 } from '@mui/material';
 import {
@@ -22,7 +18,7 @@ import {
   VisibilityOff,
   Email as EmailIcon,
   Lock as LockIcon,
-  Close as CloseIcon
+  ArrowBack as ArrowBackIcon
 } from '@mui/icons-material';
 import { styled } from '@mui/material/styles';
 // Import the GrowGrid logo image
@@ -43,7 +39,36 @@ const LoginCard = styled(Card)(({ theme }) => ({
   borderRadius: theme.spacing(3),
   boxShadow: '0 20px 40px rgba(0,0,0,0.1)',
   overflow: 'hidden',
+  position: 'relative',
+  perspective: '1000px',
 }));
+
+const FlipContainer = styled(Box)(({ flipped }) => ({
+  position: 'relative',
+  width: '100%',
+  height: '100%',
+  transformStyle: 'preserve-3d',
+  transition: 'transform 0.6s',
+  transform: flipped ? 'rotateY(180deg)' : 'rotateY(0deg)',
+}));
+
+const FlipFace = styled(Box)({
+  position: 'relative',
+  width: '100%',
+  backfaceVisibility: 'hidden',
+  WebkitBackfaceVisibility: 'hidden',
+});
+
+const FlipFaceFront = styled(FlipFace)({
+  transform: 'rotateY(0deg)',
+});
+
+const FlipFaceBack = styled(FlipFace)({
+  transform: 'rotateY(180deg)',
+  position: 'absolute',
+  top: 0,
+  left: 0,
+});
 
 // Function to determine user role based on email
 const determineUserRole = (email) => {
@@ -181,6 +206,7 @@ const LoginPage = () => {
     setResetEmail('');
     setResetSuccess(false);
     setResetError('');
+    setError('');
   };
 
   const handleResetPassword = async () => {
@@ -208,13 +234,6 @@ const LoginPage = () => {
       // Simulate successful password reset
       setResetSuccess(true);
       setResetLoading(false);
-      
-      // Close dialog after 3 seconds
-      setTimeout(() => {
-        setShowResetPassword(false);
-        setResetSuccess(false);
-        setResetEmail('');
-      }, 3000);
     } catch (error) {
       console.error('Reset password error:', error);
       setResetError('Failed to send reset email. Please try again.');
@@ -222,7 +241,7 @@ const LoginPage = () => {
     }
   };
 
-  const handleCloseResetDialog = () => {
+  const handleBackToLogin = () => {
     setShowResetPassword(false);
     setResetEmail('');
     setResetSuccess(false);
@@ -234,7 +253,7 @@ const LoginPage = () => {
       <Box sx={{ maxWidth: 480, width: '100%' }}>
         <LoginCard>
           <CardContent sx={{ p: 0 }}>
-            {/* Header */}
+            {/* Static Header - Logo and Tagline (doesn't flip) */}
             <Box sx={{ p: 4, pb: 0, textAlign: 'center' }}>
               {/* Logo and Text Side by Side */}
               <Box 
@@ -285,295 +304,311 @@ const LoginPage = () => {
                 </Box>
               </Box>
               <Typography variant="subtitle1" color="text.secondary" gutterBottom>
-                Grid of continuous learning and compliance
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Sign in to your account
+                Where Learning Grows, Compliance Flows
               </Typography>
             </Box>
 
-            {/* Error Alert */}
-            {error && (
-              <Box sx={{ p: 2 }}>
-                <Alert severity="error">{error}</Alert>
-              </Box>
-            )}
+            {/* Flip Container - Only form content flips */}
+            <FlipContainer flipped={showResetPassword}>
+              {/* Front Face - Login Form */}
+              <FlipFaceFront>
+                {/* Error Alert */}
+                {error && (
+                  <Box sx={{ p: 2 }}>
+                    <Alert severity="error">{error}</Alert>
+                  </Box>
+                )}
 
-            {/* Single Login Form */}
-            <Box sx={{ p: 4 }}>
-              <Box 
-                component="form" 
-                noValidate 
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  handleLogin();
-                }}
-              >
-                <TextField
-                  fullWidth
-                  label="Email Address"
-                  type="email"
-                  value={loginForm.email}
-                  onChange={handleInputChange('email')}
-                  margin="normal"
-                  autoComplete="email"
-                  placeholder="Enter your email address"
-                  InputProps={{
-                    startAdornment: (
-                      <InputAdornment position="start">
-                        <EmailIcon sx={{ color: '#153B1A' }} />
-                      </InputAdornment>
-                    ),
-                  }}
-                  sx={{
-                    '& .MuiOutlinedInput-root': {
-                      '&:hover fieldset': {
-                        borderColor: '#153B1A',
-                      },
-                      '&.Mui-focused fieldset': {
-                        borderColor: '#153B1A',
-                      },
-                    },
-                    '& .MuiInputLabel-root.Mui-focused': {
-                      color: '#153B1A',
-                    },
-                  }}
-                  onKeyPress={handleKeyPress}
-                />
-                <TextField
-                  fullWidth
-                  label="Password"
-                  type={showPassword ? 'text' : 'password'}
-                  value={loginForm.password}
-                  onChange={handleInputChange('password')}
-                  margin="normal"
-                  autoComplete="current-password"
-                  InputProps={{
-                    startAdornment: (
-                      <InputAdornment position="start">
-                        <LockIcon sx={{ color: '#153B1A' }} />
-                      </InputAdornment>
-                    ),
-                    endAdornment: (
-                      <InputAdornment position="end">
-                        <IconButton
-                          onClick={() => setShowPassword(!showPassword)}
-                          edge="end"
-                          type="button"
-                        >
-                          {showPassword ? <VisibilityOff /> : <Visibility />}
-                        </IconButton>
-                      </InputAdornment>
-                    ),
-                  }}
-                  onKeyPress={handleKeyPress}
-                  sx={{
-                    '& .MuiOutlinedInput-root': {
-                      '&:hover fieldset': {
-                        borderColor: '#153B1A',
-                      },
-                      '&.Mui-focused fieldset': {
-                        borderColor: '#153B1A',
-                      },
-                    },
-                    '& .MuiInputLabel-root.Mui-focused': {
-                      color: '#153B1A',
-                    },
-                  }}
-                />
-                <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 1 }}>
-                  <Link
-                    component="button"
-                    type="button"
-                    onClick={handleForgotPassword}
-                    sx={{
-                      color: '#153B1A',
-                      textDecoration: 'none',
-                      fontSize: '0.875rem',
-                      '&:hover': {
-                        textDecoration: 'underline',
-                        color: '#0d2a12'
-                      }
+                {/* Login Form */}
+                <Box sx={{ p: 4 }}>
+                  <Box 
+                    component="form" 
+                    noValidate 
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      handleLogin();
                     }}
                   >
-                    Forgot Password?
-                  </Link>
+                    <TextField
+                      fullWidth
+                      label="Email Address"
+                      type="email"
+                      value={loginForm.email}
+                      onChange={handleInputChange('email')}
+                      margin="normal"
+                      autoComplete="email"
+                      placeholder="Enter your email address"
+                      InputProps={{
+                        startAdornment: (
+                          <InputAdornment position="start">
+                            <EmailIcon sx={{ color: '#114417DB' }} />
+                          </InputAdornment>
+                        ),
+                      }}
+                      sx={{
+                        '& .MuiOutlinedInput-root': {
+                          '&:hover fieldset': {
+                            borderColor: '#114417DB',
+                          },
+                          '&.Mui-focused fieldset': {
+                            borderColor: '#114417DB',
+                          },
+                        },
+                        '& .MuiInputLabel-root.Mui-focused': {
+                          color: '#114417DB',
+                        },
+                      }}
+                      onKeyPress={handleKeyPress}
+                    />
+                    <TextField
+                      fullWidth
+                      label="Password"
+                      type={showPassword ? 'text' : 'password'}
+                      value={loginForm.password}
+                      onChange={handleInputChange('password')}
+                      margin="normal"
+                      autoComplete="current-password"
+                      InputProps={{
+                        startAdornment: (
+                          <InputAdornment position="start">
+                            <LockIcon sx={{ color: '#114417DB' }} />
+                          </InputAdornment>
+                        ),
+                        endAdornment: (
+                          <InputAdornment position="end">
+                            <IconButton
+                              onClick={() => setShowPassword(!showPassword)}
+                              edge="end"
+                              type="button"
+                            >
+                              {showPassword ? <VisibilityOff /> : <Visibility />}
+                            </IconButton>
+                          </InputAdornment>
+                        ),
+                      }}
+                      onKeyPress={handleKeyPress}
+                      sx={{
+                        '& .MuiOutlinedInput-root': {
+                          '&:hover fieldset': {
+                            borderColor: '#114417DB',
+                          },
+                          '&.Mui-focused fieldset': {
+                            borderColor: '#114417DB',
+                          },
+                        },
+                        '& .MuiInputLabel-root.Mui-focused': {
+                          color: '#114417DB',
+                        },
+                      }}
+                    />
+                    <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 1 }}>
+                      <Link
+                        component="button"
+                        type="button"
+                        onClick={handleForgotPassword}
+                        sx={{
+                          color: '#114417DB',
+                          textDecoration: 'none',
+                          fontSize: '0.875rem',
+                          '&:hover': {
+                            textDecoration: 'underline',
+                            color: '#0a2f0e'
+                          }
+                        }}
+                      >
+                        Forgot Password?
+                      </Link>
+                    </Box>
+                    <Button
+                      fullWidth
+                      variant="contained"
+                      type="submit"
+                      disabled={loading}
+                      sx={{ 
+                        mt: 3, 
+                        mb: 2,
+                        py: 1.5,
+                        backgroundColor: '#114417DB',
+                        color: '#ffffff',
+                        fontWeight: 500,
+                        fontSize: '0.9375rem',
+                        textTransform: 'none',
+                        '&:hover': { 
+                          backgroundColor: '#0a2f0e',
+                          boxShadow: '0 4px 12px rgba(17, 68, 23, 0.3)'
+                        },
+                        '&:disabled': {
+                          backgroundColor: '#114417DB',
+                          color: '#ffffff',
+                          opacity: 0.6
+                        }
+                      }}
+                    >
+                      {loading ? <CircularProgress size={24} sx={{ color: 'white' }} /> : 'Sign In'}
+                    </Button>
+                  </Box>
                 </Box>
-                <Button
-                  fullWidth
-                  variant="contained"
-                  type="submit"
-                  disabled={loading}
-                  sx={{ 
-                    mt: 3, 
-                    mb: 2,
-                    py: 1.5,
-                    backgroundColor: '#153B1A',
-                    '&:hover': { 
-                      backgroundColor: '#0d2a12',
-                      boxShadow: '0 4px 12px rgba(21, 59, 26, 0.3)'
-                    },
-                    '&:disabled': {
-                      backgroundColor: '#153B1A',
-                      opacity: 0.6
-                    }
-                  }}
-                >
-                  {loading ? <CircularProgress size={24} sx={{ color: 'white' }} /> : 'Sign In'}
-                </Button>
-              </Box>
-            </Box>
 
-            {/* Footer */}
-            <Box sx={{ p: 3, pt: 0 }}>
-              <Typography variant="body2" color="text.secondary" textAlign="center">
-                Demo Credentials:<br/>
-                <strong>Employee:</strong> Any email (e.g., employee@company.com) + Any Password<br/>
-                <strong>Admin:</strong> admin@company.com or hr@company.com + admin123
-              </Typography>
-            </Box>
+                {/* Footer */}
+                <Box sx={{ p: 3, pt: 0 }}>
+                  <Typography variant="body2" color="text.secondary" textAlign="center">
+                    Demo Credentials:<br/>
+                    <strong>Employee:</strong> Any email (e.g., employee@company.com) + Any Password<br/>
+                    <strong>Admin:</strong> admin@company.com or hr@company.com + admin123
+                  </Typography>
+                </Box>
+              </FlipFaceFront>
+
+              {/* Back Face - Forgot Password Form */}
+              <FlipFaceBack>
+                {/* Forgot Password Form */}
+                <Box sx={{ p: 4 }}>
+                  {resetSuccess ? (
+                    <Box sx={{ textAlign: 'center', py: 2 }}>
+                      <Box sx={{ 
+                        width: 64, 
+                        height: 64, 
+                        borderRadius: '50%', 
+                        backgroundColor: '#e8f5e9',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        mx: 'auto',
+                        mb: 2
+                      }}>
+                        <EmailIcon sx={{ fontSize: 32, color: '#114417DB' }} />
+                      </Box>
+                      <Typography variant="h6" fontWeight="bold" gutterBottom>
+                        Reset Email Sent!
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                        We've sent a password reset link to <strong>{resetEmail}</strong>
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                        Please check your email and follow the instructions to reset your password.
+                      </Typography>
+                      <Button
+                        fullWidth
+                        variant="contained"
+                        onClick={handleBackToLogin}
+                        startIcon={<ArrowBackIcon />}
+                        sx={{ 
+                          mt: 2,
+                          backgroundColor: '#114417DB',
+                          '&:hover': { 
+                            backgroundColor: '#0a2f0e',
+                            boxShadow: '0 4px 12px rgba(17, 68, 23, 0.3)'
+                          }
+                        }}
+                      >
+                        Back to Login
+                      </Button>
+                    </Box>
+                  ) : (
+                    <>
+                      <Typography variant="h6" fontWeight="bold" gutterBottom sx={{ mb: 2 }}>
+                        Reset Password
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" gutterBottom sx={{ mb: 3 }}>
+                        Enter your email address and we'll send you a link to reset your password.
+                      </Typography>
+                      {resetError && (
+                        <Alert severity="error" sx={{ mb: 2 }}>
+                          {resetError}
+                        </Alert>
+                      )}
+                      <TextField
+                        fullWidth
+                        label="Email Address"
+                        type="email"
+                        value={resetEmail}
+                        onChange={(e) => {
+                          setResetEmail(e.target.value);
+                          setResetError('');
+                        }}
+                        margin="normal"
+                        autoComplete="email"
+                        placeholder="Enter your email address"
+                        disabled={resetLoading}
+                        InputProps={{
+                          startAdornment: (
+                            <InputAdornment position="start">
+                              <EmailIcon sx={{ color: '#114417DB' }} />
+                            </InputAdornment>
+                          ),
+                        }}
+                        sx={{
+                          '& .MuiOutlinedInput-root': {
+                            '&:hover fieldset': {
+                              borderColor: '#114417DB',
+                            },
+                            '&.Mui-focused fieldset': {
+                              borderColor: '#114417DB',
+                            },
+                          },
+                          '& .MuiInputLabel-root.Mui-focused': {
+                            color: '#114417DB',
+                          },
+                        }}
+                        onKeyPress={(e) => {
+                          if (e.key === 'Enter' && !resetLoading) {
+                            handleResetPassword();
+                          }
+                        }}
+                      />
+                      <Button
+                        fullWidth
+                        variant="contained"
+                        type="button"
+                        onClick={handleResetPassword}
+                        disabled={resetLoading || !resetEmail.trim()}
+                        sx={{ 
+                          mt: 3, 
+                          mb: 2,
+                          py: 1.5,
+                          backgroundColor: '#114417DB',
+                          color: '#ffffff',
+                          fontWeight: 500,
+                          fontSize: '0.9375rem',
+                          textTransform: 'none',
+                          '&:hover': { 
+                            backgroundColor: '#0a2f0e',
+                            boxShadow: '0 4px 12px rgba(17, 68, 23, 0.3)'
+                          },
+                          '&:disabled': {
+                            backgroundColor: '#114417DB',
+                            color: '#ffffff',
+                            opacity: 0.6
+                          }
+                        }}
+                      >
+                        {resetLoading ? <CircularProgress size={24} sx={{ color: 'white' }} /> : 'Send Reset Link'}
+                      </Button>
+                      <Button
+                        fullWidth
+                        variant="outlined"
+                        onClick={handleBackToLogin}
+                        startIcon={<ArrowBackIcon />}
+                        sx={{ 
+                          mt: 1,
+                          borderColor: '#114417DB',
+                          color: '#114417DB',
+                          '&:hover': { 
+                            borderColor: '#0a2f0e',
+                            backgroundColor: 'rgba(17, 68, 23, 0.04)'
+                          }
+                        }}
+                      >
+                        Back to Login
+                      </Button>
+                    </>
+                  )}
+                </Box>
+              </FlipFaceBack>
+            </FlipContainer>
           </CardContent>
         </LoginCard>
       </Box>
-
-      {/* Reset Password Dialog */}
-      <Dialog 
-        open={showResetPassword} 
-        onClose={handleCloseResetDialog}
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle sx={{ 
-          display: 'flex', 
-          justifyContent: 'space-between', 
-          alignItems: 'center',
-          backgroundColor: '#153B1A',
-          color: 'white',
-          pb: 2
-        }}>
-          <Typography variant="h6" fontWeight="bold">
-            Reset Password
-          </Typography>
-          <IconButton
-            onClick={handleCloseResetDialog}
-            sx={{ color: 'white' }}
-            size="small"
-          >
-            <CloseIcon />
-          </IconButton>
-        </DialogTitle>
-        <DialogContent sx={{ mt: 2 }}>
-          {resetSuccess ? (
-            <Box sx={{ textAlign: 'center', py: 3 }}>
-              <Box sx={{ 
-                width: 64, 
-                height: 64, 
-                borderRadius: '50%', 
-                backgroundColor: '#e8f5e9',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                mx: 'auto',
-                mb: 2
-              }}>
-                <EmailIcon sx={{ fontSize: 32, color: '#153B1A' }} />
-              </Box>
-              <Typography variant="h6" fontWeight="bold" gutterBottom>
-                Reset Email Sent!
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                We've sent a password reset link to <strong>{resetEmail}</strong>
-              </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                Please check your email and follow the instructions to reset your password.
-              </Typography>
-            </Box>
-          ) : (
-            <>
-              <Typography variant="body1" color="text.secondary" gutterBottom>
-                Enter your email address and we'll send you a link to reset your password.
-              </Typography>
-              {resetError && (
-                <Alert severity="error" sx={{ mt: 2, mb: 2 }}>
-                  {resetError}
-                </Alert>
-              )}
-              <TextField
-                fullWidth
-                label="Email Address"
-                type="email"
-                value={resetEmail}
-                onChange={(e) => {
-                  setResetEmail(e.target.value);
-                  setResetError('');
-                }}
-                margin="normal"
-                autoComplete="email"
-                placeholder="Enter your email address"
-                disabled={resetLoading}
-                InputProps={{
-                  startAdornment: (
-                    <InputAdornment position="start">
-                      <EmailIcon sx={{ color: '#175C23' }} />
-                    </InputAdornment>
-                  ),
-                }}
-                sx={{
-                  mt: 3,
-                  '& .MuiOutlinedInput-root': {
-                    '&:hover fieldset': {
-                      borderColor: '#175C23',
-                    },
-                    '&.Mui-focused fieldset': {
-                      borderColor: '#175C23',
-                    },
-                  },
-                  '& .MuiInputLabel-root.Mui-focused': {
-                    color: '#175C23',
-                  },
-                }}
-                onKeyPress={(e) => {
-                  if (e.key === 'Enter' && !resetLoading) {
-                    handleResetPassword();
-                  }
-                }}
-              />
-            </>
-          )}
-        </DialogContent>
-        {!resetSuccess && (
-          <DialogActions sx={{ p: 3, pt: 2 }}>
-            <Button 
-              onClick={handleCloseResetDialog}
-              sx={{ color: '#666' }}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={handleResetPassword}
-              variant="contained"
-              disabled={resetLoading || !resetEmail.trim()}
-              sx={{
-                backgroundColor: '#175C23',
-                '&:hover': { 
-                  backgroundColor: '#0f3d16',
-                  boxShadow: '0 4px 12px rgba(23, 92, 35, 0.3)'
-                },
-                '&:disabled': {
-                  backgroundColor: '#175C23',
-                  opacity: 0.6
-                }
-              }}
-            >
-              {resetLoading ? (
-                <CircularProgress size={20} sx={{ color: 'white' }} />
-              ) : (
-                'Send Reset Link'
-              )}
-            </Button>
-          </DialogActions>
-        )}
-      </Dialog>
     </LoginContainer>
   );
 };

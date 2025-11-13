@@ -40,30 +40,80 @@ const APPROVAL_WINDOW_DAYS = 5;
 
 const unlockSessionForEmployee = (request) => {
   try {
+    console.log('Unlocking session for employee:', request);
     const stored = localStorage.getItem('published_sessions');
-    if (!stored) return;
+    if (!stored) {
+      console.error('No published sessions found in localStorage');
+      return;
+    }
     const sessions = JSON.parse(stored);
-    const targetIndex = sessions.findIndex(session =>
-      String(session.id) === String(request.sessionId) ||
-      session.title === request.sessionName
-    );
-    if (targetIndex === -1) return;
+    console.log('Total sessions in storage:', sessions.length);
+    
+    // Try multiple matching strategies
+    const targetIndex = sessions.findIndex(session => {
+      const idMatch = String(session.id) === String(request.sessionId);
+      const titleMatch = session.title === request.sessionName || 
+                        session.title?.toLowerCase() === request.sessionName?.toLowerCase();
+      return idMatch || titleMatch;
+    });
+    
+    if (targetIndex === -1) {
+      console.error('Session not found:', {
+        requestedId: request.sessionId,
+        requestedName: request.sessionName,
+        availableSessions: sessions.map(s => ({ id: s.id, title: s.title }))
+      });
+      return;
+    }
 
     const now = new Date();
     const expiration = new Date(now);
     expiration.setDate(expiration.getDate() + APPROVAL_WINDOW_DAYS);
 
-    sessions[targetIndex] = {
-      ...sessions[targetIndex],
-      isLocked: false,
-      status: sessions[targetIndex].status === 'completed' ? 'completed' : 'in-progress',
+    const currentSession = sessions[targetIndex];
+    console.log('Found session to unlock:', currentSession.title, 'Current status:', currentSession.status, 'isLocked:', currentSession.isLocked);
+    
+    const isCompleted = currentSession.status === 'completed' || 
+                       currentSession.completed === true ||
+                       (currentSession.completedAt !== undefined && currentSession.completedAt !== null);
+
+    // Determine the new status - if not completed, set to 'in-progress' or 'scheduled'
+    let newStatus = 'in-progress';
+    if (isCompleted) {
+      newStatus = 'completed';
+    } else if (currentSession.scheduledDateTime) {
+      newStatus = 'scheduled';
+    }
+
+    // Update session with unlocked state
+    const updatedSession = {
+      ...currentSession,
+      isLocked: false,  // Explicitly unlock
+      status: newStatus, // Set appropriate status
       approvalExpiresAt: expiration.toISOString(),
       lastApprovalDate: now.toISOString(),
-      lockedAt: null
+      lockedAt: null,  // Clear locked timestamp
+      completed: isCompleted  // Ensure completed flag is correct
     };
 
+    sessions[targetIndex] = updatedSession;
+    console.log('Updated session:', {
+      title: updatedSession.title,
+      isLocked: updatedSession.isLocked,
+      status: updatedSession.status,
+      approvalExpiresAt: updatedSession.approvalExpiresAt
+    });
+
     localStorage.setItem('published_sessions', JSON.stringify(sessions));
+    
+    // Dispatch event to notify listeners
     window.dispatchEvent(new Event('published-sessions-updated'));
+    
+    // Also manually trigger a storage event simulation for same-tab communication
+    // Since StorageEvent can only be fired by browser, we trigger a custom event
+    // The EmployeeDashboard should pick this up via the event listener
+    
+    console.log('Session unlocked successfully and event dispatched');
   } catch (error) {
     console.error('Failed to unlock session for employee', error);
   }
@@ -139,8 +189,13 @@ const Approvals = () => {
         approvalExpiresAt: approvalExpiresAt.toISOString()
       });
 
+      // Unlock the session
       unlockSessionForEmployee(selectedRequest);
-      alert(`Request approved successfully! The employee has ${APPROVAL_WINDOW_DAYS} days to complete the session before it locks again.`);
+      
+      // Small delay to ensure localStorage is updated and event is processed
+      setTimeout(() => {
+        alert(`Request approved successfully! The employee has ${APPROVAL_WINDOW_DAYS} days to complete the session before it locks again.`);
+      }, 100);
     } else if (actionType === 'reject') {
       updateRequestStatus(selectedRequest.id, 'denied', {
         deniedAt: new Date().toISOString()
