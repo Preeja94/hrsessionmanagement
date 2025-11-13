@@ -164,10 +164,10 @@ export const SessionRequestProvider = ({ children }) => {
     setSessionRequests(prev => [newRequest, ...prev]);
   };
 
-  const updateRequestStatus = (requestId, newStatus) => {
+  const updateRequestStatus = (requestId, newStatus, extra = {}) => {
     setSessionRequests(prev =>
       prev.map(req =>
-        req.id === requestId ? { ...req, status: newStatus } : req
+        req.id === requestId ? { ...req, status: newStatus, ...extra } : req
       )
     );
   };

@@ -7,6 +7,7 @@ import {
   IconButton,
   Card,
   FormControlLabel,
+  Checkbox,
   Switch,
   Menu,
   MenuItem,
@@ -76,13 +77,15 @@ const QuestionCard = styled(Card)(({ theme, selected }) => ({
 
 
 
-const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish }) => {
+const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, onSkip, existingQuizData }) => {
   const [formTitle, setFormTitle] = useState('Questionnaire Form');
   const [formDescription, setFormDescription] = useState('');
   const [assessmentInfo, setAssessmentInfo] = useState({
     quizTitle: '',
     passingScore: '',
-    maxAttempts: ''
+    maxAttempts: '',
+    criteriaDescription: '',
+    criteria: ''
   });
   const [questions, setQuestions] = useState([
     {
@@ -91,7 +94,9 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish }
       type: 'multiple-choice',
       options: ['Option 1'],
       required: false,
-      hasImage: false
+      hasImage: false,
+      correctAnswer: 0,
+      correctAnswers: []
     }
   ]);
   const [selectedQuestion, setSelectedQuestion] = useState(0);
@@ -106,6 +111,47 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish }
     console.log('questionTypeAnchor changed:', questionTypeAnchor);
   }, [questionTypeAnchor]);
 
+  useEffect(() => {
+    if (existingQuizData) {
+      setFormTitle(existingQuizData.title || 'Questionnaire Form');
+      setFormDescription(existingQuizData.description || '');
+      if (existingQuizData.assessmentInfo) {
+        const criteriaValue =
+          existingQuizData.assessmentInfo.criteriaDescription ||
+          existingQuizData.assessmentInfo.criteria ||
+          '';
+        setAssessmentInfo({
+          quizTitle: existingQuizData.assessmentInfo.quizTitle || '',
+          passingScore: existingQuizData.assessmentInfo.passingScore || '',
+          maxAttempts: existingQuizData.assessmentInfo.maxAttempts || '',
+          criteriaDescription: criteriaValue,
+          criteria: criteriaValue
+        });
+      }
+      if (existingQuizData.questions && Array.isArray(existingQuizData.questions) && existingQuizData.questions.length > 0) {
+        const normalizedQuestions = existingQuizData.questions.map((q, index) => ({
+          id: q.id || index + 1,
+          text: q.text || q.question || `Untitled Question ${index + 1}`,
+          type: q.type || 'multiple-choice',
+          options: q.options && q.options.length > 0 ? q.options : ['Option 1'],
+          required: Boolean(q.required),
+          hasImage: Boolean(q.hasImage),
+          correctAnswer:
+            q.correctAnswer !== undefined
+              ? q.correctAnswer
+              : q.correct !== undefined
+              ? q.correct
+              : q.correctAnswers && Array.isArray(q.correctAnswers) && q.correctAnswers.length === 1
+              ? q.correctAnswers[0]
+              : 0,
+          correctAnswers: Array.isArray(q.correctAnswers) ? q.correctAnswers : []
+        }));
+        setQuestions(normalizedQuestions);
+        setSelectedQuestion(0);
+      }
+    }
+  }, [existingQuizData]);
+
   const handleAddQuestion = () => {
     const newQuestion = {
       id: questions.length + 1,
@@ -113,7 +159,9 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish }
       type: 'multiple-choice',
       options: ['Option 1'],
       required: false,
-      hasImage: false
+      hasImage: false,
+      correctAnswer: 0,
+      correctAnswers: []
     };
     setQuestions([...questions, newQuestion]);
     setSelectedQuestion(questions.length);
@@ -153,6 +201,9 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish }
     // Remove the "Add option" placeholder if it exists, then add new option
     const filteredOptions = currentOptions.filter(opt => !opt.includes('Add option'));
     newQuestions[questionIndex].options = [...filteredOptions, `Option ${filteredOptions.length + 1}`];
+    if (newQuestions[questionIndex].type === 'multiple-choice' && newQuestions[questionIndex].correctAnswer === undefined) {
+      newQuestions[questionIndex].correctAnswer = 0;
+    }
     setQuestions(newQuestions);
   };
 
@@ -167,8 +218,42 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish }
     // Keep at least one option
     if (newQuestions[questionIndex].options.length > 1) {
       newQuestions[questionIndex].options.splice(optionIndex, 1);
+      if (newQuestions[questionIndex].type === 'multiple-choice') {
+        if (newQuestions[questionIndex].correctAnswer === optionIndex) {
+          newQuestions[questionIndex].correctAnswer = 0;
+        } else if (
+          newQuestions[questionIndex].correctAnswer !== undefined &&
+          newQuestions[questionIndex].correctAnswer > optionIndex
+        ) {
+          newQuestions[questionIndex].correctAnswer -= 1;
+        }
+      }
+      if (Array.isArray(newQuestions[questionIndex].correctAnswers) && newQuestions[questionIndex].correctAnswers.length) {
+        newQuestions[questionIndex].correctAnswers = newQuestions[questionIndex].correctAnswers
+          .filter((idx) => idx !== optionIndex)
+          .map((idx) => (idx > optionIndex ? idx - 1 : idx));
+      }
       setQuestions(newQuestions);
     }
+  };
+
+  const handleCorrectAnswerSelect = (questionIndex, optionIndex) => {
+    const newQuestions = [...questions];
+    newQuestions[questionIndex].correctAnswer = optionIndex;
+    newQuestions[questionIndex].correctAnswers = [optionIndex];
+    setQuestions(newQuestions);
+  };
+
+  const handleToggleCorrectAnswer = (questionIndex, optionIndex) => {
+    const newQuestions = [...questions];
+    const current = newQuestions[questionIndex].correctAnswers || [];
+    const exists = current.includes(optionIndex);
+    if (exists) {
+      newQuestions[questionIndex].correctAnswers = current.filter((idx) => idx !== optionIndex);
+    } else {
+      newQuestions[questionIndex].correctAnswers = [...current, optionIndex];
+    }
+    setQuestions(newQuestions);
   };
 
   const handleQuestionTypeSelect = (type) => {
@@ -185,18 +270,81 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish }
     if (type === 'short-answer' || type === 'paragraph') {
       newQuestions[selectedQuestion].options = [];
     }
+
+    if (type === 'multiple-choice') {
+      newQuestions[selectedQuestion].correctAnswer = 0;
+      newQuestions[selectedQuestion].correctAnswers = [];
+    } else if (type === 'checkbox') {
+      if (!Array.isArray(newQuestions[selectedQuestion].correctAnswers)) {
+        newQuestions[selectedQuestion].correctAnswers = [];
+      }
+      newQuestions[selectedQuestion].correctAnswer = undefined;
+    } else {
+      newQuestions[selectedQuestion].correctAnswer = undefined;
+      newQuestions[selectedQuestion].correctAnswers = [];
+    }
     
     setQuestions(newQuestions);
     setQuestionTypeAnchor(null);
   };
 
-  const handleSaveQuiz = () => {
+  const buildQuizData = () => {
+    const normalizedQuestions = questions.map((question, index) => {
+      const base = {
+        ...question,
+        id: question.id || index + 1,
+        correctAnswers: Array.isArray(question.correctAnswers) ? question.correctAnswers : []
+      };
+
+      if (question.type === 'multiple-choice') {
+        const correctIndex =
+          question.correctAnswer !== undefined && question.correctAnswer !== null
+            ? question.correctAnswer
+            : base.correctAnswers.length === 1
+            ? base.correctAnswers[0]
+            : 0;
+        return {
+          ...base,
+          correctAnswer: correctIndex,
+          correct: correctIndex,
+          correctAnswers: [correctIndex]
+        };
+      }
+
+      if (question.type === 'checkbox') {
+        return {
+          ...base,
+          correctAnswers: base.correctAnswers,
+          correctAnswer: base.correctAnswers.length === 1 ? base.correctAnswers[0] : undefined
+        };
+      }
+
+      return {
+        ...base,
+        correctAnswer: undefined,
+        correctAnswers: []
+      };
+    });
+
+    const normalizedAssessmentInfo = {
+      ...assessmentInfo,
+      criteria:
+        assessmentInfo.criteriaDescription ||
+        assessmentInfo.criteria ||
+        ''
+    };
+
     const quizData = {
       title: formTitle,
       description: formDescription,
-      questions: questions,
-      assessmentInfo: assessmentInfo
+      questions: normalizedQuestions,
+      assessmentInfo: normalizedAssessmentInfo
     };
+    return quizData;
+  };
+
+  const handleSaveQuiz = () => {
+    const quizData = buildQuizData();
     onSave(quizData);
   };
 
@@ -278,17 +426,52 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish }
         </Box>
         
         {/* Action Buttons - Top Right */}
-        {onSaveDraft && onPreview && onPublish && (
+        {/* Show Save as Draft and Skip buttons when onSkip is provided (for assessment page) */}
+        {onSaveDraft && onSkip && (
+          <Box display="flex" gap={2} alignItems="center">
+            <Button
+              variant="outlined"
+              onClick={() => onSaveDraft(buildQuizData())}
+              startIcon={<SaveIcon />}
+              sx={{
+                borderColor: '#10b981',
+                color: '#10b981',
+                '&:hover': {
+                  borderColor: '#059669',
+                  backgroundColor: '#d1fae5'
+                },
+                textTransform: 'none',
+                fontWeight: 600
+              }}
+            >
+              Save as Draft
+            </Button>
+            <Button
+              variant="outlined"
+              onClick={onSkip}
+              sx={{
+                borderColor: '#6b7280',
+                color: '#6b7280',
+                '&:hover': {
+                  borderColor: '#4b5563',
+                  backgroundColor: '#f3f4f6'
+                },
+                textTransform: 'none',
+                fontWeight: 600
+              }}
+            >
+              Skip
+            </Button>
+          </Box>
+        )}
+        
+        {/* Show Save as Draft and Proceed to Publish buttons when onPreview and onPublish are provided (for other quiz contexts) */}
+        {onSaveDraft && onPreview && onPublish && !onSkip && (
           <Box display="flex" gap={1.5} alignItems="center">
             <Button
               variant="outlined"
               size="medium"
-              onClick={() => onSaveDraft({ 
-                title: formTitle, 
-                description: formDescription, 
-                questions,
-                assessmentInfo 
-              })}
+              onClick={() => onSaveDraft(buildQuizData())}
               sx={{
                 borderColor: '#f59e0b',
                 color: '#f59e0b',
@@ -304,12 +487,7 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish }
             <Button
               variant="contained"
               size="medium"
-              onClick={() => onPublish({ 
-                title: formTitle, 
-                description: formDescription, 
-                questions,
-                assessmentInfo 
-              })}
+              onClick={() => onPublish(buildQuizData())}
               sx={{
                 backgroundColor: '#10b981',
                 px: 2,
@@ -375,6 +553,23 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish }
                 placeholder="Enter maximum attempts (e.g., 3)"
                 variant="outlined"
                 inputProps={{ min: 1 }}
+              />
+              
+              <TextField
+                label="Passing Criteria"
+                value={assessmentInfo.criteriaDescription}
+                onChange={(e) =>
+                  setAssessmentInfo(prev => ({
+                    ...prev,
+                    criteriaDescription: e.target.value,
+                    criteria: e.target.value
+                  }))
+                }
+                fullWidth
+                placeholder="Describe the passing criteria shown to employees"
+                variant="outlined"
+                multiline
+                minRows={2}
               />
             </Box>
           </Card>
@@ -468,10 +663,35 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish }
 
               {/* Multiple Choice */}
               {question.type === 'multiple-choice' && (
-                <RadioGroup>
+                <RadioGroup
+                  value={
+                    question.correctAnswer !== undefined && question.correctAnswer !== null
+                      ? String(question.correctAnswer)
+                      : ''
+                  }
+                  onChange={(_, value) => handleCorrectAnswerSelect(index, parseInt(value, 10))}
+                >
                   {question.options.map((option, optIndex) => (
-                    <Box key={optIndex} display="flex" alignItems="center" mb={1}>
-                      <Radio disabled />
+                    <Box
+                      key={optIndex}
+                      display="flex"
+                      alignItems="center"
+                      mb={1}
+                      sx={{
+                        backgroundColor:
+                          question.correctAnswer === optIndex ? 'rgba(16, 185, 129, 0.08)' : 'transparent',
+                        borderRadius: 1,
+                        pr: 1
+                      }}
+                    >
+                      <Radio
+                        value={String(optIndex)}
+                        checked={question.correctAnswer === optIndex}
+                        onChange={(e) => {
+                          e.stopPropagation();
+                          handleCorrectAnswerSelect(index, optIndex);
+                        }}
+                      />
                       <TextField
                         value={option}
                         onChange={(e) => handleOptionChange(index, optIndex, e.target.value)}
@@ -479,8 +699,8 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish }
                         fullWidth
                         sx={{ flex: 1, mr: 1 }}
                       />
-                      <IconButton 
-                        size="small" 
+                      <IconButton
+                        size="small"
                         onClick={() => handleDeleteOption(index, optIndex)}
                         sx={{ visibility: question.options.length > 1 ? 'visible' : 'hidden' }}
                       >
@@ -490,14 +710,14 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish }
                   ))}
                   <Box display="flex" alignItems="center" ml={4}>
                     <Radio disabled />
-                    <Typography 
-                      variant="body2" 
-                      color="text.secondary" 
+                    <Typography
+                      variant="body2"
+                      color="text.secondary"
                       sx={{ cursor: 'pointer' }}
                       onClick={() => handleAddOption(index)}
                     >
                       Add option or{' '}
-                      <span 
+                      <span
                         style={{ color: '#1976d2', cursor: 'pointer' }}
                         onClick={(e) => {
                           e.stopPropagation();
@@ -516,7 +736,11 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish }
                 <Box>
                   {question.options.map((option, optIndex) => (
                     <Box key={optIndex} display="flex" alignItems="center" mb={1}>
-                      <CheckBoxIcon sx={{ color: '#ccc', mr: 1 }} />
+                      <Checkbox
+                        checked={Array.isArray(question.correctAnswers) ? question.correctAnswers.includes(optIndex) : false}
+                        onChange={() => handleToggleCorrectAnswer(index, optIndex)}
+                        sx={{ mr: 1 }}
+                      />
                       <TextField
                         value={option}
                         onChange={(e) => handleOptionChange(index, optIndex, e.target.value)}

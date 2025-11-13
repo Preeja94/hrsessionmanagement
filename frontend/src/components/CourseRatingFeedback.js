@@ -19,7 +19,7 @@ import {
   Send as SendIcon
 } from '@mui/icons-material';
 
-const CourseRatingFeedback = ({ session, onSubmit, onBack }) => {
+const CourseRatingFeedback = ({ session, onSubmit, onBack, backLabel = 'Back to Certificate' }) => {
   const [rating, setRating] = useState(0);
   const [feedback, setFeedback] = useState('');
   const [valuableAspect, setValuableAspect] = useState('');
@@ -63,10 +63,10 @@ const CourseRatingFeedback = ({ session, onSubmit, onBack }) => {
           onClick={onBack}
           sx={{ mb: 2 }}
         >
-          Back to Certificate
+          {backLabel}
         </Button>
         <Typography variant="h4" fontWeight="bold" gutterBottom>
-          Course Rating & Feedback
+          Session Rating & Feedback
         </Typography>
         <Typography variant="body1" color="text.secondary">
           Help us improve by sharing your experience
@@ -75,7 +75,7 @@ const CourseRatingFeedback = ({ session, onSubmit, onBack }) => {
 
       <Card sx={{ p: 4 }}>
         <Typography variant="h6" fontWeight="bold" gutterBottom>
-          How would you rate this course?
+          How would you rate this session?
         </Typography>
         
         <Box display="flex" alignItems="center" gap={2} mb={3}>
@@ -93,13 +93,13 @@ const CourseRatingFeedback = ({ session, onSubmit, onBack }) => {
         <Grid container spacing={3}>
           <Grid item xs={12} md={6}>
             <FormControl fullWidth margin="normal">
-              <InputLabel>What was most valuable about this course?</InputLabel>
+              <InputLabel>What was most valuable about this session?</InputLabel>
               <Select
                 value={valuableAspect}
                 onChange={(e) => setValuableAspect(e.target.value)}
-                label="What was most valuable about this course?"
+                label="What was most valuable about this session?"
               >
-                <MenuItem value="content">Course Content</MenuItem>
+                <MenuItem value="content">Session Content</MenuItem>
                 <MenuItem value="instructor">Instructor Quality</MenuItem>
                 <MenuItem value="interactive">Interactive Elements</MenuItem>
                 <MenuItem value="practical">Practical Applications</MenuItem>
@@ -134,7 +134,7 @@ const CourseRatingFeedback = ({ session, onSubmit, onBack }) => {
           multiline
           rows={4}
           margin="normal"
-          placeholder="Share any additional thoughts, suggestions, or comments about this course..."
+          placeholder="Share any additional thoughts, suggestions, or comments about this session..."
           helperText="Your feedback helps us improve the learning experience for everyone"
         />
 

@@ -36,6 +36,39 @@ import {
 import { styled } from '@mui/material/styles';
 import { useSessionRequests } from '../contexts/SessionRequestContext';
 
+const APPROVAL_WINDOW_DAYS = 5;
+
+const unlockSessionForEmployee = (request) => {
+  try {
+    const stored = localStorage.getItem('published_sessions');
+    if (!stored) return;
+    const sessions = JSON.parse(stored);
+    const targetIndex = sessions.findIndex(session =>
+      String(session.id) === String(request.sessionId) ||
+      session.title === request.sessionName
+    );
+    if (targetIndex === -1) return;
+
+    const now = new Date();
+    const expiration = new Date(now);
+    expiration.setDate(expiration.getDate() + APPROVAL_WINDOW_DAYS);
+
+    sessions[targetIndex] = {
+      ...sessions[targetIndex],
+      isLocked: false,
+      status: sessions[targetIndex].status === 'completed' ? 'completed' : 'in-progress',
+      approvalExpiresAt: expiration.toISOString(),
+      lastApprovalDate: now.toISOString(),
+      lockedAt: null
+    };
+
+    localStorage.setItem('published_sessions', JSON.stringify(sessions));
+    window.dispatchEvent(new Event('published-sessions-updated'));
+  } catch (error) {
+    console.error('Failed to unlock session for employee', error);
+  }
+};
+
 const ApprovalsContainer = styled(Box)(({ theme }) => ({
   padding: theme.spacing(3),
   backgroundColor: '#f8f9fa',
@@ -94,11 +127,24 @@ const Approvals = () => {
   };
 
   const handleActionSubmit = () => {
+    if (!selectedRequest) return;
+
     if (actionType === 'approve') {
-      updateRequestStatus(selectedRequest.id, 'approved');
-      alert('Request approved successfully! Employee will be notified.');
+      const approvedAt = new Date();
+      const approvalExpiresAt = new Date(approvedAt);
+      approvalExpiresAt.setDate(approvalExpiresAt.getDate() + APPROVAL_WINDOW_DAYS);
+
+      updateRequestStatus(selectedRequest.id, 'approved', {
+        approvedAt: approvedAt.toISOString(),
+        approvalExpiresAt: approvalExpiresAt.toISOString()
+      });
+
+      unlockSessionForEmployee(selectedRequest);
+      alert(`Request approved successfully! The employee has ${APPROVAL_WINDOW_DAYS} days to complete the session before it locks again.`);
     } else if (actionType === 'reject') {
-      updateRequestStatus(selectedRequest.id, 'denied');
+      updateRequestStatus(selectedRequest.id, 'denied', {
+        deniedAt: new Date().toISOString()
+      });
       alert('Request rejected. Employee will be notified.');
     } else if (actionType === 'message') {
       alert(`Message sent to ${selectedRequest.employeeName}: "${actionMessage}"`);
@@ -133,10 +179,10 @@ const Approvals = () => {
       {/* Header */}
       <Box mb={4}>
         <Typography variant="h4" fontWeight="bold" gutterBottom>
-          Course Access Approvals
+          Session Access Approvals
         </Typography>
         <Typography variant="body1" color="text.secondary">
-          Review and manage employee requests for course access
+          Review and manage employee requests for session access
         </Typography>
       </Box>
 
@@ -239,7 +285,7 @@ const Approvals = () => {
           <Typography variant="body2" color="text.secondary">
             {searchTerm || statusFilter !== 'all' 
               ? 'Try adjusting your search or filter criteria'
-              : 'No course access requests have been made yet'
+              : 'No session access requests have been made yet'
             }
           </Typography>
         </Card>
@@ -411,7 +457,7 @@ const Approvals = () => {
           {(actionType === 'approve' || actionType === 'reject') && (
             <Alert severity={actionType === 'approve' ? 'success' : 'warning'}>
               {actionType === 'approve' 
-                ? 'This will approve the employee\'s request and grant them access to the course.'
+                ? 'This will approve the employee\'s request and grant them access to the session.'
                 : 'This will reject the employee\'s request. They will be notified of the decision.'
               }
             </Alert>

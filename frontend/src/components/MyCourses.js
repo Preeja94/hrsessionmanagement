@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Box,
   Typography,
@@ -9,11 +9,7 @@ import {
   Chip,
   LinearProgress,
   Avatar,
-  Divider,
-  List,
-  ListItem,
-  ListItemText,
-  ListItemIcon
+  Divider
 } from '@mui/material';
 import {
   PlayArrow as PlayIcon,
@@ -22,98 +18,334 @@ import {
   Person as PersonIcon,
   AccessTime as TimeIcon,
   Star as StarIcon,
-  ArrowForward as ArrowIcon
+  Lock as LockIcon
 } from '@mui/icons-material';
 
-const MyCourses = ({ completedSessions, onSessionComplete, onSessionStart, onSessionClick }) => {
+const MyCourses = ({ sessions = [], onSessionComplete, onSessionStart, onSessionClick }) => {
   const [activeTab, setActiveTab] = useState('in-progress');
 
-  // Sample course data
-  const allCourses = [
-    {
-      id: 1,
-      title: 'Mental Health & Wellbeing',
-      instructor: 'Dr. Sarah Johnson',
-      description: 'Comprehensive session on maintaining mental wellness in the workplace',
-      duration: '60 minutes',
-      progress: 45,
-      status: 'in-progress',
-      dateStarted: '2024-12-20',
-      lastAccessed: '2024-12-24',
-      tags: ['Wellbeing', 'Mental Health', 'Workplace'],
-      content: [
-        { type: 'video', title: 'Introduction to Mental Health', duration: '15 min' },
-        { type: 'presentation', title: 'Stress Management Techniques', duration: '20 min' },
-        { type: 'interactive', title: 'Mindfulness Exercise', duration: '10 min' },
-        { type: 'assessment', title: 'Knowledge Check', duration: '15 min' }
-      ]
-    },
-    {
-      id: 2,
-      title: 'JavaScript ES6+ Mastery',
-      instructor: 'Mike Wilson',
-      description: 'Learn modern JavaScript features and best practices',
-      duration: '90 minutes',
-      progress: 100,
-      status: 'completed',
-      dateCompleted: '2024-12-22',
-      timeTaken: '85 minutes',
-      score: 92,
-      certificate: true,
-      tags: ['Programming', 'JavaScript', 'ES6'],
-      content: [
-        { type: 'video', title: 'ES6 Introduction', duration: '20 min' },
-        { type: 'presentation', title: 'Arrow Functions', duration: '15 min' },
-        { type: 'interactive', title: 'Destructuring Exercise', duration: '25 min' },
-        { type: 'assessment', title: 'Final Quiz', duration: '30 min' }
-      ]
-    }
-  ];
+  const sortedSessions = useMemo(
+    () =>
+      [...sessions].sort((a, b) => {
+        const left = new Date(a.scheduledDateTime || a.publishedAt || a.createdAt || 0);
+        const right = new Date(b.scheduledDateTime || b.publishedAt || b.createdAt || 0);
+        return right - left;
+      }),
+    [sessions]
+  );
 
-  const inProgressCourses = allCourses.filter(course => course.status === 'in-progress');
-  const completedCourses = allCourses.filter(course => course.status === 'completed');
+  const inProgressSessions = useMemo(
+    () => sortedSessions.filter(session => !session.completed && !session.isLocked),
+    [sortedSessions]
+  );
 
-  const handleSessionClick = (course) => {
-    onSessionClick(course);
-  };
+  const completedSessionsList = useMemo(
+    () => sortedSessions.filter(session => session.completed),
+    [sortedSessions]
+  );
 
-  const handleSessionComplete = (courseId) => {
-    onSessionComplete(courseId);
+  const formatDate = (value, fallback = 'Not available') => {
+    if (!value) return fallback;
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return fallback;
+    return date.toLocaleString();
   };
 
   const getStatusColor = (status) => {
     switch (status) {
-      case 'in-progress': return '#f59e0b';
-      case 'completed': return '#10b981';
-      case 'not-started': return '#6b7280';
-      default: return '#6b7280';
+      case 'completed':
+        return '#10b981';
+      case 'locked':
+        return '#ef4444';
+      case 'scheduled':
+      case 'published':
+      case 'in-progress':
+        return '#f59e0b';
+      default:
+        return '#6b7280';
     }
   };
 
   const getStatusLabel = (status) => {
     switch (status) {
-      case 'in-progress': return 'In Progress';
-      case 'completed': return 'Completed';
-      case 'not-started': return 'Not Started';
-      default: return 'Unknown';
+      case 'completed':
+        return 'Completed';
+      case 'locked':
+        return 'Locked';
+      case 'scheduled':
+        return 'Scheduled';
+      case 'published':
+        return 'Published';
+      case 'in-progress':
+      default:
+        return 'In Progress';
     }
   };
 
+  const getProgressValue = (session) => {
+    if (session.progress !== undefined && session.progress !== null) return session.progress;
+    return session.completed ? 100 : 0;
+  };
+
+  const handleContinue = (session) => {
+    if (onSessionStart) {
+      onSessionStart(session.id);
+    }
+    if (onSessionClick) {
+      onSessionClick(session);
+    }
+  };
+
+  const renderEmptyState = (message) => (
+    <Card sx={{ p: 4, textAlign: 'center', backgroundColor: '#f8fafc' }}>
+      <Typography variant="h6" color="text.secondary" gutterBottom>
+        No sessions found
+      </Typography>
+      <Typography variant="body2" color="text.secondary">
+        {message}
+      </Typography>
+    </Card>
+  );
+
+  const renderInProgressCard = (session) => (
+    <Card sx={{ height: '100%', '&:hover': { boxShadow: 4 } }}>
+      <CardContent>
+        <Box display="flex" justifyContent="space-between" alignItems="start" mb={2}>
+          <Typography variant="h6" fontWeight="bold" gutterBottom>
+            {session.title}
+          </Typography>
+          <Chip
+            label={getStatusLabel(session.status)}
+            sx={{ backgroundColor: getStatusColor(session.status), color: 'white' }}
+            size="small"
+          />
+        </Box>
+
+        <Typography variant="body2" color="text.secondary" mb={2}>
+          {session.description || 'No description provided.'}
+        </Typography>
+
+        {/* Show file count if files are available */}
+        {session.files && Array.isArray(session.files) && session.files.length > 0 && (
+          <Box mb={2}>
+            <Chip
+              label={`${session.files.length} file${session.files.length === 1 ? '' : 's'} available`}
+              size="small"
+              variant="outlined"
+              sx={{ fontSize: '0.75rem', color: '#3b82f6', borderColor: '#3b82f6' }}
+            />
+          </Box>
+        )}
+
+        <Box display="flex" alignItems="center" mb={2}>
+          <Avatar sx={{ width: 32, height: 32, mr: 2 }}>
+            <PersonIcon />
+          </Avatar>
+          <Box>
+            <Typography variant="body2" fontWeight="medium">
+              Created by {session.instructor || 'HR Team'}
+            </Typography>
+            {session.scheduledDateTime && (
+              <Typography variant="caption" color="text.secondary" display="block">
+                Scheduled for {formatDate(session.scheduledDateTime)}
+              </Typography>
+            )}
+          </Box>
+        </Box>
+
+        <Box mb={2}>
+          <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
+            <Typography variant="body2" fontWeight="medium">
+              Progress
+            </Typography>
+            <Typography variant="body2" fontWeight="bold">
+              {getProgressValue(session)}%
+            </Typography>
+          </Box>
+          <LinearProgress
+            variant="determinate"
+            value={getProgressValue(session)}
+            sx={{ height: 8, borderRadius: 4 }}
+          />
+        </Box>
+
+        {(session.dueDateTime || session.approvalExpiresAt) && (
+          <Box mb={2} display="flex" flexDirection="column" gap={0.5}>
+            {session.dueDateTime && (
+              <Typography variant="caption" color="#b91c1c" display="flex" alignItems="center" gap={0.5}>
+                <ScheduleIcon sx={{ fontSize: 14 }} />
+                Due by {formatDate(session.dueDateTime)}
+              </Typography>
+            )}
+            {session.approvalExpiresAt && (
+              <Typography variant="caption" color="#b91c1c" display="flex" alignItems="center" gap={0.5}>
+                <LockIcon sx={{ fontSize: 14 }} />
+                Approval expires {formatDate(session.approvalExpiresAt)}
+              </Typography>
+            )}
+          </Box>
+        )}
+
+        {session.tags && session.tags.length > 0 && (
+          <Box display="flex" gap={1} mb={2} flexWrap="wrap">
+            {session.tags.map((tag, index) => (
+              <Chip
+                key={index}
+                label={tag}
+                size="small"
+                variant="outlined"
+                sx={{ fontSize: '0.75rem' }}
+              />
+            ))}
+          </Box>
+        )}
+
+        <Button
+          variant="contained"
+          startIcon={<PlayIcon />}
+          onClick={() => handleContinue(session)}
+          sx={{ 
+            backgroundColor: '#10b981', 
+            '&:hover': { backgroundColor: '#059669' },
+            width: '100%'
+          }}
+        >
+          Continue Session
+        </Button>
+      </CardContent>
+    </Card>
+  );
+
+  const renderCompletedCard = (session) => (
+    <Card sx={{ height: '100%', '&:hover': { boxShadow: 4 } }}>
+      <CardContent>
+        <Box display="flex" justifyContent="space-between" alignItems="start" mb={2}>
+          <Typography variant="h6" fontWeight="bold" gutterBottom>
+            {session.title}
+          </Typography>
+          <Chip
+            label={getStatusLabel(session.status)}
+            sx={{ backgroundColor: getStatusColor(session.status), color: 'white' }}
+            size="small"
+          />
+        </Box>
+
+        <Typography variant="body2" color="text.secondary" mb={2}>
+          {session.description || 'No description provided.'}
+        </Typography>
+
+        <Box display="flex" alignItems="center" mb={2}>
+          <Avatar sx={{ width: 32, height: 32, mr: 2 }}>
+            <PersonIcon />
+          </Avatar>
+          <Box>
+            <Typography variant="body2" fontWeight="medium">
+              Created by {session.instructor || 'HR Team'}
+            </Typography>
+            <Typography variant="caption" color="text.secondary" display="block">
+              Completed on {formatDate(session.completedAt || session.dueDateTime || session.scheduledDateTime, 'Completion date unavailable')}
+            </Typography>
+          </Box>
+        </Box>
+
+        <Box mb={2}>
+          <Grid container spacing={2}>
+            <Grid item xs={6}>
+              <Box display="flex" alignItems="center" gap={0.5}>
+                <TimeIcon sx={{ fontSize: 16, color: '#6b7280' }} />
+                <Typography variant="body2" color="text.secondary">
+                  Time Taken: {session.timeTaken || 'N/A'}
+                </Typography>
+              </Box>
+            </Grid>
+            <Grid item xs={6}>
+              <Box display="flex" alignItems="center" gap={0.5}>
+                <StarIcon sx={{ fontSize: 16, color: '#f59e0b' }} />
+                <Typography variant="body2" color="text.secondary">
+                  Score: {session.lastCompletionScore !== undefined && session.lastCompletionScore !== null ? `${session.lastCompletionScore}%` : 'N/A'}
+                </Typography>
+              </Box>
+            </Grid>
+          </Grid>
+        </Box>
+
+        {session.tags && session.tags.length > 0 && (
+          <>
+            <Divider sx={{ my: 2 }} />
+            <Box display="flex" gap={1} flexWrap="wrap">
+              {session.tags.map((tag, index) => (
+                <Chip
+                  key={index}
+                  label={tag}
+                  size="small"
+                  variant="outlined"
+                  sx={{ fontSize: '0.75rem' }}
+                />
+              ))}
+            </Box>
+          </>
+        )}
+
+        <Box display="flex" gap={1} mt={2}>
+          <Button
+            variant="outlined"
+            startIcon={<PlayIcon />}
+            onClick={() => onSessionClick && onSessionClick(session)}
+            sx={{ flex: 1 }}
+          >
+            Review Session
+          </Button>
+          {session.certificate && (
+            <Button
+              variant="contained"
+              startIcon={<CheckCircleIcon />}
+              sx={{ 
+                backgroundColor: '#10b981', 
+                '&:hover': { backgroundColor: '#059669' },
+                flex: 1
+              }}
+            >
+              Download Certificate
+            </Button>
+          )}
+        </Box>
+      </CardContent>
+    </Card>
+  );
+
+  const renderSessionsGrid = (list, emptyMessage, renderer) => (
+    <Grid container spacing={3}>
+      {list.length === 0 ? (
+        <Grid item xs={12}>
+          {renderEmptyState(emptyMessage)}
+        </Grid>
+      ) : (
+        list.map((session) => (
+          <Grid item xs={12} md={6} key={session.id}>
+            {renderer(session)}
+          </Grid>
+        ))
+      )}
+    </Grid>
+  );
+
   return (
     <Box p={3}>
-      {/* Header */}
-      <Box mb={4}>
-        <Typography variant="h4" fontWeight="bold" gutterBottom>
-          Hi Luke, It's a good day to start something new
-        </Typography>
-        <Typography variant="body1" color="text.secondary">
-          Continue your learning journey and track your progress
-        </Typography>
-      </Box>
-
-      {/* Tab Navigation */}
       <Box mb={4}>
         <Box display="flex" gap={1}>
+          <Button
+            variant={activeTab === 'all' ? 'contained' : 'outlined'}
+            onClick={() => setActiveTab('all')}
+            sx={{
+              backgroundColor: activeTab === 'all' ? '#3b82f6' : 'transparent',
+              color: activeTab === 'all' ? 'white' : '#3b82f6',
+              '&:hover': {
+                backgroundColor: activeTab === 'all' ? '#2563eb' : '#f3f4f6',
+              },
+            }}
+          >
+            All Sessions
+          </Button>
           <Button
             variant={activeTab === 'in-progress' ? 'contained' : 'outlined'}
             onClick={() => setActiveTab('in-progress')}
@@ -125,7 +357,7 @@ const MyCourses = ({ completedSessions, onSessionComplete, onSessionStart, onSes
               },
             }}
           >
-            In Progress Courses
+            In Progress
           </Button>
           <Button
             variant={activeTab === 'completed' ? 'contained' : 'outlined'}
@@ -138,235 +370,31 @@ const MyCourses = ({ completedSessions, onSessionComplete, onSessionStart, onSes
               },
             }}
           >
-            Completed Courses
+            Completed
           </Button>
         </Box>
       </Box>
 
-      {/* Back to My Courses indicator */}
-      <Box mb={3}>
-        <Button
-          startIcon={<ArrowIcon />}
-          onClick={() => setActiveTab('in-progress')}
-          sx={{ color: '#3b82f6' }}
-        >
-          Back to My Courses
-        </Button>
-      </Box>
+      {activeTab === 'all' &&
+        renderSessionsGrid(
+          sortedSessions,
+          'Your assigned sessions will appear here once published by the HR team.',
+          (session) => (session.completed ? renderCompletedCard(session) : renderInProgressCard(session))
+        )}
 
-      {/* In Progress Courses */}
-      {activeTab === 'in-progress' && (
-        <Grid container spacing={3}>
-          {inProgressCourses.map((course) => (
-            <Grid item xs={12} md={6} key={course.id}>
-              <Card sx={{ height: '100%', '&:hover': { boxShadow: 4 } }}>
-                <CardContent>
-                  <Box display="flex" justifyContent="space-between" alignItems="start" mb={2}>
-                    <Typography variant="h6" fontWeight="bold" gutterBottom>
-                      {course.title}
-                    </Typography>
-                    <Chip
-                      label={getStatusLabel(course.status)}
-                      sx={{ backgroundColor: getStatusColor(course.status), color: 'white' }}
-                      size="small"
-                    />
-                  </Box>
+      {activeTab === 'in-progress' &&
+        renderSessionsGrid(
+          inProgressSessions,
+          'You have no sessions in progress right now.',
+          renderInProgressCard
+        )}
 
-                  <Typography variant="body2" color="text.secondary" mb={2}>
-                    {course.description}
-                  </Typography>
-
-                  <Box display="flex" alignItems="center" mb={2}>
-                    <Avatar sx={{ width: 32, height: 32, mr: 2 }}>
-                      <PersonIcon />
-                    </Avatar>
-                    <Box>
-                      <Typography variant="body2" fontWeight="medium">
-                        Created by {course.instructor}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        Started on {new Date(course.dateStarted).toLocaleDateString()}
-                      </Typography>
-                    </Box>
-                  </Box>
-
-                  <Box mb={2}>
-                    <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-                      <Typography variant="body2" fontWeight="medium">
-                        Progress
-                      </Typography>
-                      <Typography variant="body2" fontWeight="bold">
-                        {course.progress}%
-                      </Typography>
-                    </Box>
-                    <LinearProgress
-                      variant="determinate"
-                      value={course.progress}
-                      sx={{ height: 8, borderRadius: 4 }}
-                    />
-                  </Box>
-
-                  <Box display="flex" gap={1} mb={2}>
-                    {course.tags && course.tags.map((tag, index) => (
-                      <Chip
-                        key={index}
-                        label={tag}
-                        size="small"
-                        variant="outlined"
-                        sx={{ fontSize: '0.75rem' }}
-                      />
-                    ))}
-                  </Box>
-
-                  <Box display="flex" gap={1}>
-                    <Button
-                      variant="contained"
-                      startIcon={<PlayIcon />}
-                      onClick={() => handleSessionClick(course)}
-                      sx={{ 
-                        backgroundColor: '#10b981', 
-                        '&:hover': { backgroundColor: '#059669' },
-                        flex: 1
-                      }}
-                    >
-                      Continue
-                    </Button>
-                    <Button
-                      variant="outlined"
-                      onClick={() => handleSessionComplete(course.id)}
-                      sx={{ flex: 1 }}
-                    >
-                      Mark Complete
-                    </Button>
-                  </Box>
-                </CardContent>
-              </Card>
-            </Grid>
-          ))}
-        </Grid>
-      )}
-
-      {/* Completed Courses */}
-      {activeTab === 'completed' && (
-        <Grid container spacing={3}>
-          {completedCourses.map((course) => (
-            <Grid item xs={12} md={6} key={course.id}>
-              <Card sx={{ height: '100%', '&:hover': { boxShadow: 4 } }}>
-                <CardContent>
-                  <Box display="flex" justifyContent="space-between" alignItems="start" mb={2}>
-                    <Typography variant="h6" fontWeight="bold" gutterBottom>
-                      {course.title}
-                    </Typography>
-                    <Chip
-                      label={getStatusLabel(course.status)}
-                      sx={{ backgroundColor: getStatusColor(course.status), color: 'white' }}
-                      size="small"
-                    />
-                  </Box>
-
-                  <Typography variant="body2" color="text.secondary" mb={2}>
-                    {course.description}
-                  </Typography>
-
-                  <Box display="flex" alignItems="center" mb={2}>
-                    <Avatar sx={{ width: 32, height: 32, mr: 2 }}>
-                      <PersonIcon />
-                    </Avatar>
-                    <Box>
-                      <Typography variant="body2" fontWeight="medium">
-                        Created by {course.instructor}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        Completed on {new Date(course.dateCompleted).toLocaleDateString()}
-                      </Typography>
-                    </Box>
-                  </Box>
-
-                  <Box mb={2}>
-                    <Grid container spacing={2}>
-                      <Grid item xs={6}>
-                        <Box display="flex" alignItems="center" mb={1}>
-                          <TimeIcon sx={{ mr: 1, fontSize: 16, color: '#6b7280' }} />
-                          <Typography variant="body2" color="text.secondary">
-                            Time Taken: {course.timeTaken}
-                          </Typography>
-                        </Box>
-                      </Grid>
-                      <Grid item xs={6}>
-                        <Box display="flex" alignItems="center" mb={1}>
-                          <StarIcon sx={{ mr: 1, fontSize: 16, color: '#f59e0b' }} />
-                          <Typography variant="body2" color="text.secondary">
-                            Score: {course.score}%
-                          </Typography>
-                        </Box>
-                      </Grid>
-                    </Grid>
-                  </Box>
-
-                  <Box display="flex" gap={1} mb={2}>
-                    {course.tags && course.tags.map((tag, index) => (
-                      <Chip
-                        key={index}
-                        label={tag}
-                        size="small"
-                        variant="outlined"
-                        sx={{ fontSize: '0.75rem' }}
-                      />
-                    ))}
-                  </Box>
-
-                  <Box display="flex" gap={1}>
-                    <Button
-                      variant="outlined"
-                      startIcon={<PlayIcon />}
-                      onClick={() => handleSessionClick(course)}
-                      sx={{ flex: 1 }}
-                    >
-                      Review
-                    </Button>
-                    {course.certificate && (
-                      <Button
-                        variant="contained"
-                        startIcon={<CheckCircleIcon />}
-                        sx={{ 
-                          backgroundColor: '#10b981', 
-                          '&:hover': { backgroundColor: '#059669' },
-                          flex: 1
-                        }}
-                      >
-                        Certificate
-                      </Button>
-                    )}
-                  </Box>
-                </CardContent>
-              </Card>
-            </Grid>
-          ))}
-        </Grid>
-      )}
-
-      {/* Empty State */}
-      {activeTab === 'in-progress' && inProgressCourses.length === 0 && (
-        <Box textAlign="center" py={8}>
-          <Typography variant="h6" color="text.secondary" gutterBottom>
-            No courses in progress
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            Start a new course from the Course Library
-          </Typography>
-        </Box>
-      )}
-
-      {activeTab === 'completed' && completedCourses.length === 0 && (
-        <Box textAlign="center" py={8}>
-          <Typography variant="h6" color="text.secondary" gutterBottom>
-            No completed courses yet
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            Complete your in-progress courses to see them here
-          </Typography>
-        </Box>
-      )}
+      {activeTab === 'completed' &&
+        renderSessionsGrid(
+          completedSessionsList,
+          'You have not completed any sessions yet. Keep learning!',
+          renderCompletedCard
+        )}
     </Box>
   );
 };

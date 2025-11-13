@@ -36,13 +36,19 @@ import {
   InputAdornment,
   Tabs,
   Tab,
+  Stepper,
+  Step,
+  StepLabel,
+  StepConnector,
+  stepConnectorClasses,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
   TableRow,
-  TablePagination
+  TablePagination,
+  Alert
 } from '@mui/material';
 import {
   BarChart as BarChartIcon,
@@ -81,7 +87,6 @@ import {
   Delete as DeleteIcon,
   DeleteForever as DeleteForeverIcon,
   Save as SaveIcon,
-  Visibility as PreviewIcon,
   Publish as PublishIcon,
   LibraryBooks as LibraryBooksIcon,
   GridOn as GridViewIcon,
@@ -94,27 +99,25 @@ import {
   KeyboardArrowLeft as KeyboardArrowLeftIcon,
   KeyboardArrowRight as KeyboardArrowRightIcon,
   Image as ImageIcon,
-  CloudUpload as CloudUploadIcon2,
   AutoAwesome as AutoAwesomeIcon,
   Info as InfoIcon,
-  UploadFile as UploadFileIcon2,
+  UploadFile as UploadFileIcon,
   Event as EventIcon,
   Send as SendIcon,
   AccessTime as AccessTimeIcon,
   Today as TodayIcon,
   CheckCircleOutline as CheckCircleOutlineIcon,
-  Description as DescriptionIcon2,
-  Edit as EditIcon2,
-  Lock as LockIcon2,
   Done as DoneIcon,
   Cancel as CancelIcon,
   CardMembership as CertificateIcon,
-  EmojiEvents as AwardIcon
+  EmojiEvents as AwardIcon,
+  PlayCircleFilled as PlayCircleFilledIcon
 } from '@mui/icons-material';
 import { styled } from '@mui/material/styles';
 import Analytics from './Analytics';
 import Approvals from './Approvals';
 import InteractiveQuiz from './InteractiveQuiz';
+import GrowGridLogo from '../assets/Grow Grid logo.PNG';
 
 const DashboardContainer = styled(Box)(({ theme }) => ({
   minHeight: '100vh',
@@ -124,11 +127,12 @@ const DashboardContainer = styled(Box)(({ theme }) => ({
 
 const Sidebar = styled(Box)(({ theme }) => ({
   width: 280,
-  backgroundColor: '#1e293b',
-  color: 'white',
+  backgroundColor: 'white',
+  color: '#374151',
   padding: theme.spacing(2),
   display: 'flex',
   flexDirection: 'column',
+  borderRight: '1px solid #e5e7eb',
 }));
 
 const MainContent = styled(Box)(({ theme }) => ({
@@ -168,13 +172,16 @@ const ActivityCard = styled(Card)(({ theme }) => ({
   },
 }));
 
+// Custom Step Connector for Manage Session Progress Bar - will be defined inside renderManageSession
+
 const AdminDashboard = () => {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('dashboard');
   const [profileAnchorEl, setProfileAnchorEl] = useState(null);
   const [showContentCreator, setShowContentCreator] = useState(false);
-  const [contentCreatorView, setContentCreatorView] = useState('main'); // 'main', 'ai-creator', 'creation-modes', 'upload-file'
+  const [contentCreatorView, setContentCreatorView] = useState('main'); // 'main', 'ai-creator', 'creation-modes', 'upload-file', 'live-trainings'
   const [selectedFiles, setSelectedFiles] = useState([]);
+  const [sessionContentSnapshot, setSessionContentSnapshot] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const [aiContentGenerated, setAiContentGenerated] = useState(false);
   const [aiKeywords, setAiKeywords] = useState('');
@@ -213,6 +220,62 @@ const AdminDashboard = () => {
     title: '',
     description: ''
   });
+
+  const MAX_FILE_DATA_URL_SIZE = 2 * 1024 * 1024; // 2 MB cap for inline previews (reduced to prevent localStorage quota issues)
+
+  const readFileAsDataUrl = (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const createFileEntriesFromFiles = async (files) => {
+    const results = [];
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      let dataUrl = null;
+      try {
+        if (file.size <= MAX_FILE_DATA_URL_SIZE) {
+          dataUrl = await readFileAsDataUrl(file);
+        }
+      } catch (error) {
+        console.error('Failed to read file for preview:', file.name, error);
+      }
+
+      results.push({
+        id: `${Date.now()}-${index}-${file.name}-${Math.random().toString(36).slice(2, 9)}`,
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        uploadedAt: new Date().toISOString(),
+        lastModified: file.lastModified,
+        dataUrl,
+        fileObject: file,
+      });
+    }
+    return results;
+  };
+
+  const serializeFilesForStorage = (files) => {
+    return (files || []).map((file, idx) => {
+      // Don't store data URLs in localStorage to prevent quota issues
+      // Only store metadata - data URLs will be regenerated from file objects if needed
+      const fileEntry = {
+        id: file.id || `${file.name}-${file.size}-${file.uploadedAt || idx}`,
+        name: file.name,
+        size: file.size,
+        type: file.type || 'application/octet-stream',
+        uploadedAt: file.uploadedAt || new Date().toISOString(),
+        lastModified: file.lastModified || Date.now(),
+        // Only store dataUrl if file is very small (< 500KB) to prevent quota issues
+        dataUrl: (file.dataUrl && file.size < 500 * 1024) ? file.dataUrl : null,
+      };
+      return fileEntry;
+    });
+  };
   
   // Profile states
   const [showProfile, setShowProfile] = useState(false);
@@ -478,6 +541,20 @@ const AdminDashboard = () => {
   const [notifications, setNotifications] = useState(() => loadNotifications());
 
   // Load saved sessions from localStorage or use default data
+  const normalizePublishedSession = (session = {}) => ({
+    ...session,
+    scheduledDate: session.scheduledDate || null,
+    scheduledTime: session.scheduledTime || null,
+    scheduledDateTime: session.scheduledDateTime || null,
+    dueDate: session.dueDate || null,
+    dueTime: session.dueTime || null,
+    dueDateTime: session.dueDateTime || null,
+    isLocked: session.isLocked ?? false,
+    approvalExpiresAt: session.approvalExpiresAt || null,
+    lastApprovalDate: session.lastApprovalDate || null,
+    lockedAt: session.lockedAt || null
+  });
+
   const loadSavedSessions = () => {
     const stored = localStorage.getItem('admin_saved_sessions');
     if (stored) {
@@ -523,7 +600,16 @@ const AdminDashboard = () => {
 
   const loadPublishedSessions = () => {
     const stored = localStorage.getItem('published_sessions');
-    return stored ? JSON.parse(stored) : [];
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        return Array.isArray(parsed) ? parsed.map(normalizePublishedSession) : [];
+      } catch (error) {
+        console.error('Failed to parse published sessions', error);
+        return [];
+      }
+    }
+    return [];
   };
 
   const loadSavedAssessments = () => {
@@ -593,6 +679,8 @@ const AdminDashboard = () => {
   const [selectedSessionForScheduling, setSelectedSessionForScheduling] = useState(null);
   const [scheduleDate, setScheduleDate] = useState('');
   const [scheduleTime, setScheduleTime] = useState('');
+  const [scheduleDueDate, setScheduleDueDate] = useState('');
+  const [scheduleDueTime, setScheduleDueTime] = useState('');
   const [showCalendar, setShowCalendar] = useState(false);
   const [scheduleView, setScheduleView] = useState('sessions'); // 'sessions' or 'certification'
   const [scheduleSessionsViewMode, setScheduleSessionsViewMode] = useState('list'); // 'list' or 'grid'
@@ -605,7 +693,7 @@ const AdminDashboard = () => {
     title: 'CERTIFICATE',
     subtitle: '-OF APPRECIATION-',
     recipientLabel: 'Presented to',
-    descriptionText: 'who gave the best and completed the course',
+    descriptionText: 'who gave the best and completed the session',
     userName: 'User Name',
     dateOfIssue: '01 Sept 2026',
     authorisedBy: 'Country Head'
@@ -627,29 +715,162 @@ const AdminDashboard = () => {
   const [selectedSessionForCertification, setSelectedSessionForCertification] = useState(null);
   const [certificationToConfirm, setCertificationToConfirm] = useState(null);
   const [showCertificationConfirm, setShowCertificationConfirm] = useState(false);
-  const [sessionCertifications, setSessionCertifications] = useState({}); // { sessionId: certificationId }
+  const [sessionCertifications, setSessionCertifications] = useState(() => {
+    try {
+      const stored = localStorage.getItem('session_certifications');
+      return stored ? JSON.parse(stored) : {};
+    } catch (error) {
+      console.error('Failed to parse stored session certifications', error);
+      return {};
+    }
+  }); // { sessionId: certificationId }
+  const [employeeCompletions, setEmployeeCompletions] = useState(() => {
+    try {
+      const stored = localStorage.getItem('employee_completed_sessions');
+      return stored ? JSON.parse(stored) : [];
+    } catch (error) {
+      console.error('Failed to parse employee completions', error);
+      return [];
+    }
+  });
   
   // View All dialog states
   const [showViewAllDialog, setShowViewAllDialog] = useState(false);
   const [viewAllType, setViewAllType] = useState(null); // 'drafts', 'popular', 'newlyAdded'
   
   // Save draft and published sessions to localStorage
+  // Helper function to clean up old localStorage data
+  const cleanupOldData = () => {
+    try {
+      // Clean up old draft sessions (keep only last 10)
+      const drafts = localStorage.getItem('draft_sessions');
+      if (drafts) {
+        const parsed = JSON.parse(drafts);
+        if (parsed.length > 10) {
+          const cleaned = parsed.slice(0, 10);
+          localStorage.setItem('draft_sessions', JSON.stringify(cleaned));
+          console.log(`Cleaned up ${parsed.length - 10} old draft sessions`);
+        }
+      }
+      
+      // Clean up old published sessions (remove completed ones older than 30 days)
+      const published = localStorage.getItem('published_sessions');
+      if (published) {
+        const parsed = JSON.parse(published);
+        const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+        const cleaned = parsed.filter(session => {
+          // Keep active/in-progress sessions
+          if (session.status && session.status !== 'completed') return true;
+          // Keep recent completed sessions
+          const completedAt = session.completedAt ? new Date(session.completedAt).getTime() : 0;
+          return completedAt > thirtyDaysAgo;
+        });
+        if (cleaned.length < parsed.length) {
+          localStorage.setItem('published_sessions', JSON.stringify(cleaned));
+          console.log(`Cleaned up ${parsed.length - cleaned.length} old published sessions`);
+        }
+      }
+      
+      // Clean up old activities (keep only last 100)
+      const activities = localStorage.getItem('admin_activities');
+      if (activities) {
+        const parsed = JSON.parse(activities);
+        if (parsed.length > 100) {
+          const cleaned = parsed.slice(0, 100);
+          localStorage.setItem('admin_activities', JSON.stringify(cleaned));
+          console.log(`Cleaned up ${parsed.length - 100} old activities`);
+        }
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('Error during cleanup:', error);
+      return false;
+    }
+  };
+
+  // Helper function to safely set localStorage with quota error handling
+  const safeSetLocalStorage = (key, value) => {
+    try {
+      const serialized = JSON.stringify(value);
+      // Check if data is too large (localStorage limit is usually 5-10MB)
+      if (serialized.length > 4 * 1024 * 1024) { // 4MB warning threshold
+        console.warn(`Warning: ${key} data is large (${(serialized.length / 1024 / 1024).toFixed(2)}MB). Consider cleaning up old data.`);
+        // Attempt cleanup before saving
+        cleanupOldData();
+      }
+      localStorage.setItem(key, serialized);
+      return true;
+    } catch (error) {
+      if (error.name === 'QuotaExceededError' || error.code === 22) {
+        console.error(`localStorage quota exceeded for ${key}. Attempting to clean up...`);
+        // Try to clean up old data
+        if (cleanupOldData()) {
+          try {
+            // Try again after cleanup
+            localStorage.setItem(key, JSON.stringify(value));
+            return true;
+          } catch (retryError) {
+            console.error(`Failed to save ${key} even after cleanup:`, retryError);
+            alert(`Storage limit reached. Please clear some old sessions or refresh the page.`);
+            return false;
+          }
+        } else {
+          alert(`Storage limit reached. Please clear some old sessions or refresh the page.`);
+          return false;
+        }
+      }
+      console.error(`Failed to save ${key}:`, error);
+      return false;
+    }
+  };
+
   useEffect(() => {
-    localStorage.setItem('draft_sessions', JSON.stringify(draftSessions));
+    safeSetLocalStorage('draft_sessions', draftSessions);
   }, [draftSessions]);
 
-  useEffect(() => {
-    localStorage.setItem('published_sessions', JSON.stringify(publishedSessions));
-  }, [publishedSessions]);
+useEffect(() => {
+  if (safeSetLocalStorage('published_sessions', publishedSessions)) {
+    window.dispatchEvent(new Event('published-sessions-updated'));
+  }
+}, [publishedSessions]);
 
   useEffect(() => {
-    localStorage.setItem('saved_assessments', JSON.stringify(savedAssessments));
+    safeSetLocalStorage('saved_assessments', savedAssessments);
   }, [savedAssessments]);
 
   // Save activities to localStorage
   useEffect(() => {
-    localStorage.setItem('admin_activities', JSON.stringify(activities));
+    safeSetLocalStorage('admin_activities', activities);
   }, [activities]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('session_certifications', JSON.stringify(sessionCertifications));
+      window.dispatchEvent(new Event('session-certifications-updated'));
+    } catch (error) {
+      console.error('Failed to persist session certifications', error);
+    }
+  }, [sessionCertifications]);
+
+  useEffect(() => {
+    const syncEmployeeCompletions = () => {
+      try {
+        const stored = localStorage.getItem('employee_completed_sessions');
+        setEmployeeCompletions(stored ? JSON.parse(stored) : []);
+      } catch (error) {
+        console.error('Failed to sync employee completions', error);
+      }
+    };
+
+    window.addEventListener('employee-completions-updated', syncEmployeeCompletions);
+    window.addEventListener('storage', syncEmployeeCompletions);
+
+    return () => {
+      window.removeEventListener('employee-completions-updated', syncEmployeeCompletions);
+      window.removeEventListener('storage', syncEmployeeCompletions);
+    };
+  }, []);
   
   // Store File objects separately in memory (not in localStorage)
   const [sessionFileObjects, setSessionFileObjects] = useState({});
@@ -660,14 +881,17 @@ const AdminDashboard = () => {
     const serializableSessions = savedSessions.map(session => ({
       ...session,
       files: session.files?.map(file => {
+        if (!file) return file;
+
         if (file.fileObject) {
-          // Store only metadata, not the File object
+          // Preserve metadata and preview data but omit the File reference
+          const {
+            fileObject,
+            ...rest
+          } = file;
           return {
-            name: file.name,
-            size: file.size,
-            type: file.type,
-            uploadedAt: file.uploadedAt,
-            isFileObject: true // Flag to indicate this was a File object
+            ...rest,
+            isFileObject: true,
           };
         }
         return file;
@@ -827,15 +1051,15 @@ const AdminDashboard = () => {
     const totalSessionsCreated = savedSessions.length;
     const activeEmployees = employees.length;
     const upcomingSessions = savedSessions.filter(s => s.status === 'scheduled').length;
-    const feedbackReceived = notifications.filter(n => n.type === 'session_completed').length;
+    const totalActiveSessions = savedSessions.filter(s => s.status === 'in_progress').length;
 
     return [
       { label: 'Total Sessions Created', value: totalSessionsCreated.toString(), color: '#3b82f6', icon: <BarChartIcon sx={{ color: '#3b82f6' }} /> },
       { label: 'Active Employees', value: activeEmployees.toString(), color: '#10b981', icon: <PeopleIcon sx={{ color: '#10b981' }} /> },
       { label: 'Upcoming Sessions', value: upcomingSessions.toString(), color: '#f59e0b', icon: <CalendarIcon sx={{ color: '#f59e0b' }} /> },
-      { label: 'Feedback Received', value: feedbackReceived.toString(), color: '#ef4444', icon: <FeedbackIcon sx={{ color: '#ef4444' }} /> }
+      { label: 'Total Active Sessions', value: totalActiveSessions.toString(), color: '#ef4444', icon: <PlayCircleFilledIcon sx={{ color: '#ef4444' }} /> }
     ];
-  }, [savedSessions, employees, notifications]);
+  }, [savedSessions, employees]);
 
   // Real-time session status data using useMemo
   const sessionStatusData = useMemo(() => {
@@ -974,6 +1198,20 @@ const AdminDashboard = () => {
     return getRecentActivity();
   }, [activities, currentTime]);
 
+  // Memoize top performers for Leader Board
+  const topPerformers = useMemo(() => {
+    // Calculate top performers directly from employees data
+    return employees.slice(0, 5).map((employee, index) => ({
+      id: employee.id,
+      name: employee.name,
+      department: employee.department,
+      sessionsCompleted: Math.floor(Math.random() * 10) + 1,
+      completionRate: Math.floor(Math.random() * 40) + 60,
+      rank: index + 1,
+      rankColor: index === 0 ? '#10b981' : index === 1 ? '#f59e0b' : index === 2 ? '#ef4444' : '#6b7280'
+    }));
+  }, [employees]);
+
   // Real-time filtered sessions for Course Management
   const draftCoursesList = useMemo(() => {
     return savedSessions.filter(s => s.status === 'draft');
@@ -1008,21 +1246,20 @@ const AdminDashboard = () => {
   const getDialogTitle = () => {
     switch(viewAllType) {
       case 'drafts':
-        return 'All Draft Courses';
+        return 'All Draft Sessions';
       case 'popular':
-        return 'All Popular Courses';
+        return 'All Popular Sessions';
       case 'newlyAdded':
-        return 'All Newly Added Courses';
+        return 'All Newly Added Sessions';
       default:
-        return 'All Courses';
+        return 'All Sessions';
     }
   };
 
   const navigationItems = [
     { id: 'dashboard', label: 'Dashboard', icon: <BarChartIcon /> },
-    { id: 'schedule', label: 'Schedule', icon: <ScheduleIcon /> },
     { id: 'manage-session', label: 'Manage', icon: <LightbulbIcon /> },
-    { id: 'course-library', label: 'Course Library', icon: <LibraryBooksIcon /> },
+    { id: 'course-library', label: 'Session Library', icon: <LibraryBooksIcon /> },
     { id: 'approvals', label: 'Approvals', icon: <CheckCircleIcon /> },
     { id: 'employees', label: 'Employee Management', icon: <GroupIcon /> },
     { id: 'analytics', label: 'Analytics', icon: <AnalyticsIcon /> },
@@ -1030,8 +1267,8 @@ const AdminDashboard = () => {
   ];
 
   // Manage Session tab state (replacing submenu with tabs)
-  const [manageSessionTab, setManageSessionTab] = useState('all-sessions'); // 'create', 'content-creator', 'live-trainings', 'assessment', 'certification', 'all-sessions'
-  const [manageSessionView, setManageSessionView] = useState('all-sessions'); // Keep for backward compatibility, synced with manageSessionTab
+  const [manageSessionTab, setManageSessionTab] = useState('create'); // 'create', 'content-creator', 'live-trainings', 'assessment', 'certification', 'all-sessions'
+  const [manageSessionView, setManageSessionView] = useState('create'); // Keep for backward compatibility, synced with manageSessionTab
   const [manageSessionsViewMode, setManageSessionsViewMode] = useState('list'); // 'list' or 'grid'
   const [manageSessionsSearchTerm, setManageSessionsSearchTerm] = useState('');
 
@@ -1039,10 +1276,19 @@ const AdminDashboard = () => {
     console.log('handleTabChange called with tab:', tab);
     setActiveTab(tab);
     
+    // Close modal overlays when switching to dashboard
+    if (tab === 'dashboard') {
+      setShowContentPreview(false);
+      setShowSavedSessionsFolder(false);
+      setShowPasswordManager(false);
+      setShowProfile(false);
+      setShowEditProfile(false);
+    }
+    
     // Reset manage session state when switching away from manage-session
     if (tab !== 'manage-session') {
         setManageSessionView(null);
-      setManageSessionTab('all-sessions');
+      setManageSessionTab('create');
       // Reset other manage-session related states
       setShowContentCreator(false);
       setShowQuizForm(false);
@@ -1051,10 +1297,10 @@ const AdminDashboard = () => {
       setShowPublishDialog(false);
       setSessionToPublish(null);
     } else {
-      // When switching to manage-session, set default tab if not set
+      // When switching to manage-session, set default tab to 'create' if not set
       if (!manageSessionTab) {
-        setManageSessionTab('all-sessions');
-        setManageSessionView('all-sessions');
+        setManageSessionTab('create');
+        setManageSessionView('create');
       } else {
         // Sync manageSessionView with manageSessionTab
         setManageSessionView(manageSessionTab);
@@ -1148,6 +1394,43 @@ const AdminDashboard = () => {
     // Handle logout logic
     console.log('Logout clicked');
     navigate('/login');
+  };
+
+  const handleClearAllSessions = () => {
+    if (window.confirm('Are you sure you want to clear ALL sessions? This will delete:\n- All published sessions\n- All draft sessions\n- All saved assessments\n- Employee completion data\n- Session certifications\n\nThis action cannot be undone!')) {
+      try {
+        // Clear all session-related localStorage
+        localStorage.removeItem('published_sessions');
+        localStorage.removeItem('draft_sessions');
+        localStorage.removeItem('saved_assessments');
+        localStorage.removeItem('employee_completed_sessions');
+        localStorage.removeItem('session_certifications');
+        localStorage.removeItem('sessionRequests');
+        
+        // Reset state
+        setPublishedSessions([]);
+        setDraftSessions([]);
+        setSavedAssessments([]);
+        
+        // Dispatch events to update other components
+        window.dispatchEvent(new Event('published-sessions-updated'));
+        window.dispatchEvent(new Event('employee-completions-updated'));
+        window.dispatchEvent(new Event('session-certifications-updated'));
+        
+        alert('All sessions have been cleared successfully!');
+        
+        // Log activity
+        addActivity(
+          'All sessions cleared',
+          'Admin',
+          'delete',
+          'sessions_cleared'
+        );
+      } catch (error) {
+        console.error('Error clearing sessions:', error);
+        alert('Error clearing sessions. Please try again.');
+      }
+    }
   };
 
   const handleViewProfile = () => {
@@ -1314,6 +1597,9 @@ const AdminDashboard = () => {
 
   const handleCreateSession = () => {
     setShowContentCreator(true);
+    // Update manageSessionTab to 'content-creator' to show progress in progress bar
+    setManageSessionTab('content-creator');
+    setManageSessionView('content-creator');
   };
 
   const handleContentCreatorCancel = () => {
@@ -1336,8 +1622,27 @@ const AdminDashboard = () => {
       return;
     }
     
+    // If coming from upload file page, go back to main content creator page
+    if (contentCreatorView === 'upload-file') {
+      setContentCreatorView('main');
+      return;
+    }
+    
     // Show content preview, then navigate to quiz
     setShowContentPreview(true);
+  };
+
+  const handleProceedFromMainToQuiz = () => {
+    // Check if there's content to proceed with
+    const hasContent = selectedFiles.length > 0 || aiContentGenerated || selectedCreationMode;
+    
+    if (!hasContent) {
+      alert('Please generate content, create a file, or upload a file before proceeding.');
+      return;
+    }
+    
+    // Navigate to Checkpoint Assessment view
+    handleProceedToQuiz();
   };
 
   const handleGenerateAIContent = () => {
@@ -1362,51 +1667,57 @@ const AdminDashboard = () => {
     // Reset showQuizForm since we're using manageSessionTab for navigation
     setShowQuizForm(false);
     // Store current session data for quiz
-    setCurrentQuizData({
+    const contentMetadata = mapFilesToMetadata(selectedFiles);
+    const snapshot = {
       aiContent: aiContentGenerated ? { keywords: aiKeywords } : null,
       creationMode: selectedCreationMode,
-      files: selectedFiles,
+      files: contentMetadata,
+    };
+    setSessionContentSnapshot({
+      ...snapshot,
+      sessionForm: { ...sessionFormData },
+    });
+    setCurrentQuizData({
+      ...snapshot,
       timestamp: new Date().toISOString()
     });
     console.log('Navigation set: activeTab=manage-session, manageSessionTab=assessment');
   };
 
   const handleSaveQuizAsDraft = (quizData) => {
-    // Save session with quiz as draft
-    const draftSession = {
-      id: Date.now(),
-      title: sessionFormData.title || quizData.title || 'Untitled Session',
-      type: sessionFormData.type,
-      audience: sessionFormData.audience,
-      description: sessionFormData.description || quizData.description || '',
-      files: selectedFiles.map(f => ({ name: f.name, size: f.size, type: f.type })),
-      quiz: quizData,
-      aiContent: aiContentGenerated ? { keywords: aiKeywords } : null,
-      creationMode: selectedCreationMode,
-      status: 'draft',
-      createdAt: new Date().toISOString(),
-      savedAt: new Date().toISOString()
-    };
+    // Update sessionFormData with quiz data if needed
+    if (!sessionFormData.title && quizData.title) {
+      setSessionFormData(prev => ({ ...prev, title: quizData.title }));
+    }
+    if (!sessionFormData.description && quizData.description) {
+      setSessionFormData(prev => ({ ...prev, description: quizData.description }));
+    }
     
-    setDraftSessions(prev => {
-      const updated = [draftSession, ...prev];
-      localStorage.setItem('draft_sessions', JSON.stringify(updated));
-      return updated;
+    const resolvedAiContent = sessionContentSnapshot?.aiContent ?? currentQuizData?.aiContent ?? (aiContentGenerated ? { keywords: aiKeywords } : null);
+    const resolvedCreationMode = sessionContentSnapshot?.creationMode ?? currentQuizData?.creationMode ?? selectedCreationMode;
+    const resolvedFiles = sessionContentSnapshot?.files ?? mapFilesToMetadata(currentQuizData?.files || selectedFiles);
+
+    setSessionContentSnapshot(prev => ({
+      aiContent: resolvedAiContent,
+      creationMode: resolvedCreationMode,
+      files: resolvedFiles,
+      sessionForm: { ...(prev?.sessionForm || {}), ...sessionFormData },
+    }));
+
+    // Update currentQuizData
+    setCurrentQuizData({
+      ...quizData,
+      aiContent: resolvedAiContent,
+      creationMode: resolvedCreationMode,
+      files: resolvedFiles,
     });
     
-    // Navigate to Manage Sessions
-    setActiveTab('manage-session');
-    setManageSessionTab('all-sessions');
-    setManageSessionView('all-sessions');
-    setShowQuizForm(false);
-    setShowContentPreview(false);
-    setShowContentCreator(false);
-    setSelectedAllSessionItem(null);
-    setShowPublishDialog(false);
-    setSessionToPublish(null);
-    setCurrentQuizData(null);
+    // Use the universal save as draft function
+    handleSaveAsDraft();
     
-    alert('Changes saved in Draft successfully!');
+    // Optionally navigate (commented out to allow continuing work)
+    // setActiveTab('manage-session');
+    // setManageSessionTab('all-sessions');
   };
 
   const handlePublishQuiz = (quizData) => {
@@ -1414,23 +1725,30 @@ const AdminDashboard = () => {
     const publishedSession = {
       id: Date.now(),
       title: sessionFormData.title || quizData.title || 'Untitled Session',
-      type: sessionFormData.type,
-      audience: sessionFormData.audience,
+      type: sessionFormData.type || 'compliance',
+      audience: sessionFormData.audience || 'all',
       description: sessionFormData.description || quizData.description || '',
-      files: selectedFiles.map(f => ({ name: f.name, size: f.size, type: f.type })),
+      files: serializeFilesForStorage(selectedFiles), // Ensure files are included
       quiz: quizData,
       aiContent: aiContentGenerated ? { keywords: aiKeywords } : null,
       creationMode: selectedCreationMode,
-      status: 'ready_to_publish',
+      status: 'published', // Change to published so employees can see it immediately
       createdAt: new Date().toISOString(),
-      publishedAt: new Date().toISOString()
+      publishedAt: new Date().toISOString(),
+      scheduledDate: null,
+      scheduledTime: null,
+      scheduledDateTime: null,
+      dueDate: null,
+      dueTime: null,
+      dueDateTime: null,
+      isLocked: false,
+      approvalExpiresAt: null,
+      lastApprovalDate: null,
+      instructor: 'HR Team',
+      duration: '60 minutes'
     };
     
-    setPublishedSessions(prev => {
-      const updated = [publishedSession, ...prev];
-      localStorage.setItem('published_sessions', JSON.stringify(updated));
-      return updated;
-    });
+    setPublishedSessions(prev => [normalizePublishedSession(publishedSession), ...prev]);
     
     // Log activity
     addActivity(
@@ -1440,10 +1758,12 @@ const AdminDashboard = () => {
       'session_published'
     );
     
-    alert('Session published successfully! It is now ready to publish.');
+    alert('Session published successfully! It is now ready to schedule.');
     setCurrentQuizData(null);
     setShowQuizForm(false);
-    setActiveTab('dashboard');
+    // Navigate to Schedule step in manage section
+    setActiveTab('manage-session');
+    setManageSessionTab('schedule');
   };
 
   const handleQuizPreview = (quizData) => {
@@ -1452,19 +1772,25 @@ const AdminDashboard = () => {
     // You can implement a preview modal here
   };
 
-  const handleFileSelect = (event) => {
-    const files = Array.from(event.target.files);
-    setSelectedFiles(prev => [...prev, ...files]);
-    
+  const handleFileSelect = async (event) => {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
+
+    const entries = await createFileEntriesFromFiles(files);
+    setSelectedFiles(prev => [...prev, ...entries]);
+
     // Log activity for file uploads
-    if (files.length > 0) {
-      const fileNames = files.map(f => f.name).join(', ');
-      addActivity(
-        `Content uploaded: ${fileNames}`,
-        'Admin',
-        'upload',
-        'content_uploaded'
-      );
+    const fileNames = entries.map(f => f.name).join(', ');
+    addActivity(
+      `Content uploaded: ${fileNames}`,
+      'Admin',
+      'upload',
+      'content_uploaded'
+    );
+
+    // Reset input so same file can be selected again
+    if (event.target) {
+      event.target.value = '';
     }
   };
 
@@ -1482,22 +1808,22 @@ const AdminDashboard = () => {
     setDragOver(false);
   };
 
-  const handleDrop = (e) => {
+  const handleDrop = async (e) => {
     e.preventDefault();
     setDragOver(false);
-    const files = Array.from(e.dataTransfer.files);
-    setSelectedFiles(prev => [...prev, ...files]);
-    
-    // Log activity for file uploads
-    if (files.length > 0) {
-      const fileNames = files.map(f => f.name).join(', ');
-      addActivity(
-        `Content uploaded: ${fileNames}`,
-        'Admin',
-        'upload',
-        'content_uploaded'
-      );
-    }
+    const files = Array.from(e.dataTransfer.files || []);
+    if (!files.length) return;
+
+    const entries = await createFileEntriesFromFiles(files);
+    setSelectedFiles(prev => [...prev, ...entries]);
+
+    const fileNames = entries.map(f => f.name).join(', ');
+    addActivity(
+      `Content uploaded: ${fileNames}`,
+      'Admin',
+      'upload',
+      'content_uploaded'
+    );
   };
 
   const removeFile = (index) => {
@@ -1512,34 +1838,82 @@ const AdminDashboard = () => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  const handleSaveSession = () => {
-    if (!sessionFormData.title || !sessionFormData.description) {
-      alert('Please fill in all required fields');
-      return;
-    }
+  const mapFilesToMetadata = (files) => {
+    if (!files || files.length === 0) return [];
+    return files
+      .filter(Boolean)
+      .map((file, index) => {
+        if (typeof file === 'string') {
+          return {
+            id: `${file}-${index}`,
+            name: file,
+            size: 0,
+            type: 'unknown',
+            uploadedAt: new Date().toISOString(),
+            dataUrl: null,
+          };
+        }
 
-    const sessionId = Date.now();
-    const newSession = {
-      id: sessionId,
-      title: sessionFormData.title,
-      type: sessionFormData.type,
-      audience: sessionFormData.audience,
-      description: sessionFormData.description,
-      files: selectedFiles.map(file => {
-        // Store the actual File object with metadata
         return {
-          name: file.name, 
-          size: file.size, 
-          type: file.type,
-          uploadedAt: new Date().toISOString(),
-          fileObject: file // Store the actual File object
+          id: file.id || `${file.name}-${file.size}-${file.uploadedAt || index}`,
+          name: file.name || 'File',
+          size: file.size || 0,
+          type: file.type || 'application/octet-stream',
+          uploadedAt: file.uploadedAt || new Date().toISOString(),
+          dataUrl: file.dataUrl || null,
         };
-      }),
-      status: 'draft',
-      createdAt: new Date().toISOString()
+      });
+  };
+
+  // Universal Save as Draft function - saves current state from any page
+  const handleSaveAsDraft = () => {
+    // Determine if we have a title (from sessionFormData or generate one)
+    const draftTitle = sessionFormData.title || 
+                      (selectedFiles.length > 0 ? `Draft - ${selectedFiles[0].name}` : 'Untitled Session');
+    
+    // Create resume state object with current progress
+    const resumeState = {
+      contentCreatorView: contentCreatorView,
+      selectedFiles: serializeFilesForStorage(selectedFiles),
+      aiContentGenerated: aiContentGenerated,
+      aiKeywords: aiKeywords,
+      selectedCreationMode: selectedCreationMode,
+      showContentPreview: showContentPreview,
+      sessionFormData: sessionFormData,
+      currentQuizData: currentQuizData,
+      activeTab: activeTab,
+      manageSessionTab: manageSessionTab
     };
 
-    // Store File objects separately in memory
+    // Check if updating existing draft or creating new one
+    const existingDraftId = sessionFormData.draftId || null;
+    const sessionId = existingDraftId || Date.now();
+    
+    const draftSession = {
+      id: sessionId,
+      title: draftTitle,
+      type: sessionFormData.type || 'compliance',
+      audience: sessionFormData.audience || 'all',
+      description: sessionFormData.description || '',
+      files: serializeFilesForStorage(selectedFiles),
+      status: 'draft',
+      createdAt: existingDraftId ? draftSessions.find(d => d.id === existingDraftId)?.createdAt || new Date().toISOString() : new Date().toISOString(),
+      savedAt: new Date().toISOString(),
+      resumeState: resumeState,
+      aiContent: aiContentGenerated ? { keywords: aiKeywords } : null,
+      creationMode: selectedCreationMode,
+      quiz: currentQuizData || null
+    };
+
+    // Update or add to draft sessions
+    setDraftSessions(prev => {
+      const filtered = existingDraftId ? prev.filter(d => d.id !== existingDraftId) : prev;
+      const updated = [draftSession, ...filtered];
+      safeSetLocalStorage('draft_sessions', updated);
+      return updated;
+    });
+
+    // Store File objects separately in memory for restoration
     if (selectedFiles.length > 0) {
       setSessionFileObjects(prev => ({
         ...prev,
@@ -1547,28 +1921,162 @@ const AdminDashboard = () => {
       }));
     }
 
-    setSavedSessions(prev => [newSession, ...prev]);
-    
+    // Also update savedSessions for compatibility
+    setSavedSessions(prev => {
+      const filtered = existingDraftId ? prev.filter(s => s.id !== existingDraftId) : prev;
+      return [draftSession, ...filtered];
+    });
+
     // Log activity
     addActivity(
-      `Session created: ${sessionFormData.title}`,
+      existingDraftId ? `Draft updated: ${draftTitle}` : `Draft saved: ${draftTitle}`,
       'Admin',
       'draft',
-      'session_created'
+      'session_saved'
     );
+
+    alert(existingDraftId ? 'Draft updated successfully!' : 'Draft saved successfully!');
+  };
+
+  const handleSaveSession = () => {
+    // Use the universal save as draft function
+    handleSaveAsDraft();
     
-    // Reset form
-    setSessionFormData({
-      title: '',
-      type: 'compliance',
-      audience: 'all',
-      description: ''
-    });
-    setSelectedFiles([]);
-    setShowContentCreator(false);
+    // Optionally reset and navigate (commented out to allow continuing work)
+    // setShowContentCreator(false);
+    // setShowSavedSessionsFolder(true);
+  };
+
+  // Resume/Edit Draft function - restores state and navigates to where user left off
+  const handleResumeDraft = (draftSession) => {
+    if (!draftSession.resumeState) {
+      // Fallback: if no resumeState, start from content creator main
+      setContentCreatorView('main');
+      setShowContentCreator(true);
+      setActiveTab('manage-session');
+      setManageSessionTab('content-creator');
+      return;
+    }
+
+    const resumeState = draftSession.resumeState;
     
-    // Redirect to saved sessions folder view
-    setShowSavedSessionsFolder(true);
+    // Restore session form data
+    if (resumeState.sessionFormData) {
+      setSessionFormData({
+        ...resumeState.sessionFormData,
+        draftId: draftSession.id // Keep track of draft ID for updates
+      });
+    }
+
+    // Restore file objects if available
+    if (resumeState.selectedFiles && resumeState.selectedFiles.length > 0) {
+      const restoredFiles = resumeState.selectedFiles.map((fileInfo, index) => {
+        const baseMetadata = {
+          id: fileInfo.id || `${fileInfo.name}-${fileInfo.size}-${fileInfo.uploadedAt || index}`,
+          name: fileInfo.name,
+          size: fileInfo.size,
+          type: fileInfo.type || 'application/octet-stream',
+          uploadedAt: fileInfo.uploadedAt || new Date().toISOString(),
+          lastModified: fileInfo.lastModified || Date.now(),
+          dataUrl: fileInfo.dataUrl || null,
+          fileObject: null,
+        };
+
+        // Try to restore from sessionFileObjects if available
+        const storedFiles = sessionFileObjects[draftSession.id];
+        if (storedFiles && storedFiles.length > 0) {
+          const matchingFile = storedFiles.find(f => f.name === fileInfo.name && f.size === fileInfo.size);
+          if (matchingFile) {
+            return {
+              ...baseMetadata,
+              dataUrl: matchingFile.dataUrl || baseMetadata.dataUrl,
+              fileObject: matchingFile.fileObject || null,
+            };
+          }
+        }
+
+        // Attempt to rebuild from dataUrl if available
+        if (baseMetadata.dataUrl) {
+          try {
+            const [header, data] = baseMetadata.dataUrl.split(',');
+            const mimeMatch = header.match(/data:(.*?);base64/);
+            const mimeType = mimeMatch ? mimeMatch[1] : baseMetadata.type;
+            const binary = atob(data);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i += 1) {
+              bytes[i] = binary.charCodeAt(i);
+            }
+            const blob = new Blob([bytes], { type: mimeType });
+            const file = typeof File !== 'undefined'
+              ? new File([blob], baseMetadata.name, { type: mimeType, lastModified: baseMetadata.lastModified })
+              : blob;
+            return {
+              ...baseMetadata,
+              type: mimeType,
+              fileObject: file,
+            };
+          } catch (error) {
+            console.warn('Unable to recreate file from dataUrl', error);
+          }
+        }
+
+        return baseMetadata;
+      }).filter(Boolean); // Remove any null/undefined entries
+      setSelectedFiles(restoredFiles);
+      
+      // Store in sessionFileObjects for future use
+      if (restoredFiles.length > 0) {
+        setSessionFileObjects(prev => ({
+          ...prev,
+          [draftSession.id]: restoredFiles
+        }));
+      }
+    }
+
+    // Restore AI content state
+    if (resumeState.aiContentGenerated) {
+      setAiContentGenerated(true);
+      setAiKeywords(resumeState.aiKeywords || '');
+    }
+
+    // Restore creation mode
+    if (resumeState.selectedCreationMode) {
+      setSelectedCreationMode(resumeState.selectedCreationMode);
+    }
+
+    // Restore quiz data if available
+    if (resumeState.currentQuizData || draftSession.quiz) {
+      setCurrentQuizData(resumeState.currentQuizData || draftSession.quiz);
+    }
+
+    // Restore content preview state
+    if (resumeState.showContentPreview) {
+      setShowContentPreview(true);
+    }
+
+    // Navigate to the appropriate view
+    setActiveTab(resumeState.activeTab || 'manage-session');
+    setManageSessionTab(resumeState.manageSessionTab || 'content-creator');
+    
+    // Navigate to the specific content creator view
+    if (resumeState.contentCreatorView) {
+      setContentCreatorView(resumeState.contentCreatorView);
+      setShowContentCreator(true);
+    } else if (resumeState.showContentPreview) {
+      setShowContentPreview(true);
+      setShowContentCreator(true);
+    } else if (resumeState.currentQuizData || draftSession.quiz) {
+      // If quiz was started, go to assessment tab
+      setManageSessionTab('assessment');
+      setShowContentCreator(false);
+    } else {
+      // Default to content creator main
+      setContentCreatorView('main');
+      setShowContentCreator(true);
+    }
+
+    // Close any dialogs
+    setShowViewAllDialog(false);
   };
 
   const handleScheduleSession = (session) => {
@@ -1621,14 +2129,38 @@ const AdminDashboard = () => {
   };
 
   const handleQuizSave = (quizData) => {
-    // Save assessment to Saved Assessment folder
+    const resolvedSessionForm = sessionContentSnapshot?.sessionForm || sessionFormData;
+    const resolvedAiContent = sessionContentSnapshot?.aiContent ?? currentQuizData?.aiContent ?? (aiContentGenerated ? { keywords: aiKeywords } : null);
+    const resolvedCreationMode = sessionContentSnapshot?.creationMode ?? currentQuizData?.creationMode ?? selectedCreationMode;
+    const resolvedFiles = sessionContentSnapshot?.files ?? mapFilesToMetadata(currentQuizData?.files || selectedFiles);
+
+    const quizWithContent = {
+      ...quizData,
+      aiContent: resolvedAiContent,
+      creationMode: resolvedCreationMode,
+      files: resolvedFiles,
+    };
+
+    setCurrentQuizData(quizWithContent);
+    setSessionContentSnapshot({
+      aiContent: resolvedAiContent,
+      creationMode: resolvedCreationMode,
+      files: resolvedFiles,
+      sessionForm: { ...resolvedSessionForm },
+    });
+
     const savedAssessment = {
       id: Date.now(),
-      title: quizData.title || quizData.assessmentInfo?.quizTitle || 'Untitled Assessment',
-      description: quizData.description || '',
-      quiz: quizData,
+      title: resolvedSessionForm.title || quizData.title || quizData.assessmentInfo?.quizTitle || 'Untitled Session',
+      description: resolvedSessionForm.description || quizData.description || '',
+      type: resolvedSessionForm.type || 'compliance',
+      audience: resolvedSessionForm.audience || 'all',
+      quiz: quizWithContent,
       assessmentInfo: quizData.assessmentInfo || {},
       questions: quizData.questions || [],
+      aiContent: resolvedAiContent,
+      creationMode: resolvedCreationMode,
+      files: resolvedFiles,
       status: 'saved',
       createdAt: new Date().toISOString(),
       savedAt: new Date().toISOString()
@@ -1636,7 +2168,7 @@ const AdminDashboard = () => {
     
     setSavedAssessments(prev => {
       const updated = [savedAssessment, ...prev];
-      localStorage.setItem('saved_assessments', JSON.stringify(updated));
+      safeSetLocalStorage('saved_assessments', updated);
       return updated;
     });
     
@@ -1648,10 +2180,10 @@ const AdminDashboard = () => {
       'quiz_created'
     );
     
-    // Navigate to Manage Sessions
+    // Navigate to Certification step
     setActiveTab('manage-session');
-    setManageSessionTab('all-sessions');
-    setManageSessionView('all-sessions');
+    setManageSessionTab('certification');
+    setManageSessionView('certification');
     setShowQuizForm(false);
     setShowContentPreview(false);
     setShowContentCreator(false);
@@ -1660,6 +2192,13 @@ const AdminDashboard = () => {
     setSessionToPublish(null);
     
     alert('Assessment saved successfully!');
+  };
+
+  const handleQuizSkip = () => {
+    // Navigate to Certification step
+    setManageSessionTab('certification');
+    setManageSessionView('certification');
+    setActiveTab('manage-session');
   };
 
   const handleQuizCancel = () => {
@@ -1684,6 +2223,18 @@ const AdminDashboard = () => {
     if (window.confirm('Are you sure you want to delete this session? This action cannot be undone.')) {
       const session = savedSessions.find(s => s.id === sessionId);
       setSavedSessions(prev => prev.filter(session => session.id !== sessionId));
+      
+      // Also remove from draftSessions if it's a draft
+      if (session && session.status === 'draft') {
+        setDraftSessions(prev => prev.filter(s => s.id !== sessionId));
+        
+        // Clean up file objects
+        setSessionFileObjects(prev => {
+          const updated = { ...prev };
+          delete updated[sessionId];
+          return updated;
+        });
+      }
       
       // Log activity
       if (session) {
@@ -1729,25 +2280,33 @@ const AdminDashboard = () => {
     if (!editingSession || !selectedAllSessionItem) return;
 
     const updatedSession = { ...editingSession };
+    // Remove folderType before saving
     const folderType = updatedSession.folderType;
+    delete updatedSession.folderType;
+    
+    // Update savedAt timestamp
+    updatedSession.savedAt = new Date().toISOString();
 
     // Update in the appropriate array
     if (folderType === 'drafts') {
-      setDraftSessions(prev => 
-        prev.map(s => s.id === updatedSession.id ? updatedSession : s)
-      );
+      setDraftSessions(prev => {
+        const updated = prev.map(s => s.id === updatedSession.id ? updatedSession : s);
+        localStorage.setItem('draft_sessions', JSON.stringify(updated));
+        return updated;
+      });
     } else if (folderType === 'assessments') {
-      setSavedAssessments(prev => 
-        prev.map(a => a.id === updatedSession.id ? updatedSession : a)
-      );
+      setSavedAssessments(prev => {
+        const updated = prev.map(a => a.id === updatedSession.id ? updatedSession : a);
+        localStorage.setItem('saved_assessments', JSON.stringify(updated));
+        return updated;
+      });
     } else if (folderType === 'published') {
-      setPublishedSessions(prev => 
-        prev.map(s => s.id === updatedSession.id ? updatedSession : s)
-      );
+      setPublishedSessions(prev => prev.map(s => s.id === updatedSession.id ? normalizePublishedSession(updatedSession) : s));
     }
 
-    // Update the selected item
-    setSelectedAllSessionItem(updatedSession);
+    // Update the selected item with folderType restored
+    const sessionWithFolder = { ...updatedSession, folderType };
+    setSelectedAllSessionItem(sessionWithFolder);
     setEditingSession(null);
     setViewMode('preview');
     alert('Session updated successfully!');
@@ -1884,6 +2443,16 @@ const AdminDashboard = () => {
       const session = draftSessions.find(s => s.id === sessionId);
       setDraftSessions(prev => prev.filter(s => s.id !== sessionId));
       
+      // Also remove from savedSessions
+      setSavedSessions(prev => prev.filter(s => s.id !== sessionId));
+      
+      // Clean up file objects
+      setSessionFileObjects(prev => {
+        const updated = { ...prev };
+        delete updated[sessionId];
+        return updated;
+      });
+      
       // Log activity
       if (session) {
         addActivity(
@@ -1919,19 +2488,40 @@ const AdminDashboard = () => {
 
   const handleDeletePublishedSession = (sessionId) => {
     if (window.confirm('Are you sure you want to delete this published session? This action cannot be undone.')) {
-      const session = publishedSessions.find(s => s.id === sessionId);
-      setPublishedSessions(prev => prev.filter(s => s.id !== sessionId));
-      
-      // Log activity
-      if (session) {
+      // Use functional update to ensure we're working with the latest state
+      setPublishedSessions(prev => {
+        const session = prev.find(s => s.id === sessionId);
+        if (!session) {
+          alert('Session not found!');
+          return prev; // Return unchanged if session not found
+        }
+        
+        // Filter out the session with matching ID (strict comparison)
+        const updated = prev.filter(s => String(s.id) !== String(sessionId));
+        
+        // Log activity
         addActivity(
           `Published session deleted: ${session.title || 'Untitled'}`,
           'Admin',
           'deleted',
           'session_deleted'
         );
+        
+        return updated;
+      });
+      
+      // Close schedule dialog if the deleted session was selected
+      if (selectedSessionForScheduling?.id === sessionId) {
+        setShowScheduleDialog(false);
+        setSelectedSessionForScheduling(null);
+        setScheduleDate('');
+        setScheduleTime('');
+        setScheduleDueDate('');
+        setScheduleDueTime('');
+        setShowCalendar(false);
       }
       
+      // Show success message
       alert('Published session deleted successfully!');
     }
   };
@@ -1952,6 +2542,8 @@ const AdminDashboard = () => {
         window.open(url, '_blank');
         // Clean up the URL after a delay
         setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } else if (file.dataUrl) {
+        window.open(file.dataUrl, '_blank');
       } else if (typeof fileToOpen === 'string') {
         // If it's a URL string
         window.open(fileToOpen, '_blank');
@@ -1974,6 +2566,8 @@ const AdminDashboard = () => {
         url = file.url;
       } else if (fileToDownload instanceof File) {
         url = URL.createObjectURL(fileToDownload);
+      } else if (file.dataUrl) {
+        url = file.dataUrl;
       } else {
         alert('Unable to download file');
         return;
@@ -2035,16 +2629,70 @@ const AdminDashboard = () => {
       return;
     }
 
-    // Update session status to scheduled
+    const sessionToSchedule = selectedSession || selectedSessionForScheduling;
+
+    if (!sessionToSchedule) {
+      alert('No session selected. Please select a session first.');
+      return;
+    }
+
+    // Combine date and time for scheduledDateTime
+    const scheduledDateTime = new Date(`${scheduleData.date}T${scheduleData.startTime}`).toISOString();
+    const dueDateTime = new Date(`${scheduleData.date}T${scheduleData.endTime}`).toISOString();
+
+    // Ensure session has an ID
+    const sessionId = sessionToSchedule.id || Date.now();
+
+    // Update session status to scheduled and publish to employees
+    const updatedSession = normalizePublishedSession({
+      ...sessionToSchedule,
+      id: sessionId, // Ensure ID exists
+      status: 'published', // Change to published so employees can see it
+      dateTime: `${scheduleData.date}T${scheduleData.startTime}`,
+      createdAt: sessionToSchedule.createdAt || new Date().toISOString(),
+      publishedAt: sessionToSchedule.publishedAt || new Date().toISOString(),
+      scheduledDate: scheduleData.date,
+      scheduledTime: scheduleData.startTime,
+      scheduledDateTime: scheduledDateTime,
+      dueDate: scheduleData.date,
+      dueTime: scheduleData.endTime,
+      dueDateTime: dueDateTime,
+      // Preserve files, quiz, and other content
+      files: sessionToSchedule.files || sessionToSchedule.resumeState?.selectedFiles || [],
+      quiz: sessionToSchedule.quiz || null,
+      aiContent: sessionToSchedule.aiContent || null,
+      creationMode: sessionToSchedule.creationMode || null,
+      instructor: sessionToSchedule.instructor || 'HR Team',
+      duration: sessionToSchedule.duration || '60 minutes',
+      title: sessionToSchedule.title || scheduleData.title || 'Untitled Session',
+      description: sessionToSchedule.description || scheduleData.description || '',
+      type: sessionToSchedule.type || 'compliance',
+      audience: sessionToSchedule.audience || 'all'
+    });
+
+    // Update saved sessions
     setSavedSessions(prev => prev.map(session => 
-      session.id === selectedSession.id 
-        ? { ...session, status: 'scheduled', dateTime: `${scheduleData.date}T${scheduleData.startTime}`, createdAt: new Date().toISOString() }
-        : session
+      session.id === sessionId ? updatedSession : session
     ));
+
+    // Add/update in published sessions so employees can see it
+    // Use functional update to ensure state is properly updated
+    setPublishedSessions(prev => {
+      const filtered = prev.filter(s => s.id !== sessionId);
+      const updated = [updatedSession, ...filtered];
+      // Immediately save to localStorage to ensure it's available
+      if (safeSetLocalStorage('published_sessions', updated)) {
+        // Dispatch custom event to ensure employee dashboard picks it up
+        window.dispatchEvent(new Event('published-sessions-updated'));
+        console.log('Session scheduled and saved:', updatedSession.title, updatedSession.id);
+        console.log('Total published sessions:', updated.length);
+      }
+      return updated;
+    });
 
     // Log activity
     addActivity(
-      `Session scheduled: ${selectedSession.title}`,
+      `Session scheduled: ${sessionToSchedule.title || scheduleData.title || 'Untitled Session'}`,
       'Admin',
       'scheduled',
       'session_scheduled'
@@ -2052,18 +2700,50 @@ const AdminDashboard = () => {
 
     setShowScheduleDialog(false);
     setShowScheduleSuccess(true);
+    setSelectedSession(null);
+    setSelectedSessionForScheduling(null);
+    
+    // Force a small delay to ensure localStorage is written before showing success
+    setTimeout(() => {
+      console.log('Published sessions in localStorage:', localStorage.getItem('published_sessions'));
+    }, 100);
   };
 
   const renderDashboard = () => (
     <Box p={3}>
       {/* Header */}
-      <Box mb={4}>
-        <Typography variant="h4" fontWeight="bold" gutterBottom>
-          Dashboard Overview
-        </Typography>
-        <Typography variant="body1" color="text.secondary">
-          Comprehensive session management and employee oversight
-        </Typography>
+      <Box mb={4} display="flex" justifyContent="space-between" alignItems="flex-start">
+        <Box>
+          <Typography variant="h4" fontWeight="bold" gutterBottom>
+            Dashboard Overview
+          </Typography>
+          <Typography variant="body1" color="text.secondary">
+            Comprehensive session management and employee oversight
+          </Typography>
+        </Box>
+        <Button
+          variant="contained"
+          startIcon={<AddIcon />}
+          onClick={() => {
+            setActiveTab('manage-session');
+            setManageSessionTab('create');
+            handleManageSessionClick('create');
+          }}
+          sx={{
+            backgroundColor: '#153B1A',
+            color: 'white',
+            '&:hover': {
+              backgroundColor: '#0d2a12',
+            },
+            textTransform: 'none',
+            fontWeight: 600,
+            px: 3,
+            py: 1.5,
+            height: 'fit-content'
+          }}
+        >
+          Create New Session
+        </Button>
       </Box>
 
       {/* Key Metrics */}
@@ -2089,11 +2769,11 @@ const AdminDashboard = () => {
       <Grid container spacing={3}>
         {/* Session Status Overview */}
         <Grid item xs={12} md={4}>
-          <ActivityCard>
+          <ActivityCard sx={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: '400px' }}>
             <Typography variant="h6" fontWeight="bold" gutterBottom>
               Session Status Overview
             </Typography>
-            <Box display="flex" alignItems="center" justifyContent="space-between" mt={3}>
+            <Box display="flex" alignItems="flex-start" justifyContent="space-between" mt={3} flex={1} sx={{ overflowY: 'auto', maxHeight: '350px', pr: 1 }}>
               <Box flex={1}>
                 {sessionStatusData.map((item, index) => {
                   const getColor = () => {
@@ -2137,12 +2817,12 @@ const AdminDashboard = () => {
 
         {/* Recent Activity */}
         <Grid item xs={12} md={4}>
-          <ActivityCard>
+          <ActivityCard sx={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: '400px' }}>
             <Typography variant="h6" fontWeight="bold" gutterBottom>
               Recent Activity
             </Typography>
             {recentActivity.length === 0 ? (
-              <Box textAlign="center" py={4}>
+              <Box textAlign="center" py={4} sx={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                 <Typography variant="body2" color="text.secondary">
                   No recent activity
                 </Typography>
@@ -2151,36 +2831,115 @@ const AdminDashboard = () => {
                 </Typography>
               </Box>
             ) : (
-              <List>
-                {recentActivity.map((activity) => (
-                  <ListItem key={activity.id} sx={{ px: 0 }}>
-                    <ListItemIcon>
-                      {activity.icon}
-                    </ListItemIcon>
-                    <ListItemText
-                      primary={activity.action}
-                      secondary={`${activity.user} • ${activity.time}`}
-                    />
-                  </ListItem>
-                ))}
-              </List>
+              <Box sx={{ flex: 1, overflowY: 'auto', maxHeight: '350px' }}>
+                <List>
+                  {recentActivity.map((activity) => (
+                    <ListItem key={activity.id} sx={{ px: 0 }}>
+                      <ListItemIcon>
+                        {activity.icon}
+                      </ListItemIcon>
+                      <ListItemText
+                        primary={activity.action}
+                        secondary={`${activity.user} • ${activity.time}`}
+                      />
+                    </ListItem>
+                  ))}
+                </List>
+              </Box>
+            )}
+          </ActivityCard>
+        </Grid>
+
+        {/* Leader Board - Top Performers */}
+        <Grid item xs={12} md={4}>
+          <ActivityCard sx={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: '400px' }}>
+            <Box display="flex" alignItems="center" gap={1} mb={2}>
+              <AwardIcon sx={{ color: '#f59e0b', fontSize: 24 }} />
+              <Typography variant="h6" fontWeight="bold">
+                Leader Board
+              </Typography>
+            </Box>
+            <Typography variant="body2" color="text.secondary" gutterBottom sx={{ mb: 2 }}>
+              Top Performers
+            </Typography>
+            {topPerformers.length === 0 ? (
+              <Box textAlign="center" py={4} sx={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                <Typography variant="body2" color="text.secondary">
+                  No performance data available
+                </Typography>
+              </Box>
+            ) : (
+              <Box sx={{ flex: 1, overflowY: 'auto', maxHeight: '350px' }}>
+                <List sx={{ pt: 0 }}>
+                  {topPerformers.map((employee) => (
+                      <ListItem 
+                        key={employee.id} 
+                        sx={{ 
+                          px: 0, 
+                          py: 1.5,
+                          borderBottom: '1px solid rgba(0,0,0,0.05)',
+                          '&:last-child': { borderBottom: 'none' }
+                        }}
+                      >
+                        <Box 
+                          sx={{
+                            width: 32,
+                            height: 32,
+                            borderRadius: '50%',
+                            backgroundColor: `${employee.rankColor}20`,
+                            color: employee.rankColor,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontWeight: 'bold',
+                            fontSize: '0.875rem',
+                            mr: 2,
+                            flexShrink: 0
+                          }}
+                        >
+                          {employee.rank}
+                        </Box>
+                        <Box flex={1} minWidth={0}>
+                          <Typography variant="body2" fontWeight="medium" noWrap>
+                            {employee.name}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary" display="block">
+                            {employee.department}
+                          </Typography>
+                        </Box>
+                        <Box textAlign="right" ml={1}>
+                          <Typography 
+                            variant="body2" 
+                            fontWeight="bold" 
+                            sx={{ color: employee.rankColor }}
+                          >
+                            {employee.completionRate}%
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {employee.sessionsCompleted} sessions
+                          </Typography>
+                        </Box>
+                      </ListItem>
+                    ))}
+                </List>
+              </Box>
             )}
           </ActivityCard>
         </Grid>
       </Grid>
 
-      {/* Course Management Sections */}
+      {/* Session Management Sections */}
       <Box mt={4}>
         <Typography variant="h5" fontWeight="bold" gutterBottom>
-          Course Management
+          Session Management
         </Typography>
         <Grid container spacing={3}>
-          {/* Draft Courses */}
+          {/* Draft Sessions */}
           <Grid item xs={12} md={4}>
             <ActivityCard>
               <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
                 <Typography variant="h6" fontWeight="bold">
-                  Draft Courses
+                  Draft Sessions
                 </Typography>
                 <Chip 
                   label={draftCoursesList.length} 
@@ -2190,7 +2949,19 @@ const AdminDashboard = () => {
               </Box>
               <List>
                 {draftCoursesList.slice(0, 3).map((session) => (
-                  <ListItem key={session.id} sx={{ px: 0, py: 1 }}>
+                  <ListItem 
+                    key={session.id} 
+                    sx={{ 
+                      px: 0, 
+                      py: 1,
+                      cursor: 'pointer',
+                      '&:hover': {
+                        backgroundColor: '#f3f4f6',
+                        borderRadius: 1
+                      }
+                    }}
+                    onClick={() => handleResumeDraft(session)}
+                  >
                     <ListItemIcon>
                       <EditIcon sx={{ color: '#f59e0b' }} />
                     </ListItemIcon>
@@ -2202,7 +2973,7 @@ const AdminDashboard = () => {
                 ))}
                 {draftCoursesList.length === 0 && (
                   <Typography variant="body2" color="text.secondary" sx={{ pl: 4 }}>
-                    No draft courses
+                    No draft sessions
                   </Typography>
                 )}
               </List>
@@ -2220,12 +2991,12 @@ const AdminDashboard = () => {
             </ActivityCard>
           </Grid>
 
-          {/* Popular Courses */}
+          {/* Popular Sessions */}
           <Grid item xs={12} md={4}>
             <ActivityCard>
               <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
                 <Typography variant="h6" fontWeight="bold">
-                  Popular Courses
+                  Popular Sessions
                 </Typography>
                 <Chip 
                   label={popularCoursesList.length} 
@@ -2247,7 +3018,7 @@ const AdminDashboard = () => {
                 ))}
                 {popularCoursesList.length === 0 && (
                   <Typography variant="body2" color="text.secondary" sx={{ pl: 4 }}>
-                    No completed courses yet
+                    No completed sessions yet
                   </Typography>
                 )}
               </List>
@@ -2265,12 +3036,12 @@ const AdminDashboard = () => {
             </ActivityCard>
           </Grid>
 
-          {/* Newly Added Courses */}
+          {/* Newly Added Sessions */}
           <Grid item xs={12} md={4}>
             <ActivityCard>
               <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
                 <Typography variant="h6" fontWeight="bold">
-                  Newly Added Courses
+                  Newly Added Sessions
                 </Typography>
                 <Chip 
                   label={newlyAddedCoursesList.length} 
@@ -2292,7 +3063,7 @@ const AdminDashboard = () => {
                 ))}
                 {newlyAddedCoursesList.length === 0 && (
                   <Typography variant="body2" color="text.secondary" sx={{ pl: 4 }}>
-                    No courses added yet
+                    No sessions added yet
                   </Typography>
                 )}
               </List>
@@ -2305,7 +3076,7 @@ const AdminDashboard = () => {
                   setShowViewAllDialog(true);
                 }}
               >
-                View All Courses
+                View All Sessions
               </Button>
             </ActivityCard>
           </Grid>
@@ -2334,22 +3105,27 @@ const AdminDashboard = () => {
             {getFilteredSessions().length === 0 ? (
               <Box textAlign="center" py={6}>
                 <Typography variant="body1" color="text.secondary">
-                  No courses found
+          No sessions found
                 </Typography>
               </Box>
             ) : (
               <List>
                 {getFilteredSessions().map((session) => (
                   <ListItem 
-                    key={session.id} 
-                    sx={{ 
+                    key={session.id}
+                    sx={{
                       px: 0, 
                       py: 2,
                       borderBottom: '1px solid #e5e7eb',
+                      cursor: viewAllType === 'drafts' ? 'pointer' : 'default',
                       '&:hover': {
                         backgroundColor: '#f9fafb'
                       }
                     }}
+                    onClick={viewAllType === 'drafts' ? () => {
+                      setShowViewAllDialog(false);
+                      handleResumeDraft(session);
+                    } : undefined}
                   >
                     <ListItemIcon>
                       {viewAllType === 'drafts' ? (
@@ -2379,6 +3155,14 @@ const AdminDashboard = () => {
                               hour: '2-digit',
                               minute: '2-digit'
                             })}
+                            {session.savedAt && (
+                              <span> • Last saved: {new Date(session.savedAt).toLocaleDateString('en-US', { 
+                                month: 'short', 
+                                day: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              })}</span>
+                            )}
                           </Typography>
                           {session.description && (
                             <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
@@ -2391,10 +3175,29 @@ const AdminDashboard = () => {
                       }
                     />
                     <Box display="flex" gap={1}>
+                      {viewAllType === 'drafts' && (
+                        <IconButton
+                          size="small"
+                          color="primary"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShowViewAllDialog(false);
+                            handleResumeDraft(session);
+                          }}
+                          sx={{ 
+                            backgroundColor: '#f3f4f6',
+                            '&:hover': { backgroundColor: '#e5e7eb' }
+                          }}
+                          title="Edit/Resume Draft"
+                        >
+                          <EditIcon />
+                        </IconButton>
+                      )}
                       <Button
                         size="small"
                         variant="outlined"
-                        onClick={() => {
+                        onClick={(e) => {
+                          e.stopPropagation();
                           setShowViewAllDialog(false);
                           handleScheduleSession(session);
                         }}
@@ -2405,7 +3208,8 @@ const AdminDashboard = () => {
                       <IconButton
                         size="small"
                         color="error"
-                        onClick={() => {
+                        onClick={(e) => {
+                          e.stopPropagation();
                           if (window.confirm('Are you sure you want to delete this session?')) {
                             handleDeleteSession(session.id);
                           }
@@ -2437,6 +3241,81 @@ const AdminDashboard = () => {
       <Typography variant="body1" color="text.secondary">
         This section is under development
       </Typography>
+    </Box>
+  );
+
+  // Live Trainings Content Creator Page
+  const renderLiveTrainingsContentCreator = () => (
+    <Box p={3}>
+      <Box mb={4}>
+        <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+          <Button
+            startIcon={<ArrowBackIcon />}
+            onClick={() => setContentCreatorView('main')}
+          >
+            Back to Content Creator
+          </Button>
+          <Box display="flex" gap={2}>
+            <Button
+              variant="outlined"
+              onClick={handleSaveSession}
+              startIcon={<SaveIcon />}
+              sx={{
+                borderColor: '#10b981',
+                color: '#10b981',
+                '&:hover': {
+                  borderColor: '#059669',
+                  backgroundColor: '#d1fae5'
+                },
+                textTransform: 'none',
+                fontWeight: 600
+              }}
+            >
+              Save as Draft
+            </Button>
+            <Button
+              variant="outlined"
+              onClick={() => {
+                setShowContentCreator(false);
+                setActiveTab('manage-session');
+                setManageSessionTab('all-sessions');
+              }}
+              sx={{
+                borderColor: '#6b7280',
+                color: '#6b7280',
+                '&:hover': {
+                  borderColor: '#4b5563',
+                  backgroundColor: '#f3f4f6'
+                },
+                textTransform: 'none',
+                fontWeight: 600
+              }}
+            >
+              Skip
+            </Button>
+          </Box>
+        </Box>
+        <Box display="flex" justifyContent="space-between" alignItems="flex-start">
+          <Box>
+            <Typography variant="h4" fontWeight="bold" gutterBottom>
+              Live Trainings
+            </Typography>
+            <Typography variant="body1" color="text.secondary">
+              Schedule and manage live training sessions with real-time interaction
+            </Typography>
+          </Box>
+        </Box>
+      </Box>
+
+      <Grid container spacing={3} justifyContent="center">
+        <Grid item xs={12} md={8} lg={6}>
+          <Card sx={{ p: 3 }}>
+            <Typography variant="body1" color="text.secondary" textAlign="center" py={4}>
+              Live Trainings feature coming soon. This section will allow you to schedule and manage live training sessions.
+            </Typography>
+          </Card>
+        </Grid>
+      </Grid>
     </Box>
   );
 
@@ -2818,7 +3697,7 @@ const AdminDashboard = () => {
                     mb: 1
                   }}
                 >
-                  who gave the best and completed the course
+                  who gave the best and completed the session
                 </Typography>
               </Box>
               
@@ -2894,13 +3773,54 @@ const AdminDashboard = () => {
 
     return (
       <Box p={3} sx={{ minHeight: '100vh', backgroundColor: '#ffffff' }}>
-        <Box mb={4}>
-          <Typography variant="h4" fontWeight="bold" gutterBottom>
-            Certification
-          </Typography>
-          <Typography variant="body1" color="text.secondary">
-            Configure certification templates and settings for your training sessions
-          </Typography>
+        <Box mb={4} display="flex" justifyContent="space-between" alignItems="flex-start">
+          <Box>
+            <Typography variant="h4" fontWeight="bold" gutterBottom>
+              Certification
+            </Typography>
+            <Typography variant="body1" color="text.secondary">
+              Configure certification templates and settings for your training sessions
+            </Typography>
+          </Box>
+          <Box display="flex" gap={2}>
+            <Button
+              variant="outlined"
+              onClick={handleSaveSession}
+              startIcon={<SaveIcon />}
+              sx={{
+                borderColor: '#10b981',
+                color: '#10b981',
+                '&:hover': {
+                  borderColor: '#059669',
+                  backgroundColor: '#d1fae5'
+                },
+                textTransform: 'none',
+                fontWeight: 600
+              }}
+            >
+              Save as Draft
+            </Button>
+            <Button
+              variant="outlined"
+              onClick={() => {
+                setActiveTab('manage-session');
+                setManageSessionTab('all-sessions');
+                setManageSessionView('all-sessions');
+              }}
+              sx={{
+                borderColor: '#6b7280',
+                color: '#6b7280',
+                '&:hover': {
+                  borderColor: '#4b5563',
+                  backgroundColor: '#f3f4f6'
+                },
+                textTransform: 'none',
+                fontWeight: 600
+              }}
+            >
+              Skip
+            </Button>
+          </Box>
         </Box>
 
         {/* Sub-header Tabs */}
@@ -3082,7 +4002,7 @@ const AdminDashboard = () => {
                             mb: 2
                           }}
                         >
-                          who gave the best and completed the course
+                          who gave the best and completed the session
                         </Typography>
                       </Box>
                       
@@ -3157,7 +4077,7 @@ const AdminDashboard = () => {
         {certificationView === 'configure' && (
           <Card sx={{ p: 3 }}>
             <Box display="flex" alignItems="center" gap={2} mb={3}>
-              <EditIcon2 sx={{ fontSize: 32, color: '#10b981' }} />
+              <EditIcon sx={{ fontSize: 32, color: '#10b981' }} />
               <Typography variant="h5" fontWeight="bold">
                 Configure Fields
               </Typography>
@@ -3432,7 +4352,7 @@ const AdminDashboard = () => {
               </Box>
             ) : (
               <Box textAlign="center" py={8}>
-                <EditIcon2 sx={{ fontSize: 64, color: '#d1d5db', mb: 2 }} />
+                <EditIcon sx={{ fontSize: 64, color: '#d1d5db', mb: 2 }} />
                 <Typography variant="h6" color="text.secondary">
                   Configure Fields
                 </Typography>
@@ -3447,7 +4367,7 @@ const AdminDashboard = () => {
         {certificationView === 'permissions' && (
           <Card sx={{ p: 3 }}>
             <Box display="flex" alignItems="center" gap={2} mb={3}>
-              <LockIcon2 sx={{ fontSize: 32, color: '#f59e0b' }} />
+              <LockIcon sx={{ fontSize: 32, color: '#f59e0b' }} />
               <Typography variant="h5" fontWeight="bold">
                 Permissions
               </Typography>
@@ -3495,7 +4415,7 @@ const AdminDashboard = () => {
                           onChange={(e) => setPermissions(prev => ({ ...prev, autoGenerate: e.target.checked }))}
                         />
                       }
-                      label="Auto-generate certificates upon course completion"
+                      label="Auto-generate certificates upon session completion"
                       sx={{ mb: 2, display: 'block' }}
                     />
                     <FormControlLabel
@@ -3549,13 +4469,53 @@ const AdminDashboard = () => {
 
   const renderCreateSession = () => (
     <Box p={3}>
-      <Box mb={4}>
-        <Typography variant="h4" fontWeight="bold" gutterBottom>
-          Create New Session
-        </Typography>
-        <Typography variant="body1" color="text.secondary">
-          Generate comprehensive learning materials from keywords
-        </Typography>
+      <Box mb={4} display="flex" justifyContent="space-between" alignItems="flex-start">
+        <Box>
+          <Typography variant="h4" fontWeight="bold" gutterBottom>
+            Create New Session
+          </Typography>
+          <Typography variant="body1" color="text.secondary">
+            Generate comprehensive learning materials from keywords
+          </Typography>
+        </Box>
+        <Box display="flex" gap={2}>
+          <Button 
+            variant="outlined" 
+            startIcon={<SaveIcon />}
+            onClick={handleSaveSession}
+            sx={{ 
+              borderColor: '#10b981', 
+              color: '#10b981', 
+              '&:hover': { 
+                borderColor: '#059669', 
+                backgroundColor: '#d1fae5' 
+              },
+              textTransform: 'none',
+              fontWeight: 600
+            }}
+          >
+            Save as Draft
+          </Button>
+          <Button
+            variant="outlined"
+            onClick={() => {
+              setActiveTab('manage-session');
+              setManageSessionTab('all-sessions');
+            }}
+            sx={{
+              borderColor: '#6b7280',
+              color: '#6b7280',
+              '&:hover': {
+                borderColor: '#4b5563',
+                backgroundColor: '#f3f4f6'
+              },
+              textTransform: 'none',
+              fontWeight: 600
+            }}
+          >
+            Skip
+          </Button>
+        </Box>
       </Box>
 
       <Grid container spacing={3} justifyContent="center">
@@ -3615,14 +4575,6 @@ const AdminDashboard = () => {
               <Button 
                 variant="outlined" 
                 fullWidth
-                onClick={handleSaveSession}
-                sx={{ borderColor: '#10b981', color: '#10b981', '&:hover': { borderColor: '#059669', backgroundColor: '#d1fae5' } }}
-              >
-                Save as Draft
-              </Button>
-              <Button 
-                variant="outlined" 
-                fullWidth
                 onClick={() => setActiveTab('dashboard')}
                 sx={{ borderColor: '#ef4444', color: '#ef4444', '&:hover': { borderColor: '#dc2626', backgroundColor: '#fef2f2' } }}
               >
@@ -3660,31 +4612,56 @@ const AdminDashboard = () => {
           >
             Back
           </Button>
-          <Button
-            variant="outlined"
-            startIcon={<FolderIcon />}
-            onClick={() => {
-              setShowContentCreator(false);
-              setShowSavedSessionsFolder(true);
-            }}
-            sx={{
-              borderColor: '#f59e0b',
-              color: '#f59e0b',
-              '&:hover': {
-                borderColor: '#d97706',
-                backgroundColor: '#fef3c7'
-              }
-            }}
-          >
-            View Saved Sessions
-          </Button>
+          <Box display="flex" gap={2}>
+            <Button
+              variant="outlined"
+              onClick={handleSaveSession}
+              startIcon={<SaveIcon />}
+              sx={{
+                borderColor: '#10b981',
+                color: '#10b981',
+                '&:hover': {
+                  borderColor: '#059669',
+                  backgroundColor: '#d1fae5'
+                },
+                textTransform: 'none',
+                fontWeight: 600
+              }}
+            >
+              Save as Draft
+            </Button>
+            <Button
+              variant="outlined"
+              onClick={() => {
+                setShowContentCreator(false);
+                setActiveTab('manage-session');
+                setManageSessionTab('all-sessions');
+              }}
+              sx={{
+                borderColor: '#6b7280',
+                color: '#6b7280',
+                '&:hover': {
+                  borderColor: '#4b5563',
+                  backgroundColor: '#f3f4f6'
+                },
+                textTransform: 'none',
+                fontWeight: 600
+              }}
+            >
+              Skip
+            </Button>
+          </Box>
         </Box>
-        <Typography variant="h4" fontWeight="bold" gutterBottom>
-          Content Creator
-        </Typography>
-        <Typography variant="body1" color="text.secondary">
-          Generate comprehensive learning materials from keywords
-        </Typography>
+        <Box display="flex" justifyContent="space-between" alignItems="flex-start">
+          <Box>
+            <Typography variant="h4" fontWeight="bold" gutterBottom>
+              Content Creator
+            </Typography>
+            <Typography variant="body1" color="text.secondary">
+              Generate comprehensive learning materials from keywords
+            </Typography>
+          </Box>
+        </Box>
       </Box>
 
       <Grid container spacing={3}>
@@ -3768,7 +4745,88 @@ const AdminDashboard = () => {
             </Typography>
           </Card>
         </Grid>
+
+        {/* Live Trainings Option */}
+        <Grid item xs={12} md={4}>
+          <Card 
+            sx={{ 
+              p: 4, 
+              textAlign: 'center', 
+              cursor: 'pointer', 
+              height: '100%',
+              transition: 'all 0.3s',
+              '&:hover': { 
+                backgroundColor: '#f8fafc',
+                transform: 'translateY(-4px)',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.12)'
+              } 
+            }}
+            onClick={() => setContentCreatorView('live-trainings')}
+          >
+            <EventIcon sx={{ fontSize: 64, color: '#ef4444', mb: 2 }} />
+            <Typography variant="h5" fontWeight="bold" gutterBottom>
+              Live Trainings
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Schedule and manage live training sessions with real-time interaction
+            </Typography>
+          </Card>
+        </Grid>
       </Grid>
+
+      {/* Uploaded Files Display */}
+      {selectedFiles.length > 0 && (
+        <Box mt={4}>
+          <Card sx={{ p: 3 }}>
+            <Typography variant="h6" fontWeight="bold" gutterBottom>
+              Uploaded Files ({selectedFiles.length})
+            </Typography>
+            {selectedFiles.map((file, index) => (
+              <Box key={index} display="flex" justifyContent="space-between" alignItems="center" mb={2} p={2} sx={{ backgroundColor: '#f8fafc', borderRadius: 1 }}>
+                <Box>
+                  <Typography variant="body1" fontWeight="medium">
+                    {file.name}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {formatFileSize(file.size)}
+                  </Typography>
+                </Box>
+                <Chip label="Uploaded" color="success" size="small" />
+              </Box>
+            ))}
+
+            {/* Cancel and Proceed Buttons */}
+            <Box display="flex" gap={2} mt={3}>
+              <Button
+                variant="outlined"
+                fullWidth
+                size="large"
+                onClick={handleContentCreatorCancel}
+                sx={{
+                  borderColor: '#ef4444',
+                  color: '#ef4444',
+                  '&:hover': { borderColor: '#dc2626', backgroundColor: '#fef2f2' }
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="contained"
+                fullWidth
+                size="large"
+                onClick={handleProceedFromMainToQuiz}
+                startIcon={<QuizIcon />}
+                sx={{
+                  backgroundColor: '#153B1A',
+                  '&:hover': { backgroundColor: '#0d2a12' }
+                }}
+              >
+                Proceed
+              </Button>
+            </Box>
+          </Card>
+        </Box>
+      )}
     </Box>
   );
 
@@ -3776,19 +4834,63 @@ const AdminDashboard = () => {
   const renderAIContentCreator = () => (
     <Box p={3}>
       <Box mb={4}>
-        <Button
-          startIcon={<ArrowBackIcon />}
-          onClick={() => setContentCreatorView('main')}
-          sx={{ mb: 2 }}
-        >
-          Back to Content Creator
-        </Button>
-        <Typography variant="h4" fontWeight="bold" gutterBottom>
-          AI Content Creator
-        </Typography>
-        <Typography variant="body1" color="text.secondary">
-          Generate comprehensive learning materials from keywords
-        </Typography>
+        <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+          <Button
+            startIcon={<ArrowBackIcon />}
+            onClick={() => setContentCreatorView('main')}
+          >
+            Back to Content Creator
+          </Button>
+          <Box display="flex" gap={2}>
+            <Button
+              variant="outlined"
+              onClick={handleSaveSession}
+              startIcon={<SaveIcon />}
+              sx={{
+                borderColor: '#10b981',
+                color: '#10b981',
+                '&:hover': {
+                  borderColor: '#059669',
+                  backgroundColor: '#d1fae5'
+                },
+                textTransform: 'none',
+                fontWeight: 600
+              }}
+            >
+              Save as Draft
+            </Button>
+            <Button
+              variant="outlined"
+              onClick={() => {
+                setShowContentCreator(false);
+                setActiveTab('manage-session');
+                setManageSessionTab('all-sessions');
+              }}
+              sx={{
+                borderColor: '#6b7280',
+                color: '#6b7280',
+                '&:hover': {
+                  borderColor: '#4b5563',
+                  backgroundColor: '#f3f4f6'
+                },
+                textTransform: 'none',
+                fontWeight: 600
+              }}
+            >
+              Skip
+            </Button>
+          </Box>
+        </Box>
+        <Box display="flex" justifyContent="space-between" alignItems="flex-start">
+          <Box>
+            <Typography variant="h4" fontWeight="bold" gutterBottom>
+              AI Content Creator
+            </Typography>
+            <Typography variant="body1" color="text.secondary">
+              Generate comprehensive learning materials from keywords
+            </Typography>
+          </Box>
+        </Box>
       </Box>
 
       <Grid container spacing={3} justifyContent="center">
@@ -3863,19 +4965,63 @@ const AdminDashboard = () => {
   const renderContentCreationModes = () => (
     <Box p={3}>
       <Box mb={4}>
-        <Button
-          startIcon={<ArrowBackIcon />}
-          onClick={() => setContentCreatorView('main')}
-          sx={{ mb: 2 }}
-        >
-          Back to Content Creator
-        </Button>
-        <Typography variant="h4" fontWeight="bold" gutterBottom>
-          Content Creation Modes
-        </Typography>
-        <Typography variant="body1" color="text.secondary">
-          Choose a tool to create your content
-        </Typography>
+        <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+          <Button
+            startIcon={<ArrowBackIcon />}
+            onClick={() => setContentCreatorView('main')}
+          >
+            Back to Content Creator
+          </Button>
+          <Box display="flex" gap={2}>
+            <Button
+              variant="outlined"
+              onClick={handleSaveSession}
+              startIcon={<SaveIcon />}
+              sx={{
+                borderColor: '#10b981',
+                color: '#10b981',
+                '&:hover': {
+                  borderColor: '#059669',
+                  backgroundColor: '#d1fae5'
+                },
+                textTransform: 'none',
+                fontWeight: 600
+              }}
+            >
+              Save as Draft
+            </Button>
+            <Button
+              variant="outlined"
+              onClick={() => {
+                setShowContentCreator(false);
+                setActiveTab('manage-session');
+                setManageSessionTab('all-sessions');
+              }}
+              sx={{
+                borderColor: '#6b7280',
+                color: '#6b7280',
+                '&:hover': {
+                  borderColor: '#4b5563',
+                  backgroundColor: '#f3f4f6'
+                },
+                textTransform: 'none',
+                fontWeight: 600
+              }}
+            >
+              Skip
+            </Button>
+          </Box>
+        </Box>
+        <Box display="flex" justifyContent="space-between" alignItems="flex-start">
+          <Box>
+            <Typography variant="h4" fontWeight="bold" gutterBottom>
+              Content Creation Modes
+            </Typography>
+            <Typography variant="body1" color="text.secondary">
+              Choose a tool to create your content
+            </Typography>
+          </Box>
+        </Box>
       </Box>
 
       <Grid container spacing={3}>
@@ -4011,19 +5157,63 @@ const AdminDashboard = () => {
   const renderUploadFile = () => (
     <Box p={3}>
       <Box mb={4}>
-        <Button
-          startIcon={<ArrowBackIcon />}
-          onClick={() => setContentCreatorView('main')}
-          sx={{ mb: 2 }}
-        >
-          Back to Content Creator
-        </Button>
-        <Typography variant="h4" fontWeight="bold" gutterBottom>
-          Upload File
-        </Typography>
-        <Typography variant="body1" color="text.secondary">
-          Upload your existing files to attach to the session
-        </Typography>
+        <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+          <Button
+            startIcon={<ArrowBackIcon />}
+            onClick={() => setContentCreatorView('main')}
+          >
+            Back to Content Creator
+          </Button>
+          <Box display="flex" gap={2}>
+            <Button
+              variant="outlined"
+              onClick={handleSaveSession}
+              startIcon={<SaveIcon />}
+              sx={{
+                borderColor: '#10b981',
+                color: '#10b981',
+                '&:hover': {
+                  borderColor: '#059669',
+                  backgroundColor: '#d1fae5'
+                },
+                textTransform: 'none',
+                fontWeight: 600
+              }}
+            >
+              Save as Draft
+            </Button>
+            <Button
+              variant="outlined"
+              onClick={() => {
+                setShowContentCreator(false);
+                setActiveTab('manage-session');
+                setManageSessionTab('all-sessions');
+              }}
+              sx={{
+                borderColor: '#6b7280',
+                color: '#6b7280',
+                '&:hover': {
+                  borderColor: '#4b5563',
+                  backgroundColor: '#f3f4f6'
+                },
+                textTransform: 'none',
+                fontWeight: 600
+              }}
+            >
+              Skip
+            </Button>
+          </Box>
+        </Box>
+        <Box display="flex" justifyContent="space-between" alignItems="flex-start">
+          <Box>
+            <Typography variant="h4" fontWeight="bold" gutterBottom>
+              Upload File
+            </Typography>
+            <Typography variant="body1" color="text.secondary">
+              Upload your existing files to attach to the session
+            </Typography>
+          </Box>
+        </Box>
       </Box>
 
       <Grid container spacing={3} justifyContent="center">
@@ -4119,7 +5309,7 @@ const AdminDashboard = () => {
                   '&:disabled': { backgroundColor: '#d1d5db', color: '#9ca3af' }
                 }}
               >
-                Proceed
+                Confirm
               </Button>
             </Box>
           </Card>
@@ -4137,6 +5327,8 @@ const AdminDashboard = () => {
         return renderContentCreationModes();
       case 'upload-file':
         return renderUploadFile();
+      case 'live-trainings':
+        return renderLiveTrainingsContentCreator();
       default:
         return renderContentCreatorMain();
     }
@@ -4239,8 +5431,8 @@ const AdminDashboard = () => {
                 onClick={handleProceedToQuiz}
                 startIcon={<QuizIcon />}
                 sx={{
-                  backgroundColor: '#3b82f6',
-                  '&:hover': { backgroundColor: '#2563eb' }
+                  backgroundColor: '#153B1A',
+                  '&:hover': { backgroundColor: '#0d2a12' }
                 }}
               >
                 Create Questionnaire (Checkpoint Assessment)
@@ -4257,8 +5449,10 @@ const AdminDashboard = () => {
       // Direct scheduling flow
       setSelectedSessionForScheduling(session);
       setShowScheduleDialog(true);
-      setScheduleDate('');
-      setScheduleTime('');
+      setScheduleDate(session.scheduledDate || '');
+      setScheduleTime(session.scheduledTime || '');
+      setScheduleDueDate(session.dueDate || '');
+      setScheduleDueTime(session.dueTime || '');
       setShowCalendar(true);
     } else {
       // Open session selection view
@@ -4266,6 +5460,8 @@ const AdminDashboard = () => {
       setSelectedSessionForScheduling(null);
       setScheduleDate('');
       setScheduleTime('');
+      setScheduleDueDate('');
+      setScheduleDueTime('');
       setShowCalendar(false);
     }
   };
@@ -4284,7 +5480,18 @@ const AdminDashboard = () => {
       return;
     }
 
+    if (!scheduleDueDate || !scheduleDueTime) {
+      alert('Please select a due date and time');
+      return;
+    }
+
     const scheduledDateTime = new Date(`${scheduleDate}T${scheduleTime}`);
+    const dueDateTime = new Date(`${scheduleDueDate}T${scheduleDueTime}`);
+
+    if (dueDateTime <= scheduledDateTime) {
+      alert('Due date must be after the session start time.');
+      return;
+    }
     
     // Update published session with scheduled date/time
     const updatedSession = {
@@ -4292,14 +5499,16 @@ const AdminDashboard = () => {
       scheduledDate: scheduleDate,
       scheduledTime: scheduleTime,
       scheduledDateTime: scheduledDateTime.toISOString(),
-      status: 'scheduled'
+      dueDate: scheduleDueDate,
+      dueTime: scheduleDueTime,
+      dueDateTime: dueDateTime.toISOString(),
+      status: 'scheduled',
+      isLocked: false,
+      approvalExpiresAt: null,
+      lastApprovalDate: null
     };
 
-    setPublishedSessions(prev => {
-      const updated = prev.map(s => s.id === updatedSession.id ? updatedSession : s);
-      localStorage.setItem('published_sessions', JSON.stringify(updated));
-      return updated;
-    });
+    setPublishedSessions(prev => prev.map(s => s.id === updatedSession.id ? normalizePublishedSession(updatedSession) : s));
 
     // Simulate Google Calendar integration - block calendar for all employees
     const employeeEmails = employees.map(emp => emp.email || `${emp.employeeId}@company.com`);
@@ -4323,7 +5532,12 @@ const AdminDashboard = () => {
     setSelectedSessionForScheduling(null);
     setScheduleDate('');
     setScheduleTime('');
+    setScheduleDueDate('');
+    setScheduleDueTime('');
     setShowCalendar(false);
+    
+    // Navigate back to dashboard
+    setActiveTab('dashboard');
     
     alert(`Session scheduled successfully! Calendar invites sent to ${employeeEmails.length} employees.`);
   };
@@ -4368,11 +5582,11 @@ const AdminDashboard = () => {
                 <IconButton
                   onClick={() => setScheduleSessionsViewMode('grid')}
                   sx={{
-                    backgroundColor: scheduleSessionsViewMode === 'grid' ? '#3b82f6' : 'transparent',
+                    backgroundColor: scheduleSessionsViewMode === 'grid' ? '#153B1A' : 'transparent',
                     color: scheduleSessionsViewMode === 'grid' ? 'white' : '#666',
                     border: '1px solid #e5e7eb',
                     '&:hover': {
-                      backgroundColor: scheduleSessionsViewMode === 'grid' ? '#2563eb' : '#f3f4f6'
+                      backgroundColor: scheduleSessionsViewMode === 'grid' ? '#0d2a12' : '#f0fdf4'
                     }
                   }}
                 >
@@ -4381,11 +5595,11 @@ const AdminDashboard = () => {
                 <IconButton
                   onClick={() => setScheduleSessionsViewMode('list')}
                   sx={{
-                    backgroundColor: scheduleSessionsViewMode === 'list' ? '#3b82f6' : 'transparent',
+                    backgroundColor: scheduleSessionsViewMode === 'list' ? '#153B1A' : 'transparent',
                     color: scheduleSessionsViewMode === 'list' ? 'white' : '#666',
                     border: '1px solid #e5e7eb',
                     '&:hover': {
-                      backgroundColor: scheduleSessionsViewMode === 'list' ? '#2563eb' : '#f3f4f6'
+                      backgroundColor: scheduleSessionsViewMode === 'list' ? '#0d2a12' : '#f0fdf4'
                     }
                   }}
                 >
@@ -4459,7 +5673,7 @@ const AdminDashboard = () => {
                                       label="Published"
                                       size="small"
                                       sx={{
-                                        backgroundColor: '#3b82f6',
+                                        backgroundColor: '#153B1A',
                                         color: 'white',
                                         fontWeight: 'medium',
                                         fontSize: '0.7rem'
@@ -4480,20 +5694,33 @@ const AdminDashboard = () => {
                                 )}
                               </Box>
 
-                              {/* Action Button */}
-                              <Button
-                                variant="contained"
-                                startIcon={<CalendarIcon />}
-                                onClick={() => handleOpenScheduleDialog(session)}
-                                sx={{
-                                  backgroundColor: isScheduled ? '#10b981' : '#3b82f6',
-                                  '&:hover': { 
-                                    backgroundColor: isScheduled ? '#059669' : '#2563eb' 
-                                  }
-                                }}
-                              >
-                                {isScheduled ? 'Reschedule' : 'Schedule Session'}
-                              </Button>
+                              {/* Action Buttons */}
+                              <Box display="flex" gap={1} alignItems="center">
+                                <Button
+                                  variant="contained"
+                                  startIcon={<CalendarIcon />}
+                                  onClick={() => handleOpenScheduleDialog(session)}
+                                  sx={{
+                                    backgroundColor: isScheduled ? '#10b981' : '#153B1A',
+                                    '&:hover': { 
+                                      backgroundColor: isScheduled ? '#059669' : '#0d2a12' 
+                                    }
+                                  }}
+                                >
+                                  {isScheduled ? 'Reschedule' : 'Schedule Session'}
+                                </Button>
+                                <IconButton
+                                  onClick={() => handleDeletePublishedSession(session.id)}
+                                  sx={{
+                                    color: '#ef4444',
+                                    '&:hover': { 
+                                      backgroundColor: '#fee2e2' 
+                                    }
+                                  }}
+                                >
+                                  <DeleteForeverIcon />
+                                </IconButton>
+                              </Box>
                             </Box>
                           </Card>
                         );
@@ -4564,21 +5791,36 @@ const AdminDashboard = () => {
                                   </Box>
                                 )}
                               </Box>
-                              <Button
-                                variant="contained"
-                                fullWidth
-                                startIcon={<CalendarIcon />}
-                                onClick={() => handleOpenScheduleDialog(session)}
-                                sx={{
-                                  backgroundColor: isScheduled ? '#10b981' : '#3b82f6',
-                                  '&:hover': { 
-                                    backgroundColor: isScheduled ? '#059669' : '#2563eb' 
-                                  },
-                                  mt: 1
-                                }}
-                              >
-                                {isScheduled ? 'Reschedule' : 'Schedule Session'}
-                              </Button>
+                              <Box display="flex" gap={1} mt={1}>
+                                <Button
+                                  variant="contained"
+                                  fullWidth
+                                  startIcon={<CalendarIcon />}
+                                  onClick={() => handleOpenScheduleDialog(session)}
+                                  sx={{
+                                    backgroundColor: isScheduled ? '#10b981' : '#153B1A',
+                                    '&:hover': { 
+                                      backgroundColor: isScheduled ? '#059669' : '#0d2a12' 
+                                    },
+                                    flex: 1
+                                  }}
+                                >
+                                  {isScheduled ? 'Reschedule' : 'Schedule Session'}
+                                </Button>
+                                <IconButton
+                                  onClick={() => handleDeletePublishedSession(session.id)}
+                                  sx={{
+                                    color: '#ef4444',
+                                    border: '1px solid #fee2e2',
+                                    '&:hover': { 
+                                      backgroundColor: '#fee2e2',
+                                      borderColor: '#ef4444'
+                                    }
+                                  }}
+                                >
+                                  <DeleteForeverIcon />
+                                </IconButton>
+                              </Box>
                             </Card>
                           </Grid>
                         );
@@ -4646,11 +5888,11 @@ const AdminDashboard = () => {
                 <IconButton
                   onClick={() => setScheduleSessionsViewMode('grid')}
                   sx={{
-                    backgroundColor: scheduleSessionsViewMode === 'grid' ? '#3b82f6' : 'transparent',
+                    backgroundColor: scheduleSessionsViewMode === 'grid' ? '#153B1A' : 'transparent',
                     color: scheduleSessionsViewMode === 'grid' ? 'white' : '#666',
                     border: '1px solid #e5e7eb',
                     '&:hover': {
-                      backgroundColor: scheduleSessionsViewMode === 'grid' ? '#2563eb' : '#f3f4f6'
+                      backgroundColor: scheduleSessionsViewMode === 'grid' ? '#0d2a12' : '#f0fdf4'
                     }
                   }}
                 >
@@ -4659,11 +5901,11 @@ const AdminDashboard = () => {
                 <IconButton
                   onClick={() => setScheduleSessionsViewMode('list')}
                   sx={{
-                    backgroundColor: scheduleSessionsViewMode === 'list' ? '#3b82f6' : 'transparent',
+                    backgroundColor: scheduleSessionsViewMode === 'list' ? '#153B1A' : 'transparent',
                     color: scheduleSessionsViewMode === 'list' ? 'white' : '#666',
                     border: '1px solid #e5e7eb',
                     '&:hover': {
-                      backgroundColor: scheduleSessionsViewMode === 'list' ? '#2563eb' : '#f3f4f6'
+                      backgroundColor: scheduleSessionsViewMode === 'list' ? '#0d2a12' : '#f0fdf4'
                     }
                   }}
                 >
@@ -4719,20 +5961,33 @@ const AdminDashboard = () => {
                         {session.description || 'No description'}
                       </Typography>
                     </Box>
-                    <Button
-                      variant="contained"
-                      startIcon={<CalendarIcon />}
-                      onClick={() => {
-                        setSelectedSessionForScheduling(session);
-                        setShowCalendar(true);
-                      }}
-                      sx={{
-                        backgroundColor: '#3b82f6',
-                        '&:hover': { backgroundColor: '#2563eb' }
-                      }}
-                    >
-                      Schedule Session
-                    </Button>
+                    <Box display="flex" gap={1} alignItems="center">
+                      <Button
+                        variant="contained"
+                        startIcon={<CalendarIcon />}
+                        onClick={() => {
+                          setSelectedSessionForScheduling(session);
+                          setShowCalendar(true);
+                        }}
+                        sx={{
+                          backgroundColor: '#3b82f6',
+                          '&:hover': { backgroundColor: '#2563eb' }
+                        }}
+                      >
+                        Schedule Session
+                      </Button>
+                      <IconButton
+                        onClick={() => handleDeletePublishedSession(session.id)}
+                        sx={{
+                          color: '#ef4444',
+                          '&:hover': { 
+                            backgroundColor: '#fee2e2' 
+                          }
+                        }}
+                      >
+                        <DeleteForeverIcon />
+                      </IconButton>
+                    </Box>
                   </Box>
                 </Card>
               ))}
@@ -4776,22 +6031,37 @@ const AdminDashboard = () => {
                         {session.description || 'No description'}
                       </Typography>
                     </Box>
-                    <Button
-                      variant="contained"
-                      fullWidth
-                      startIcon={<CalendarIcon />}
-                      onClick={() => {
-                        setSelectedSessionForScheduling(session);
-                        setShowCalendar(true);
-                      }}
-                      sx={{
-                        backgroundColor: '#3b82f6',
-                        '&:hover': { backgroundColor: '#2563eb' },
-                        mt: 1
-                      }}
-                    >
-                      Schedule Session
-                    </Button>
+                    <Box display="flex" gap={1} mt={1}>
+                      <Button
+                        variant="contained"
+                        fullWidth
+                        startIcon={<CalendarIcon />}
+                        onClick={() => {
+                          setSelectedSessionForScheduling(session);
+                          setShowCalendar(true);
+                        }}
+                        sx={{
+                          backgroundColor: '#3b82f6',
+                          '&:hover': { backgroundColor: '#2563eb' },
+                          flex: 1
+                        }}
+                      >
+                        Schedule Session
+                      </Button>
+                      <IconButton
+                        onClick={() => handleDeletePublishedSession(session.id)}
+                        sx={{
+                          color: '#ef4444',
+                          border: '1px solid #fee2e2',
+                          '&:hover': { 
+                            backgroundColor: '#fee2e2',
+                            borderColor: '#ef4444'
+                          }
+                        }}
+                      >
+                        <DeleteForeverIcon />
+                      </IconButton>
+                    </Box>
                   </Card>
                 </Grid>
               ))}
@@ -4820,6 +6090,8 @@ const AdminDashboard = () => {
             setSelectedSessionForScheduling(null);
             setScheduleDate('');
             setScheduleTime('');
+            setScheduleDueDate('');
+            setScheduleDueTime('');
             setShowCalendar(false);
           }}>
             <CloseIcon />
@@ -4868,6 +6140,44 @@ const AdminDashboard = () => {
                   }}
                 />
               </Grid>
+
+              <Grid item xs={12}>
+                <TextField
+                  fullWidth
+                  label="Due Date"
+                  type="date"
+                  value={scheduleDueDate}
+                  onChange={(e) => setScheduleDueDate(e.target.value)}
+                  InputLabelProps={{ shrink: true }}
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <TodayIcon />
+                      </InputAdornment>
+                    ),
+                  }}
+                  helperText="Employees must complete the session before this date."
+                />
+              </Grid>
+
+              <Grid item xs={12}>
+                <TextField
+                  fullWidth
+                  label="Due Time"
+                  type="time"
+                  value={scheduleDueTime}
+                  onChange={(e) => setScheduleDueTime(e.target.value)}
+                  InputLabelProps={{ shrink: true }}
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <AccessTimeIcon />
+                      </InputAdornment>
+                    ),
+                  }}
+                  helperText="After this time the session will lock automatically."
+                />
+              </Grid>
             </Grid>
 
             {scheduleDate && scheduleTime && (
@@ -4878,6 +6188,96 @@ const AdminDashboard = () => {
                 <Typography variant="h6" color="#3b82f6">
                   {new Date(`${scheduleDate}T${scheduleTime}`).toLocaleString()}
                 </Typography>
+                {scheduleDueDate && scheduleDueTime && (
+                  <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                    Due by&nbsp;
+                    <strong>{new Date(`${scheduleDueDate}T${scheduleDueTime}`).toLocaleString()}</strong>
+                  </Typography>
+                )}
+              </Box>
+            )}
+
+            {/* Session Content Display */}
+            {(selectedSessionForScheduling.files?.length > 0 || selectedSessionForScheduling.quiz || selectedSessionForScheduling.questions) && (
+              <Box mt={4}>
+                <Typography variant="h6" fontWeight="bold" mb={2}>
+                  Session Content
+                </Typography>
+                <Card sx={{ p: 2, backgroundColor: '#f8f9fa' }}>
+                  {/* Uploaded Files */}
+                  {selectedSessionForScheduling.files && selectedSessionForScheduling.files.length > 0 && (
+                    <Box mb={3}>
+                      <Typography variant="body1" fontWeight="medium" mb={1.5} display="flex" alignItems="center" gap={1}>
+                        <CloudUploadIcon sx={{ fontSize: 20 }} />
+                        Uploaded Files ({selectedSessionForScheduling.files.length})
+                      </Typography>
+                      <List dense>
+                        {selectedSessionForScheduling.files.map((file, index) => {
+                          const isVideo = file.type?.startsWith('video/');
+                          const isImage = file.type?.startsWith('image/');
+                          const isPDF = file.type === 'application/pdf' || file.name?.toLowerCase().endsWith('.pdf');
+                          const isPresentation = file.type?.includes('presentation') || file.type?.includes('powerpoint') || 
+                                                file.name?.toLowerCase().match(/\.(ppt|pptx)$/);
+                          const isWord = file.type?.includes('word') || file.name?.toLowerCase().match(/\.(doc|docx)$/);
+                          
+                          let FileIconComponent = FileIcon;
+                          if (isVideo) FileIconComponent = VideoLibraryIcon;
+                          else if (isImage) FileIconComponent = ImageIcon;
+                          else if (isPDF || isPresentation) FileIconComponent = DescriptionIcon;
+                          else if (isWord) FileIconComponent = ArticleIcon;
+                          
+                          return (
+                            <ListItem key={index} sx={{ px: 0, py: 0.5 }}>
+                              <ListItemIcon>
+                                <FileIconComponent sx={{ color: '#3b82f6' }} />
+                              </ListItemIcon>
+                              <ListItemText
+                                primary={file.name}
+                                secondary={file.size ? formatFileSize(file.size) : 'Unknown size'}
+                              />
+                            </ListItem>
+                          );
+                        })}
+                      </List>
+                    </Box>
+                  )}
+
+                  {/* Quiz/Assessment */}
+                  {(selectedSessionForScheduling.quiz || selectedSessionForScheduling.questions) && (
+                    <Box mb={selectedSessionForScheduling.files?.length > 0 ? 2 : 0}>
+                      <Typography variant="body1" fontWeight="medium" mb={1.5} display="flex" alignItems="center" gap={1}>
+                        <QuizIcon sx={{ fontSize: 20 }} />
+                        Assessment/Quiz
+                      </Typography>
+                      <Box sx={{ pl: 4 }}>
+                        {selectedSessionForScheduling.quiz?.title && (
+                          <Typography variant="body2" gutterBottom>
+                            <strong>Title:</strong> {selectedSessionForScheduling.quiz.title}
+                          </Typography>
+                        )}
+                        {selectedSessionForScheduling.quiz?.description && (
+                          <Typography variant="body2" gutterBottom>
+                            <strong>Description:</strong> {selectedSessionForScheduling.quiz.description}
+                          </Typography>
+                        )}
+                        {((selectedSessionForScheduling.quiz?.questions || selectedSessionForScheduling.questions)?.length > 0) && (
+                          <Typography variant="body2" color="text.secondary">
+                            <strong>Questions:</strong> {(selectedSessionForScheduling.quiz?.questions || selectedSessionForScheduling.questions)?.length || 0}
+                          </Typography>
+                        )}
+                      </Box>
+                    </Box>
+                  )}
+
+                  {/* Additional Content Info */}
+                  {selectedSessionForScheduling.creationMode && (
+                    <Box mb={2}>
+                      <Typography variant="body2" color="text.secondary">
+                        <strong>Creation Mode:</strong> {selectedSessionForScheduling.creationMode}
+                      </Typography>
+                    </Box>
+                  )}
+                </Card>
               </Box>
             )}
 
@@ -4889,6 +6289,8 @@ const AdminDashboard = () => {
                   setSelectedSessionForScheduling(null);
                   setScheduleDate('');
                   setScheduleTime('');
+                  setScheduleDueDate('');
+                  setScheduleDueTime('');
                   setShowCalendar(false);
                 }}
               >
@@ -4897,10 +6299,10 @@ const AdminDashboard = () => {
               <Button
                 variant="contained"
                 onClick={handleConfirmSchedule}
-                disabled={!scheduleDate || !scheduleTime}
+                disabled={!scheduleDate || !scheduleTime || !scheduleDueDate || !scheduleDueTime}
                 sx={{
-                  backgroundColor: '#3b82f6',
-                  '&:hover': { backgroundColor: '#2563eb' }
+                  backgroundColor: '#153B1A',
+                  '&:hover': { backgroundColor: '#0d2a12' }
                 }}
               >
                 Confirm Date & Time
@@ -4931,8 +6333,128 @@ const AdminDashboard = () => {
                     Scheduled for: {new Date(`${scheduleDate}T${scheduleTime}`).toLocaleString()}
                   </Typography>
                 </Box>
+                {scheduleDueDate && scheduleDueTime && (
+                  <Box display="flex" alignItems="center" gap={1} mt={1}>
+                    <WarningIcon sx={{ color: '#f59e0b' }} />
+                    <Typography variant="body2" fontWeight="medium" color="#b45309">
+                      Due by: {new Date(`${scheduleDueDate}T${scheduleDueTime}`).toLocaleString()}
+                    </Typography>
+                  </Box>
+                )}
               </Card>
             </Box>
+
+            {/* Session Content Display */}
+            {(selectedSessionForScheduling.files?.length > 0 || selectedSessionForScheduling.quiz || selectedSessionForScheduling.questions) && (
+              <Box mb={4}>
+                <Typography variant="body1" fontWeight="medium" mb={2}>
+                  Session Content:
+                </Typography>
+                <Card sx={{ p: 3, backgroundColor: '#ffffff', border: '1px solid #e5e7eb' }}>
+                  {/* Uploaded Files */}
+                  {selectedSessionForScheduling.files && selectedSessionForScheduling.files.length > 0 && (
+                    <Box mb={3}>
+                      <Typography variant="body1" fontWeight="medium" mb={2} display="flex" alignItems="center" gap={1}>
+                        <CloudUploadIcon sx={{ fontSize: 22, color: '#3b82f6' }} />
+                        Uploaded Files ({selectedSessionForScheduling.files.length})
+                      </Typography>
+                      <Grid container spacing={2}>
+                        {selectedSessionForScheduling.files.map((file, index) => {
+                          const isVideo = file.type?.startsWith('video/');
+                          const isImage = file.type?.startsWith('image/');
+                          const isPDF = file.type === 'application/pdf' || file.name?.toLowerCase().endsWith('.pdf');
+                          const isPresentation = file.type?.includes('presentation') || file.type?.includes('powerpoint') || 
+                                                file.name?.toLowerCase().match(/\.(ppt|pptx)$/);
+                          const isWord = file.type?.includes('word') || file.name?.toLowerCase().match(/\.(doc|docx)$/);
+                          
+                          let FileIconComponent = FileIcon;
+                          let iconColor = '#6b7280';
+                          if (isVideo) { FileIconComponent = VideoLibraryIcon; iconColor = '#ef4444'; }
+                          else if (isImage) { FileIconComponent = ImageIcon; iconColor = '#10b981'; }
+                          else if (isPDF || isPresentation) { FileIconComponent = DescriptionIcon; iconColor = '#f59e0b'; }
+                          else if (isWord) { FileIconComponent = ArticleIcon; iconColor = '#3b82f6'; }
+                          
+                          return (
+                            <Grid item xs={12} sm={6} md={4} key={index}>
+                              <Card sx={{ p: 2, border: '1px solid #e5e7eb', '&:hover': { boxShadow: 2 } }}>
+                                <Box display="flex" alignItems="center" gap={2}>
+                                  <Box
+                                    sx={{
+                                      width: 48,
+                                      height: 48,
+                                      borderRadius: 1,
+                                      backgroundColor: `${iconColor}15`,
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center'
+                                    }}
+                                  >
+                                    <FileIconComponent sx={{ color: iconColor, fontSize: 28 }} />
+                                  </Box>
+                                  <Box flex={1} sx={{ minWidth: 0 }}>
+                                    <Typography variant="body2" fontWeight="medium" noWrap>
+                                      {file.name}
+                                    </Typography>
+                                    <Typography variant="caption" color="text.secondary">
+                                      {file.size ? formatFileSize(file.size) : 'Unknown size'}
+                                    </Typography>
+                                  </Box>
+                                </Box>
+                              </Card>
+                            </Grid>
+                          );
+                        })}
+                      </Grid>
+                    </Box>
+                  )}
+
+                  {/* Quiz/Assessment */}
+                  {(selectedSessionForScheduling.quiz || selectedSessionForScheduling.questions) && (
+                    <Box>
+                      {selectedSessionForScheduling.files?.length > 0 && <Divider sx={{ my: 3 }} />}
+                      <Typography variant="body1" fontWeight="medium" mb={2} display="flex" alignItems="center" gap={1}>
+                        <QuizIcon sx={{ fontSize: 22, color: '#8b5cf6' }} />
+                        Assessment/Quiz
+                      </Typography>
+                      <Box sx={{ pl: 4, backgroundColor: '#f9fafb', p: 2, borderRadius: 1 }}>
+                        {selectedSessionForScheduling.quiz?.title && (
+                          <Typography variant="body2" gutterBottom>
+                            <strong>Title:</strong> {selectedSessionForScheduling.quiz.title}
+                          </Typography>
+                        )}
+                        {selectedSessionForScheduling.quiz?.description && (
+                          <Typography variant="body2" gutterBottom>
+                            <strong>Description:</strong> {selectedSessionForScheduling.quiz.description}
+                          </Typography>
+                        )}
+                        {((selectedSessionForScheduling.quiz?.questions || selectedSessionForScheduling.questions)?.length > 0) && (
+                          <Typography variant="body2" color="text.secondary" gutterBottom>
+                            <strong>Total Questions:</strong> {(selectedSessionForScheduling.quiz?.questions || selectedSessionForScheduling.questions)?.length || 0}
+                          </Typography>
+                        )}
+                        {selectedSessionForScheduling.assessmentInfo && (
+                          <Box mt={1.5}>
+                            <Typography variant="body2" color="text.secondary">
+                              <strong>Assessment Type:</strong> {selectedSessionForScheduling.assessmentInfo.type || 'Standard'}
+                            </Typography>
+                          </Box>
+                        )}
+                      </Box>
+                    </Box>
+                  )}
+
+                  {/* Additional Content Info */}
+                  {selectedSessionForScheduling.creationMode && (
+                    <Box mt={2}>
+                      <Divider sx={{ mb: 2 }} />
+                      <Typography variant="body2" color="text.secondary">
+                        <strong>Creation Mode:</strong> {selectedSessionForScheduling.creationMode}
+                      </Typography>
+                    </Box>
+                  )}
+                </Card>
+              </Box>
+            )}
 
             {/* Employee List */}
             <Box mb={4}>
@@ -4990,32 +6512,140 @@ const AdminDashboard = () => {
   };
 
   // Render session detail view
+  // Helper functions for editing
+  const handleDeleteFile = (fileIndex) => {
+    if (!editingSession) return;
+    const updated = JSON.parse(JSON.stringify(editingSession));
+    if (updated.files) {
+      updated.files = updated.files.filter((_, idx) => idx !== fileIndex);
+    }
+    setEditingSession(updated);
+  };
+
+  const handleDeleteQuestion = (questionIndex) => {
+    if (!editingSession) return;
+    const updated = JSON.parse(JSON.stringify(editingSession));
+    if (updated.quiz?.questions) {
+      updated.quiz.questions = updated.quiz.questions.filter((_, idx) => idx !== questionIndex);
+    } else if (updated.questions) {
+      updated.questions = updated.questions.filter((_, idx) => idx !== questionIndex);
+    }
+    setEditingSession(updated);
+  };
+
+  const handleRemoveCertification = () => {
+    if (!editingSession) return;
+    const updated = JSON.parse(JSON.stringify(editingSession));
+    // Remove certification association
+    setSessionCertifications(prev => {
+      const newCerts = { ...prev };
+      delete newCerts[updated.id];
+      return newCerts;
+    });
+    setEditingSession(updated);
+  };
+
+  const handleAddFile = (event) => {
+    if (!editingSession) return;
+    const files = Array.from(event.target.files);
+    const updated = JSON.parse(JSON.stringify(editingSession));
+    if (!updated.files) updated.files = [];
+    updated.files = [...updated.files, ...files.map(file => ({
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      uploadedAt: new Date().toISOString()
+    }))];
+    setEditingSession(updated);
+  };
+
   const renderSessionDetail = (session) => {
     if (!selectedAllSessionItem) return null;
 
     const isDraft = selectedAllSessionItem.folderType === 'drafts';
     const isAssessment = selectedAllSessionItem.folderType === 'assessments';
     const isPublished = selectedAllSessionItem.folderType === 'published';
+    const isEditMode = viewMode === 'edit';
+    const sessionToDisplay = isEditMode && editingSession ? editingSession : selectedAllSessionItem;
 
     return (
       <Box p={3}>
-        <Box mb={3} display="flex" alignItems="center" gap={2}>
-          <IconButton onClick={() => { setSelectedAllSessionItem(null); setViewMode(null); }}>
-            <ArrowBackIcon />
-          </IconButton>
-          <Typography variant="h4" fontWeight="bold">
-            {selectedAllSessionItem.title || 'Untitled Session'}
-          </Typography>
+        <Box mb={3} display="flex" alignItems="center" justifyContent="space-between">
+          <Box display="flex" alignItems="center" gap={2}>
+            <IconButton onClick={() => { 
+              setSelectedAllSessionItem(null); 
+              setViewMode(null);
+              setEditingSession(null);
+            }}>
+              <ArrowBackIcon />
+            </IconButton>
+            {isEditMode ? (
+              <TextField
+                value={sessionToDisplay.title || ''}
+                onChange={(e) => {
+                  const updated = JSON.parse(JSON.stringify(editingSession));
+                  updated.title = e.target.value;
+                  setEditingSession(updated);
+                }}
+                variant="outlined"
+                sx={{ minWidth: 400 }}
+                placeholder="Session Title"
+              />
+            ) : (
+              <Typography variant="h4" fontWeight="bold">
+                {sessionToDisplay.title || 'Untitled Session'}
+              </Typography>
+            )}
+          </Box>
+          {isEditMode && (
+            <Box display="flex" gap={2}>
+              <Button
+                variant="outlined"
+                onClick={handleCancelEdit}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="contained"
+                startIcon={<SaveIcon />}
+                onClick={handleSaveEdits}
+                sx={{ backgroundColor: '#10b981', '&:hover': { backgroundColor: '#059669' } }}
+              >
+                Save Changes
+              </Button>
+            </Box>
+          )}
         </Box>
 
         <Card sx={{ p: 3, mb: 3 }}>
           <Grid container spacing={3}>
             <Grid item xs={12} md={6}>
-              <Typography variant="body2" color="text.secondary" gutterBottom>Title</Typography>
-              <Typography variant="h6" mb={2}>{selectedAllSessionItem.title || 'Untitled Session'}</Typography>
-              
-              <Typography variant="body2" color="text.secondary" gutterBottom>Description</Typography>
-              <Typography variant="body1" mb={2}>{selectedAllSessionItem.description || 'No description'}</Typography>
+              {!isEditMode && (
+                <>
+                  <Typography variant="body2" color="text.secondary" gutterBottom>Title</Typography>
+                  <Typography variant="h6" mb={2}>{sessionToDisplay.title || 'Untitled Session'}</Typography>
+                  
+                  <Typography variant="body2" color="text.secondary" gutterBottom>Description</Typography>
+                  <Typography variant="body1" mb={2}>{sessionToDisplay.description || 'No description'}</Typography>
+                </>
+              )}
+              {isEditMode && (
+                <>
+                  <TextField
+                    label="Description"
+                    value={sessionToDisplay.description || ''}
+                    onChange={(e) => {
+                      const updated = JSON.parse(JSON.stringify(editingSession));
+                      updated.description = e.target.value;
+                      setEditingSession(updated);
+                    }}
+                    fullWidth
+                    multiline
+                    rows={3}
+                    margin="normal"
+                  />
+                </>
+              )}
               
               {selectedAllSessionItem.type && (
                 <>
@@ -5120,57 +6750,221 @@ const AdminDashboard = () => {
           </Grid>
         </Card>
 
-        {/* File Preview Section */}
-        {selectedAllSessionItem.files && selectedAllSessionItem.files.length > 0 && (
-          <Card sx={{ p: 3, mb: 3 }}>
-            <Typography variant="h6" fontWeight="bold" gutterBottom>
-              File Preview
+        {/* Uploaded Module Section */}
+        <Card sx={{ p: 3, mb: 3 }}>
+          <Typography variant="h6" fontWeight="bold" gutterBottom>
+            Uploaded Module
+          </Typography>
+          
+          {/* AI Generated Content */}
+          {(selectedAllSessionItem.aiContent || selectedAllSessionItem.resumeState?.aiContentGenerated) && (
+            <Box mb={3} p={2} sx={{ backgroundColor: '#fef3c7', borderRadius: 1, borderLeft: '4px solid #f59e0b' }}>
+              <Box display="flex" alignItems="center" gap={1} mb={1}>
+                <FireIcon sx={{ color: '#f59e0b' }} />
+                <Typography variant="body1" fontWeight="bold">
+                  AI Generated Content
+                </Typography>
+              </Box>
+              <Typography variant="body2" color="text.secondary">
+                Keywords: {selectedAllSessionItem.aiContent?.keywords || selectedAllSessionItem.resumeState?.aiKeywords || 'N/A'}
+              </Typography>
+            </Box>
+          )}
+
+          {/* Creation Mode Content */}
+          {selectedAllSessionItem.creationMode && (
+            <Box mb={3} p={2} sx={{ backgroundColor: '#dbeafe', borderRadius: 1, borderLeft: '4px solid #3b82f6' }}>
+              <Box display="flex" alignItems="center" gap={1} mb={1}>
+                {selectedAllSessionItem.creationMode === 'powerpoint' ? <ArticleIcon sx={{ color: '#3b82f6' }} /> :
+                 selectedAllSessionItem.creationMode === 'word' ? <DescriptionIcon sx={{ color: '#3b82f6' }} /> :
+                 <VideoLibraryIcon sx={{ color: '#3b82f6' }} />}
+                <Typography variant="body1" fontWeight="bold">
+                  Created Content: {selectedAllSessionItem.creationMode === 'powerpoint' ? 'PowerPoint Presentation' : 
+                                   selectedAllSessionItem.creationMode === 'word' ? 'Word Document' : 
+                                   'Training Video'}
+                </Typography>
+              </Box>
+            </Box>
+          )}
+
+          {/* Uploaded Files */}
+          <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+            <Typography variant="body1" fontWeight="bold">
+              Uploaded Files ({sessionToDisplay.files?.length || 0})
             </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Click Preview on any file above to view it in a new window
-            </Typography>
-            <Box display="flex" gap={2} flexWrap="wrap">
-              {selectedAllSessionItem.files.map((file, idx) => {
+            {isEditMode && (
+              <Button
+                variant="outlined"
+                size="small"
+                component="label"
+                startIcon={<CloudUploadIcon />}
+              >
+                Add File
+                <input
+                  type="file"
+                  hidden
+                  multiple
+                  onChange={handleAddFile}
+                />
+              </Button>
+            )}
+          </Box>
+          
+          {sessionToDisplay.files && sessionToDisplay.files.length > 0 && (
+            <Box display="flex" gap={2} flexWrap="wrap" mt={2}>
+              {sessionToDisplay.files.map((file, idx) => {
                 const fileObj = typeof file === 'string' ? { name: file } : file;
                 return (
-                  <Card key={idx} sx={{ p: 2, minWidth: 150, textAlign: 'center' }}>
+                  <Card key={idx} sx={{ p: 2, minWidth: 150, textAlign: 'center', border: '1px solid #e5e7eb', position: 'relative' }}>
+                    {isEditMode && (
+                      <IconButton
+                        size="small"
+                        onClick={() => handleDeleteFile(idx)}
+                        sx={{
+                          position: 'absolute',
+                          top: 4,
+                          right: 4,
+                          backgroundColor: 'white',
+                          '&:hover': { backgroundColor: '#fee2e2' },
+                          color: '#ef4444'
+                        }}
+                      >
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    )}
                     <FileIcon sx={{ fontSize: 48, color: '#3b82f6', mb: 1 }} />
                     <Typography variant="body2" noWrap sx={{ maxWidth: 150 }}>
                       {fileObj.name || file || 'Unknown'}
                     </Typography>
+                    {fileObj.size && (
+                      <Typography variant="caption" color="text.secondary">
+                        {formatFileSize(fileObj.size)}
+                      </Typography>
+                    )}
                   </Card>
                 );
               })}
             </Box>
+          )}
+
+          {(!sessionToDisplay.files || sessionToDisplay.files.length === 0) && 
+           !sessionToDisplay.aiContent && 
+           !sessionToDisplay.creationMode && (
+            <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+              No module content uploaded
+            </Typography>
+          )}
+        </Card>
+
+        {/* Certificate Section */}
+        {hasCertification(sessionToDisplay.id) && (
+          <Card sx={{ p: 3, mb: 3, backgroundColor: '#f0fdf4', border: '2px solid #10b981' }}>
+            <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
+              <Box display="flex" alignItems="center" gap={2}>
+                <AwardIcon sx={{ color: '#10b981', fontSize: 40 }} />
+                <Box>
+                  <Typography variant="h6" fontWeight="bold" color="#10b981">
+                    Certification Attached
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    This session includes a certificate that will be issued upon completion
+                  </Typography>
+                </Box>
+              </Box>
+              {isEditMode && (
+                <Button
+                  variant="outlined"
+                  color="error"
+                  startIcon={<DeleteIcon />}
+                  onClick={handleRemoveCertification}
+                  sx={{
+                    borderColor: '#ef4444',
+                    color: '#ef4444',
+                    '&:hover': {
+                      borderColor: '#dc2626',
+                      backgroundColor: '#fee2e2'
+                    }
+                  }}
+                >
+                  Remove Certificate
+                </Button>
+              )}
+            </Box>
+            {!isEditMode && (
+              <Button
+                variant="outlined"
+                startIcon={<CertificateIcon />}
+                onClick={() => handleOpenCertifications(sessionToDisplay)}
+                sx={{
+                  borderColor: '#10b981',
+                  color: '#10b981',
+                  '&:hover': {
+                    borderColor: '#059669',
+                    backgroundColor: '#d1fae5'
+                  }
+                }}
+              >
+                View Certificate Details
+              </Button>
+            )}
+            {isEditMode && (
+              <Button
+                variant="outlined"
+                startIcon={<CertificateIcon />}
+                onClick={() => handleOpenCertifications(sessionToDisplay)}
+                sx={{
+                  borderColor: '#10b981',
+                  color: '#10b981',
+                  '&:hover': {
+                    borderColor: '#059669',
+                    backgroundColor: '#d1fae5'
+                  }
+                }}
+              >
+                Edit Certificate
+              </Button>
+            )}
           </Card>
         )}
 
         {/* Complete Questionnaire/Quiz Preview */}
-        {(selectedAllSessionItem.quiz?.questions || selectedAllSessionItem.questions) && (
+        {(sessionToDisplay.quiz?.questions || sessionToDisplay.questions) && (
           <Card sx={{ p: 3, mb: 3 }}>
-            <Typography variant="h6" fontWeight="bold" gutterBottom>
-              Complete Questionnaire
-            </Typography>
+            <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+              <Typography variant="h6" fontWeight="bold">
+                Complete Questionnaire
+              </Typography>
+              {isEditMode && (
+                <Button
+                  variant="contained"
+                  size="small"
+                  startIcon={<AddIcon />}
+                  onClick={addQuestion}
+                >
+                  Add Question
+                </Button>
+              )}
+            </Box>
             
-            {isAssessment && selectedAllSessionItem.assessmentInfo && (
+            {isAssessment && sessionToDisplay.assessmentInfo && (
               <Box mb={3} p={2} sx={{ backgroundColor: '#eff6ff', borderRadius: 1 }}>
                 <Typography variant="body2" fontWeight="bold" gutterBottom>
-                  Assessment Title: {selectedAllSessionItem.assessmentInfo.quizTitle || selectedAllSessionItem.title || 'Untitled Assessment'}
+                  Assessment Title: {sessionToDisplay.assessmentInfo.quizTitle || sessionToDisplay.title || 'Untitled Assessment'}
                 </Typography>
                 <Box display="flex" gap={2} flexWrap="wrap" mt={1}>
                   <Chip 
-                    label={`Passing Score: ${selectedAllSessionItem.assessmentInfo.passingScore || 'N/A'}%`} 
+                    label={`Passing Score: ${sessionToDisplay.assessmentInfo.passingScore || 'N/A'}%`} 
                     size="small" 
                     color="primary"
                   />
                   <Chip 
-                    label={`Max Attempts: ${selectedAllSessionItem.assessmentInfo.maxAttempts || 'N/A'}`} 
+                    label={`Max Attempts: ${sessionToDisplay.assessmentInfo.maxAttempts || 'N/A'}`} 
                     size="small" 
                     color="secondary"
                   />
-                  {(selectedAllSessionItem.quiz?.questions || selectedAllSessionItem.questions) && (
+                  {(sessionToDisplay.quiz?.questions || sessionToDisplay.questions) && (
                     <Chip 
-                      label={`${(selectedAllSessionItem.quiz?.questions || selectedAllSessionItem.questions).length} Questions`} 
+                      label={`${(sessionToDisplay.quiz?.questions || sessionToDisplay.questions).length} Questions`} 
                       size="small" 
                       color="success"
                     />
@@ -5180,8 +6974,23 @@ const AdminDashboard = () => {
             )}
 
             <Box>
-              {(selectedAllSessionItem.quiz?.questions || selectedAllSessionItem.questions || []).map((question, index) => (
-                <Card key={index} sx={{ mb: 3, p: 3, border: '1px solid #e5e7eb' }}>
+              {(sessionToDisplay.quiz?.questions || sessionToDisplay.questions || []).map((question, index) => (
+                <Card key={index} sx={{ mb: 3, p: 3, border: '1px solid #e5e7eb', position: 'relative' }}>
+                  {isEditMode && (
+                    <IconButton
+                      size="small"
+                      onClick={() => handleDeleteQuestion(index)}
+                      sx={{
+                        position: 'absolute',
+                        top: 8,
+                        right: 8,
+                        color: '#ef4444',
+                        '&:hover': { backgroundColor: '#fee2e2' }
+                      }}
+                    >
+                      <DeleteIcon />
+                    </IconButton>
+                  )}
                   <Box display="flex" alignItems="start" gap={2} mb={2}>
                     <Box
                       sx={{
@@ -5199,9 +7008,20 @@ const AdminDashboard = () => {
                       {index + 1}
                     </Box>
                     <Box flex={1}>
-                      <Typography variant="h6" fontWeight="medium" gutterBottom>
-                        {question.text || question.question || 'Untitled Question'}
-                      </Typography>
+                      {isEditMode ? (
+                        <TextField
+                          fullWidth
+                          value={question.text || question.question || ''}
+                          onChange={(e) => updateEditingQuestion(index, 'text', e.target.value)}
+                          variant="outlined"
+                          placeholder="Question text"
+                          sx={{ mb: 2 }}
+                        />
+                      ) : (
+                        <Typography variant="h6" fontWeight="medium" gutterBottom>
+                          {question.text || question.question || 'Untitled Question'}
+                        </Typography>
+                      )}
                       <Chip 
                         label={question.type || 'multiple-choice'} 
                         size="small" 
@@ -5222,26 +7042,61 @@ const AdminDashboard = () => {
                   {/* Options/Answers */}
                   {question.options && question.options.length > 0 && (
                     <Box mt={2}>
-                      <Typography variant="body2" color="text.secondary" gutterBottom fontWeight="medium">
-                        Options:
-                      </Typography>
-                      <Box component="ul" sx={{ pl: 3, mt: 1 }}>
-                        {question.options.map((option, optIdx) => (
-                          <Box component="li" key={optIdx} sx={{ mb: 1 }}>
-                            <Typography variant="body2">
-                              {typeof option === 'string' ? option : option.text || option.label || option}
-                              {question.correctAnswer !== undefined && question.correctAnswer === optIdx && (
-                                <Chip 
-                                  label="Correct" 
-                                  size="small" 
-                                  color="success" 
-                                  sx={{ ml: 1 }}
-                                />
-                              )}
-                            </Typography>
-                          </Box>
-                        ))}
+                      <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
+                        <Typography variant="body2" color="text.secondary" fontWeight="medium">
+                          Options:
+                        </Typography>
+                        {isEditMode && (
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            startIcon={<AddIcon />}
+                            onClick={() => addOptionToQuestion(index)}
+                          >
+                            Add Option
+                          </Button>
+                        )}
                       </Box>
+                      {isEditMode ? (
+                        <Box sx={{ mt: 1 }}>
+                          {question.options.map((option, optIdx) => (
+                            <Box key={optIdx} sx={{ mb: 2, display: 'flex', gap: 1, alignItems: 'center' }}>
+                              <TextField
+                                fullWidth
+                                size="small"
+                                value={typeof option === 'string' ? option : option.text || option.label || option || ''}
+                                onChange={(e) => updateEditingOption(index, optIdx, e.target.value)}
+                                placeholder={`Option ${optIdx + 1}`}
+                              />
+                              <IconButton
+                                size="small"
+                                onClick={() => removeOptionFromQuestion(index, optIdx)}
+                                sx={{ color: '#ef4444' }}
+                              >
+                                <DeleteIcon fontSize="small" />
+                              </IconButton>
+                            </Box>
+                          ))}
+                        </Box>
+                      ) : (
+                        <Box component="ul" sx={{ pl: 3, mt: 1 }}>
+                          {question.options.map((option, optIdx) => (
+                            <Box component="li" key={optIdx} sx={{ mb: 1 }}>
+                              <Typography variant="body2">
+                                {typeof option === 'string' ? option : option.text || option.label || option}
+                                {question.correctAnswer !== undefined && question.correctAnswer === optIdx && (
+                                  <Chip 
+                                    label="Correct" 
+                                    size="small" 
+                                    color="success" 
+                                    sx={{ ml: 1 }}
+                                  />
+                                )}
+                              </Typography>
+                            </Box>
+                          ))}
+                        </Box>
+                      )}
                     </Box>
                   )}
 
@@ -5269,12 +7124,22 @@ const AdminDashboard = () => {
               ))}
             </Box>
 
-            {(selectedAllSessionItem.quiz?.questions || selectedAllSessionItem.questions || []).length === 0 && (
+            {(sessionToDisplay.quiz?.questions || sessionToDisplay.questions || []).length === 0 && (
               <Box textAlign="center" py={4}>
                 <QuizIcon sx={{ fontSize: 64, color: '#d1d5db', mb: 2 }} />
                 <Typography variant="body1" color="text.secondary">
                   No questions in this questionnaire
                 </Typography>
+                {isEditMode && (
+                  <Button
+                    variant="contained"
+                    startIcon={<AddIcon />}
+                    onClick={addQuestion}
+                    sx={{ mt: 2 }}
+                  >
+                    Add First Question
+                  </Button>
+                )}
               </Box>
             )}
           </Card>
@@ -5286,7 +7151,10 @@ const AdminDashboard = () => {
               <Button
                 variant="outlined"
                 startIcon={<EditIcon />}
-                onClick={() => setViewMode('edit')}
+                onClick={() => {
+                  setEditingSession(JSON.parse(JSON.stringify(selectedAllSessionItem)));
+                  setViewMode('edit');
+                }}
               >
                 Edit
               </Button>
@@ -5447,18 +7315,36 @@ const AdminDashboard = () => {
 
   const handlePublishNow = () => {
     if (!publishCourseData.courseTitle) {
-      alert('Please enter a course title');
+      alert('Please enter a session title');
       return;
     }
 
     const publishedSession = {
       ...sessionToPublish,
       title: publishCourseData.courseTitle,
-      description: publishCourseData.description,
+      description: publishCourseData.description || sessionToPublish?.description || '',
       skills: publishCourseData.skills,
       courseImage: publishCourseData.courseImage,
       status: 'published',
-      publishedAt: new Date().toISOString()
+      publishedAt: new Date().toISOString(),
+      scheduledDate: sessionToPublish?.scheduledDate || null,
+      scheduledTime: sessionToPublish?.scheduledTime || null,
+      scheduledDateTime: sessionToPublish?.scheduledDateTime || null,
+      dueDate: sessionToPublish?.dueDate || null,
+      dueTime: sessionToPublish?.dueTime || null,
+      dueDateTime: sessionToPublish?.dueDateTime || null,
+      isLocked: sessionToPublish?.isLocked ?? false,
+      approvalExpiresAt: sessionToPublish?.approvalExpiresAt || null,
+      lastApprovalDate: sessionToPublish?.lastApprovalDate || null,
+      // Explicitly preserve files, quiz, and content
+      files: sessionToPublish?.files || sessionToPublish?.resumeState?.selectedFiles || [],
+      quiz: sessionToPublish?.quiz || null,
+      aiContent: sessionToPublish?.aiContent || null,
+      creationMode: sessionToPublish?.creationMode || null,
+      instructor: sessionToPublish?.instructor || 'HR Team',
+      duration: sessionToPublish?.duration || '60 minutes',
+      type: sessionToPublish?.type || 'compliance',
+      audience: sessionToPublish?.audience || 'all'
     };
 
     // Move from draft/assessment to published
@@ -5468,7 +7354,7 @@ const AdminDashboard = () => {
       setSavedAssessments(prev => prev.filter(s => s.id !== sessionToPublish.id));
     }
 
-    setPublishedSessions(prev => [publishedSession, ...prev]);
+    setPublishedSessions(prev => [normalizePublishedSession(publishedSession), ...prev]);
     
     // Log activity
     addActivity(
@@ -5481,11 +7367,13 @@ const AdminDashboard = () => {
     setShowPublishDialog(false);
     setSessionToPublish(null);
     
-    // Navigate to Schedule module
-    setActiveTab('schedule');
+    // Navigate to Schedule step in manage section
+    setActiveTab('manage-session');
+    setManageSessionTab('schedule');
     setSelectedSessionForScheduling(publishedSession);
+    setShowScheduleDialog(true);
     
-    alert('Course published successfully! Please schedule the session.');
+    alert('Session published successfully! Please schedule the session.');
   };
 
   const handleSaveForLater = () => {
@@ -5673,6 +7561,9 @@ const AdminDashboard = () => {
                         <Typography variant="h6" fontWeight="bold">
                           {sessionTitle}
                         </Typography>
+                        {hasCertification(session.id) && (
+                          <AwardIcon sx={{ color: '#f59e0b', fontSize: 24 }} title="Certification Attached" />
+                        )}
                         <Chip
                           label={session.status}
                           size="small"
@@ -5684,8 +7575,11 @@ const AdminDashboard = () => {
                           }}
                         />
                       </Box>
-                      <Typography variant="body2" color="text.secondary">
+                      <Typography variant="body2" color="text.secondary" mb={0.5}>
                         {questionCount} {questionCount === 1 ? 'question' : 'questions'} | {session.type === 'draft' ? 'Draft' : 'Saved Assessment'}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {session.createdAt || session.savedAt ? new Date(session.createdAt || session.savedAt).toLocaleString() : 'No date'}
                       </Typography>
                     </Box>
 
@@ -5697,12 +7591,14 @@ const AdminDashboard = () => {
                         sx={{ border: '1px solid #e5e7eb' }}
                         title="Preview"
                       >
-                        <PreviewIcon />
+                        <VisibilityIcon />
                       </IconButton>
                       <IconButton
                         size="small"
                         onClick={() => {
-                          setSelectedAllSessionItem(session);
+                          const sessionWithFolder = { ...session, folderType: session.type === 'draft' ? 'drafts' : 'assessments' };
+                          setSelectedAllSessionItem(sessionWithFolder);
+                          setEditingSession(JSON.parse(JSON.stringify(sessionWithFolder)));
                           setViewMode('edit');
                         }}
                         sx={{ border: '1px solid #e5e7eb' }}
@@ -5782,10 +7678,13 @@ const AdminDashboard = () => {
                       {session.type === 'draft' ? '📝' : '📚'}
                     </Box>
                     <Box flex={1}>
-                      <Box display="flex" alignItems="center" gap={1} mb={1}>
+                      <Box display="flex" alignItems="center" gap={1} mb={1} flexWrap="wrap">
                         <Typography variant="h6" fontWeight="bold" sx={{ flex: 1 }}>
                           {sessionTitle}
                         </Typography>
+                        {hasCertification(session.id) && (
+                          <AwardIcon sx={{ color: '#f59e0b', fontSize: 24 }} title="Certification Attached" />
+                        )}
                       </Box>
                       <Chip
                         label={session.status}
@@ -5798,8 +7697,11 @@ const AdminDashboard = () => {
                           mb: 1
                         }}
                       />
-                      <Typography variant="body2" color="text.secondary" mb={2}>
+                      <Typography variant="body2" color="text.secondary" mb={1}>
                         {questionCount} {questionCount === 1 ? 'question' : 'questions'}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {session.createdAt || session.savedAt ? new Date(session.createdAt || session.savedAt).toLocaleString() : 'No date'}
                       </Typography>
                     </Box>
                     <Box display="flex" gap={1} flexWrap="wrap">
@@ -5808,12 +7710,14 @@ const AdminDashboard = () => {
                         onClick={() => setSelectedAllSessionItem(session)}
                         title="Preview"
                       >
-                        <PreviewIcon />
+                        <VisibilityIcon />
                       </IconButton>
                       <IconButton
                         size="small"
                         onClick={() => {
-                          setSelectedAllSessionItem(session);
+                          const sessionWithFolder = { ...session, folderType: session.type === 'draft' ? 'drafts' : 'assessments' };
+                          setSelectedAllSessionItem(sessionWithFolder);
+                          setEditingSession(JSON.parse(JSON.stringify(sessionWithFolder)));
                           setViewMode('edit');
                         }}
                         title="Edit"
@@ -6067,7 +7971,7 @@ const AdminDashboard = () => {
         {/* Header */}
         <Box display="flex" justifyContent="space-between" alignItems="center" mb={4}>
           <Typography variant="h4" fontWeight="bold">
-            Publish course
+            Publish session
           </Typography>
           <IconButton onClick={() => {
             setShowPublishDialog(false);
@@ -6082,10 +7986,10 @@ const AdminDashboard = () => {
           General Settings
         </Typography>
 
-        {/* Course Image */}
+        {/* Session Image */}
         <Box mb={4}>
           <Typography variant="body1" fontWeight="medium" mb={2}>
-            Course image
+            Session image
           </Typography>
           <Box display="flex" gap={3}>
             {publishCourseData.courseImage ? (
@@ -6140,7 +8044,7 @@ const AdminDashboard = () => {
               <Box display="flex" gap={2} flexDirection="column">
                 <Button
                   variant="outlined"
-                  startIcon={<CloudUploadIcon2 />}
+                  startIcon={<CloudUploadIcon />}
                   onClick={() => document.getElementById('course-image-upload').click()}
                 >
                   Upload image
@@ -6153,16 +8057,16 @@ const AdminDashboard = () => {
           </Box>
         </Box>
 
-        {/* Course Title */}
+        {/* Session Title */}
         <Box mb={4}>
           <Typography variant="body1" fontWeight="medium" mb={2}>
-            Course title
+            Session title
           </Typography>
           <TextField
             fullWidth
             value={publishCourseData.courseTitle}
             onChange={(e) => setPublishCourseData(prev => ({ ...prev, courseTitle: e.target.value }))}
-            placeholder="Enter course title"
+            placeholder="Enter session title"
           />
         </Box>
 
@@ -6191,7 +8095,7 @@ const AdminDashboard = () => {
                 setPublishCourseData(prev => ({ ...prev, description: newDesc }));
               }
             }}
-            placeholder="Enter course description"
+            placeholder="Enter session description"
           />
           <Box display="flex" justifyContent="space-between" alignItems="center" mt={1}>
             <Typography variant="body2" color="text.secondary">
@@ -6218,13 +8122,13 @@ const AdminDashboard = () => {
             <InfoIcon sx={{ fontSize: 18, color: '#6b7280' }} />
           </Box>
           <FormControl fullWidth>
-            <InputLabel>Select the skills that user will gain from this course</InputLabel>
+            <InputLabel>Select the skills that user will gain from this session</InputLabel>
             <Select
               multiple
               value={publishCourseData.skills}
               onChange={(e) => setPublishCourseData(prev => ({ ...prev, skills: e.target.value }))}
               renderValue={(selected) => selected.join(', ')}
-              label="Select the skills that user will gain from this course"
+              label="Select the skills that user will gain from this session"
             >
               <MenuItem value="Communication">Communication</MenuItem>
               <MenuItem value="Leadership">Leadership</MenuItem>
@@ -6811,7 +8715,8 @@ const AdminDashboard = () => {
     reportingManager: '',
     employeeId: '',
     role: 'employee', // 'employee' or 'admin'
-    password: ''
+    password: '',
+    skills: ''
   });
 
   const handleAddEmployee = () => {
@@ -6838,7 +8743,8 @@ const AdminDashboard = () => {
       reportingManager: '',
       employeeId: '',
       role: 'employee',
-      password: ''
+      password: '',
+      skills: ''
     });
     setShowAddEmployee(false);
     alert('Employee added successfully!');
@@ -6846,7 +8752,10 @@ const AdminDashboard = () => {
 
   const handleEditEmployee = (employee) => {
     setSelectedEmployee(employee);
-    setNewEmployee(employee);
+    setNewEmployee({
+      ...employee,
+      skills: employee.skills || ''
+    });
     setShowEditEmployee(true);
   };
 
@@ -6868,7 +8777,8 @@ const AdminDashboard = () => {
       reportingManager: '',
       employeeId: '',
       role: 'employee',
-      password: ''
+      password: '',
+      skills: ''
     });
     alert('Employee updated successfully!');
   };
@@ -6908,6 +8818,49 @@ const AdminDashboard = () => {
 
   const renderSettings = () => (
     <Box p={3}>
+      {/* System Settings - Clear All Sessions */}
+      <Card sx={{ p: 3, mb: 4, border: '2px solid #ef4444' }}>
+        <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+          <Box>
+            <Typography variant="h5" fontWeight="bold" color="error" gutterBottom>
+              System Maintenance
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Clear all session data from the system
+            </Typography>
+          </Box>
+        </Box>
+        <Box mb={2}>
+          <Typography variant="body2" color="text.secondary" gutterBottom>
+            This will permanently delete:
+          </Typography>
+          <Box component="ul" sx={{ pl: 3, mb: 2 }}>
+            <li><Typography variant="body2" color="text.secondary">All published sessions</Typography></li>
+            <li><Typography variant="body2" color="text.secondary">All draft sessions</Typography></li>
+            <li><Typography variant="body2" color="text.secondary">All saved assessments</Typography></li>
+            <li><Typography variant="body2" color="text.secondary">Employee completion data</Typography></li>
+            <li><Typography variant="body2" color="text.secondary">Session certifications</Typography></li>
+            <li><Typography variant="body2" color="text.secondary">Session requests</Typography></li>
+          </Box>
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            <strong>Warning:</strong> This action cannot be undone. All session data will be permanently deleted.
+          </Alert>
+        </Box>
+        <Button
+          variant="contained"
+          color="error"
+          startIcon={<DeleteForeverIcon />}
+          onClick={handleClearAllSessions}
+          sx={{
+            backgroundColor: '#ef4444',
+            '&:hover': {
+              backgroundColor: '#dc2626',
+            }
+          }}
+        >
+          Clear All Sessions
+        </Button>
+      </Card>
 
       {/* Manage Employee Accounts Tab */}
       {settingsSubTab === 'manage' && (
@@ -7140,6 +9093,16 @@ const AdminDashboard = () => {
                   required
                 />
               </Grid>
+              <Grid item xs={12}>
+                <TextField
+                  label="Skills"
+                  value={newEmployee.skills}
+                  onChange={(e) => setNewEmployee(prev => ({ ...prev, skills: e.target.value }))}
+                  fullWidth
+                  placeholder="e.g. Leadership, Project Management, Communication"
+                  helperText="Add relevant skills, separated by commas"
+                />
+              </Grid>
               <Grid item xs={12} sm={6}>
                 <FormControl fullWidth required>
                   <InputLabel>Role</InputLabel>
@@ -7187,7 +9150,8 @@ const AdminDashboard = () => {
                     reportingManager: '',
                     employeeId: '',
                     role: 'employee',
-                    password: ''
+            password: '',
+            skills: ''
                   });
                 }}
               >
@@ -7215,7 +9179,8 @@ const AdminDashboard = () => {
             reportingManager: '',
             employeeId: '',
             role: 'employee',
-            password: ''
+            password: '',
+            skills: ''
           });
         }}
         maxWidth="md"
@@ -7297,6 +9262,16 @@ const AdminDashboard = () => {
                 onChange={(e) => setNewEmployee(prev => ({ ...prev, employeeId: e.target.value }))}
                 fullWidth
                 required
+              />
+            </Grid>
+            <Grid item xs={12}>
+              <TextField
+                label="Skills"
+                value={newEmployee.skills}
+                onChange={(e) => setNewEmployee(prev => ({ ...prev, skills: e.target.value }))}
+                fullWidth
+                placeholder="e.g. Leadership, Project Management, Communication"
+                helperText="Add relevant skills, separated by commas"
               />
             </Grid>
             <Grid item xs={12} sm={6}>
@@ -7418,29 +9393,31 @@ const AdminDashboard = () => {
     return courses;
   };
 
-  const allCourses = getAllCourses();
+  const renderCourseLibrary = () => {
+    // Get latest courses from all sources (published + drafts)
+    const allCourses = getAllCourses();
 
-  // Filter courses based on search and filters
-  const filteredCourses = allCourses.filter(course => {
-    const matchesSearch = course.title.toLowerCase().includes(courseSearchTerm.toLowerCase());
-    const matchesSkill = courseFilters.skill === 'all' || course.skill === courseFilters.skill;
-    const matchesCategory = courseFilters.category === 'all' || course.category === courseFilters.category;
-    const matchesReviews = courseFilters.reviews === 'all' || 
-      (courseFilters.reviews === 'with' && course.reviews > 0) ||
-      (courseFilters.reviews === 'without' && course.reviews === 0);
-    
-    return matchesSearch && matchesSkill && matchesCategory && matchesReviews;
-  });
+    // Filter courses based on search and filters
+    const filteredCourses = allCourses.filter(course => {
+      const matchesSearch = course.title.toLowerCase().includes(courseSearchTerm.toLowerCase());
+      const matchesSkill = courseFilters.skill === 'all' || course.skill === courseFilters.skill;
+      const matchesCategory = courseFilters.category === 'all' || course.category === courseFilters.category;
+      const matchesReviews = courseFilters.reviews === 'all' || 
+        (courseFilters.reviews === 'with' && course.reviews > 0) ||
+        (courseFilters.reviews === 'without' && course.reviews === 0);
+      
+      return matchesSearch && matchesSkill && matchesCategory && matchesReviews;
+    });
 
-  const renderCourseLibrary = () => (
+    return (
     <Box p={3}>
       {/* Header */}
       <Box mb={4}>
         <Typography variant="h4" fontWeight="bold" gutterBottom>
-          Course library
+          Session Library
         </Typography>
         <Typography variant="body1" color="text.secondary">
-          List of all courses accessible to you
+          Browse all published sessions and draft content
         </Typography>
       </Box>
 
@@ -7490,7 +9467,7 @@ const AdminDashboard = () => {
         {/* Search Bar */}
         <Box flex={1} minWidth={250}>
           <TextField
-            placeholder="Search by course title"
+            placeholder="Search by session title"
             value={courseSearchTerm}
             onChange={(e) => setCourseSearchTerm(e.target.value)}
             fullWidth
@@ -7536,7 +9513,7 @@ const AdminDashboard = () => {
         </Box>
       </Box>
 
-      {/* Course List */}
+      {/* Session List */}
       <Box>
         {courseLibraryView === 'list' ? (
           <Box>
@@ -7587,9 +9564,20 @@ const AdminDashboard = () => {
                         }}
                       />
                     </Box>
-                    <Typography variant="body2" color="text.secondary">
+                    <Typography variant="body2" color="text.secondary" mb={0.5}>
                       {course.modules} modules | {course.duration}
                     </Typography>
+                    {course.originalData?.description && (
+                      <Typography variant="body2" color="text.secondary" sx={{ 
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis'
+                      }}>
+                        {course.originalData.description}
+                      </Typography>
+                    )}
                   </Box>
 
                   {/* Skills */}
@@ -7658,9 +9646,20 @@ const AdminDashboard = () => {
                         }}
                       />
                     </Box>
-                    <Typography variant="body2" color="text.secondary" mb={2}>
+                    <Typography variant="body2" color="text.secondary" mb={1}>
                       {course.modules} modules | {course.duration}
                     </Typography>
+                    {course.originalData?.description && (
+                      <Typography variant="body2" color="text.secondary" mb={2} sx={{ 
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis'
+                      }}>
+                        {course.originalData.description}
+                      </Typography>
+                    )}
                     <Box mb={2}>
                       <Typography variant="body2" color="text.secondary">
                         Skills: {course.skill}
@@ -7694,23 +9693,32 @@ const AdminDashboard = () => {
         </Box>
       )}
     </Box>
-  );
+    );
+  };
 
   // Sample analytics data - In real app, this would come from context/API
-  const getAnalyticsData = () => ({
-    totalLearners: employees.length,
-    completionRate: 75,
-    averageRating: 4.5,
-    activeSessions: publishedSessions.length,
-    totalSessionsCompleted: publishedSessions.length,
-    topPerformers: employees.slice(0, 5).map((emp, idx) => ({
-      id: emp.id,
-      name: emp.name,
-      department: emp.department,
-      sessionsCompleted: Math.floor(Math.random() * 10) + 1,
-      completionRate: Math.floor(Math.random() * 40) + 60
-    }))
-  });
+  const getAnalyticsData = () => {
+    const completedCount = employeeCompletions.length;
+    const totalPublished = publishedSessions.length;
+    const completionRate =
+      totalPublished > 0 ? Math.round((completedCount / totalPublished) * 100) : (completedCount > 0 ? 100 : 0);
+    const activeSessionCount = Math.max(totalPublished - completedCount, 0);
+
+    return {
+      totalLearners: employees.length,
+      completionRate,
+      averageRating: 4.5,
+      activeSessions: activeSessionCount,
+      totalSessionsCompleted: completedCount,
+      topPerformers: employees.slice(0, 5).map((emp, idx) => ({
+        id: emp.id,
+        name: emp.name,
+        department: emp.department,
+        sessionsCompleted: Math.floor(Math.random() * 10) + 1,
+        completionRate: Math.floor(Math.random() * 40) + 60
+      }))
+    };
+  };
 
   const renderAnalyticsDashboard = () => {
     const analyticsData = getAnalyticsData();
@@ -7964,7 +9972,7 @@ const AdminDashboard = () => {
 
     const reportTitles = {
       'all-learners': 'All Learner\'s Report',
-      'course-status': 'Course Status Report',
+      'course-status': 'Session Status Report',
       'learner-status': 'Learner Status Report'
     };
 
@@ -7974,11 +9982,11 @@ const AdminDashboard = () => {
 
     const getReportColumns = () => {
       if (selectedReport === 'all-learners') {
-        return ['USER NAME', 'EMP ID', 'JOB TITLE', 'DEPARTMENT', 'BUSINESS UNIT', 'REPORTING MANAGER', 'EMPLOYMENT STATUS', 'COURSES ENROLLED', 'COURSES NOT STARTED', 'COURSES COMPLETED'];
+        return ['USER NAME', 'EMP ID', 'JOB TITLE', 'DEPARTMENT', 'BUSINESS UNIT', 'REPORTING MANAGER', 'EMPLOYMENT STATUS', 'SESSIONS ENROLLED', 'SESSIONS NOT STARTED', 'SESSIONS COMPLETED'];
       } else if (selectedReport === 'course-status') {
-        return ['COURSE TITLE', 'LEARNERS ENROLLED', 'LEARNERS COMPLETED', 'COMPLETION RATE', 'STATUS'];
+        return ['SESSION TITLE', 'LEARNERS ENROLLED', 'LEARNERS COMPLETED', 'COMPLETION RATE', 'STATUS'];
       } else if (selectedReport === 'learner-status') {
-        return ['USER NAME', 'COURSE TITLE', 'COMPLETION STATUS', 'TIME SPENT', 'PROGRESS'];
+        return ['USER NAME', 'SESSION TITLE', 'COMPLETION STATUS', 'TIME SPENT', 'PROGRESS'];
       }
       return [];
     };
@@ -8078,7 +10086,7 @@ const AdminDashboard = () => {
         {/* Search and Actions */}
         <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
           <TextField
-            placeholder="Search by course title"
+            placeholder="Search by session title"
             value={reportSearchTerm}
             onChange={(e) => setReportSearchTerm(e.target.value)}
             size="small"
@@ -8129,10 +10137,10 @@ const AdminDashboard = () => {
                             'BUSINESS UNIT': 'businessUnit',
                             'REPORTING MANAGER': 'reportingManager',
                             'EMPLOYMENT STATUS': 'employmentStatus',
-                            'COURSES ENROLLED': 'coursesEnrolled',
-                            'COURSES NOT STARTED': 'coursesNotStarted',
-                            'COURSES COMPLETED': 'coursesCompleted',
-                            'COURSE TITLE': 'courseTitle',
+                            'SESSIONS ENROLLED': 'coursesEnrolled',
+                            'SESSIONS NOT STARTED': 'coursesNotStarted',
+                            'SESSIONS COMPLETED': 'coursesCompleted',
+                            'SESSION TITLE': 'courseTitle',
                             'LEARNERS ENROLLED': 'learnersEnrolled',
                             'LEARNERS COMPLETED': 'learnersCompleted',
                             'COMPLETION RATE': 'completionRate',
@@ -8218,7 +10226,7 @@ const AdminDashboard = () => {
       },
       {
         id: 'course-status',
-        title: 'Course Status Report',
+        title: 'Session Status Report',
         description: 'This report shows the list of courses with details of course consumption & completion.'
       },
       {
@@ -8235,7 +10243,7 @@ const AdminDashboard = () => {
     return (
       <Box display="flex" sx={{ minHeight: 'calc(100vh - 64px)' }}>
         {/* Sidebar - Categories */}
-        <Box sx={{ width: 240, backgroundColor: '#f8f9fa', borderRight: '1px solid #e5e7eb', p: 2 }}>
+        <Box sx={{ width: 240, backgroundColor: 'white', borderRight: '1px solid #e5e7eb', p: 2 }}>
           <Typography variant="h6" fontWeight="bold" gutterBottom sx={{ px: 2, py: 1 }}>
             Categories
           </Typography>
@@ -8247,9 +10255,9 @@ const AdminDashboard = () => {
                 sx={{
                   mb: 0.5,
                   backgroundColor: selectedReportCategory === category.id ? '#d1fae5' : 'transparent',
-                  borderLeft: selectedReportCategory === category.id ? '4px solid #8b5cf6' : '4px solid transparent',
+                  borderLeft: selectedReportCategory === category.id ? '4px solid #10b981' : '4px solid transparent',
                   '&:hover': {
-                    backgroundColor: '#f3f4f6'
+                    backgroundColor: selectedReportCategory === category.id ? '#d1fae5' : '#f0fdf4'
                   }
                 }}
               >
@@ -8257,10 +10265,16 @@ const AdminDashboard = () => {
                   onClick={() => setSelectedReportCategory(category.id)}
                   sx={{ py: 1.5, px: 2 }}
                 >
-                  <ListItemIcon sx={{ minWidth: 36 }}>
+                  <ListItemIcon sx={{ minWidth: 36, color: selectedReportCategory === category.id ? '#10b981' : 'inherit' }}>
                     {category.icon}
                   </ListItemIcon>
-                  <ListItemText primary={category.label} />
+                  <ListItemText 
+                    primary={category.label} 
+                    primaryTypographyProps={{
+                      color: selectedReportCategory === category.id ? '#10b981' : 'inherit',
+                      fontWeight: selectedReportCategory === category.id ? 600 : 400
+                    }}
+                  />
                 </ListItemButton>
               </ListItem>
             ))}
@@ -8352,38 +10366,142 @@ const AdminDashboard = () => {
   };
 
   const renderManageSession = () => {
+    // Define steps for the progress bar
+    const steps = [
+      { label: 'Create a New Session', value: 'create' },
+      { label: 'Content Creator', value: 'content-creator' },
+      { label: 'Checkpoint Assessment', value: 'assessment' },
+      { label: 'Certification', value: 'certification' },
+      { label: 'Manage Sessions', value: 'all-sessions' },
+      { label: 'Schedule', value: 'schedule' }
+    ];
+
+    // Find current step index
+    const currentStepIndex = steps.findIndex(step => step.value === (manageSessionTab || 'create'));
+
+    // Custom Step Connector for better styling
+    const CustomStepConnector = styled(StepConnector)(({ theme }) => ({
+      [`&.${stepConnectorClasses.alternativeLabel}`]: {
+        top: 22,
+      },
+      [`&.${stepConnectorClasses.active}`]: {
+        [`& .${stepConnectorClasses.line}`]: {
+          borderColor: '#3b82f6',
+          borderTopWidth: 3,
+        },
+      },
+      [`&.${stepConnectorClasses.completed}`]: {
+        [`& .${stepConnectorClasses.line}`]: {
+          borderColor: '#10b981',
+          borderTopWidth: 3,
+        },
+      },
+      [`& .${stepConnectorClasses.line}`]: {
+        borderColor: '#e5e7eb',
+        borderTopWidth: 2,
+        borderRadius: 1,
+      },
+    }));
+
+    // Custom Step Icon Component
+    const StepIcon = ({ active, completed, stepNumber }) => (
+      <Box
+        sx={{
+          width: 44,
+          height: 44,
+          borderRadius: '50%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: completed ? '#10b981' : active ? '#3b82f6' : '#e5e7eb',
+          color: (completed || active) ? 'white' : '#9ca3af',
+          fontWeight: 'bold',
+          fontSize: '1.1rem',
+          transition: 'all 0.3s ease',
+          cursor: 'pointer',
+          '&:hover': {
+            transform: 'scale(1.1)',
+            boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)',
+          }
+        }}
+      >
+        {completed ? <CheckCircleIcon /> : stepNumber}
+      </Box>
+    );
+
     return (
       <Box>
-        {/* Tabs */}
-        <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-          <Tabs
-            value={manageSessionTab || 'all-sessions'}
-            onChange={(e, newValue) => handleManageSessionTabChange(newValue)}
-            sx={{ px: 3, pt: 2 }}
+        {/* Numbered Progress Bar */}
+        <Box sx={{ 
+          backgroundColor: 'white', 
+          py: 4, 
+          px: 3,
+          borderBottom: '1px solid #e5e7eb',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+        }}>
+          <Stepper 
+            activeStep={currentStepIndex >= 0 ? currentStepIndex : steps.length - 1} 
+            alternativeLabel
+            connector={<CustomStepConnector />}
+            sx={{ width: '100%' }}
           >
-            <Tab label="Create a New Session" value="create" />
-            <Tab label="Content Creator" value="content-creator" />
-            <Tab label="Live Trainings" value="live-trainings" />
-            <Tab label="Checkpoint Assessment" value="assessment" />
-            <Tab label="Certification" value="certification" />
-            <Tab label="Manage Sessions" value="all-sessions" />
-          </Tabs>
+            {steps.map((step, index) => (
+              <Step 
+                key={step.value}
+                onClick={() => handleManageSessionTabChange(step.value)}
+                sx={{ 
+                  cursor: 'pointer',
+                  '& .MuiStepLabel-root': {
+                    cursor: 'pointer'
+                  }
+                }}
+              >
+                <StepLabel
+                  StepIconComponent={(props) => (
+                    <StepIcon 
+                      {...props} 
+                      stepNumber={index + 1}
+                      active={currentStepIndex === index}
+                      completed={currentStepIndex > index}
+                    />
+                  )}
+                  sx={{
+                    '& .MuiStepLabel-label': {
+                      fontWeight: currentStepIndex === index ? 600 : 400,
+                      color: currentStepIndex === index ? '#3b82f6' : currentStepIndex > index ? '#10b981' : '#6b7280',
+                      fontSize: '0.9rem',
+                      mt: 1,
+                      '&.Mui-active': {
+                        color: '#3b82f6',
+                      },
+                      '&.Mui-completed': {
+                        color: '#10b981',
+                      }
+                    }
+                  }}
+                >
+                  {step.label}
+                </StepLabel>
+              </Step>
+            ))}
+          </Stepper>
         </Box>
 
         {/* Tab Content */}
-        {(manageSessionTab === 'all-sessions' || !manageSessionTab) ? renderAllSessions() :
-         manageSessionTab === 'create' ? (showContentCreator ? renderContentCreator() : renderCreateSession()) :
+        {manageSessionTab === 'create' ? (showContentCreator ? renderContentCreator() : renderCreateSession()) :
          manageSessionTab === 'content-creator' ? renderContentCreator() :
-         manageSessionTab === 'live-trainings' ? renderLiveTrainings() :
          manageSessionTab === 'assessment' ? <InteractiveQuiz 
-           onSave={handleQuizSave} 
-           onPublish={handlePublishQuiz}
-           onSaveDraft={handleSaveQuizAsDraft}
-           onCancel={handleQuizCancel}
-           existingQuizData={currentQuizData}
-         /> :
+          onSave={handleQuizSave} 
+          onPublish={handlePublishQuiz}
+          onSaveDraft={handleSaveQuizAsDraft}
+          onCancel={handleQuizCancel}
+          onSkip={handleQuizSkip}
+          existingQuizData={currentQuizData}
+        /> :
          manageSessionTab === 'certification' ? renderCertificationTemplates() :
-         null}
+         manageSessionTab === 'all-sessions' ? renderAllSessions() :
+         manageSessionTab === 'schedule' ? renderScheduleSessions() :
+         (showContentCreator ? renderContentCreator() : renderCreateSession())}
       </Box>
     );
   };
@@ -8424,10 +10542,57 @@ const AdminDashboard = () => {
     <DashboardContainer>
       {/* Sidebar */}
       <Sidebar>
-        <Typography variant="h5" fontWeight="bold" gutterBottom>
-          HR Session Management
-        </Typography>
-        <Divider sx={{ my: 2, backgroundColor: '#374151' }} />
+        {/* Logo and Text Side by Side */}
+        <Box 
+          sx={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: 1.5,
+            mb: 2,
+            height: 64
+          }}
+        >
+          <Box
+            component="img"
+            src={GrowGridLogo}
+            alt="GrowGrid logo"
+            sx={{ 
+              width: 'auto', 
+              height: 64, 
+              maxWidth: '80px',
+              display: 'block',
+              objectFit: 'contain',
+              flexShrink: 0
+            }}
+          />
+          <Box>
+            <Typography 
+              variant="h5" 
+              fontWeight="bold" 
+              sx={{ 
+                lineHeight: 1.1,
+                letterSpacing: '0.02em',
+                mb: 0,
+                color: '#374151'
+              }}
+            >
+              GROW
+            </Typography>
+            <Typography 
+              variant="h5" 
+              fontWeight="bold"
+              sx={{ 
+                lineHeight: 1.1,
+                letterSpacing: '0.02em',
+                mt: 0,
+                color: '#374151'
+              }}
+            >
+              GRID
+            </Typography>
+          </Box>
+        </Box>
+        <Divider sx={{ my: 2, backgroundColor: '#e5e7eb' }} />
         <List>
           {navigationItems.map((item) => (
             <ListItem 
@@ -8462,20 +10627,26 @@ const AdminDashboard = () => {
                 }
               }}
               sx={{
-                backgroundColor: activeTab === item.id ? '#3b82f6' : 'transparent',
+                backgroundColor: activeTab === item.id ? '#10b981' : 'transparent',
                 borderRadius: 1,
                 mb: 1,
                 position: 'relative',
                 cursor: 'pointer',
                 '&:hover': {
-                  backgroundColor: activeTab === item.id ? '#3b82f6' : '#374151',
+                  backgroundColor: activeTab === item.id ? '#10b981' : '#f0fdf4',
                 },
               }}
             >
-              <ListItemIcon sx={{ color: 'white' }}>
+              <ListItemIcon sx={{ color: activeTab === item.id ? 'white' : '#374151' }}>
                 {item.icon}
               </ListItemIcon>
-              <ListItemText primary={item.label} />
+              <ListItemText 
+                primary={item.label}
+                primaryTypographyProps={{
+                  color: activeTab === item.id ? 'white' : '#374151',
+                  fontWeight: activeTab === item.id ? 600 : 400
+                }}
+              />
               
               {/* Settings Submenu */}
               {item.id === 'settings' && showSettingsSubmenu && (
@@ -8486,11 +10657,11 @@ const AdminDashboard = () => {
                     top: 0,
                     ml: 1,
                     minWidth: 250,
-                    backgroundColor: '#1e293b',
+                    backgroundColor: 'white',
                     borderRadius: 2,
-                    boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+                    boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
                     zIndex: 1000,
-                    border: '1px solid #374151',
+                    border: '1px solid #e5e7eb',
                   }}
                   onMouseEnter={() => setShowSettingsSubmenu(true)}
                   onMouseLeave={() => setShowSettingsSubmenu(false)}
@@ -8507,13 +10678,13 @@ const AdminDashboard = () => {
                         borderRadius: 1,
                         mb: 0.5,
                         '&:hover': {
-                          backgroundColor: '#374151',
+                          backgroundColor: '#f0fdf4',
                         },
                       }}
                     >
                       <ListItemText 
                         primary="Manage Employee Accounts" 
-                        primaryTypographyProps={{ fontSize: '0.875rem' }}
+                        primaryTypographyProps={{ fontSize: '0.875rem', color: '#374151' }}
                       />
                     </ListItem>
                     <ListItem
@@ -8526,13 +10697,13 @@ const AdminDashboard = () => {
                       sx={{
                         borderRadius: 1,
                         '&:hover': {
-                          backgroundColor: '#374151',
+                          backgroundColor: '#f0fdf4',
                         },
                       }}
                     >
                       <ListItemText 
                         primary="Add Employee" 
-                        primaryTypographyProps={{ fontSize: '0.875rem' }}
+                        primaryTypographyProps={{ fontSize: '0.875rem', color: '#374151' }}
                       />
                     </ListItem>
                   </List>
@@ -8548,7 +10719,7 @@ const AdminDashboard = () => {
       <MainContent>
         {/* Header */}
         <HeaderBar position="static">
-          <Toolbar>
+          <Toolbar sx={{ minHeight: '64px !important' }}>
             <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
               Welcome back, Admin
             </Typography>
@@ -8599,7 +10770,6 @@ const AdminDashboard = () => {
            onPreview={handleQuizPreview}
            onPublish={handlePublishQuiz}
          /> :
-         activeTab === 'schedule' ? renderScheduleSessions() :
          activeTab === 'approvals' ? <Approvals /> :
          activeTab === 'course-library' ? renderCourseLibrary() :
          activeTab === 'analytics' ? renderAnalytics() :

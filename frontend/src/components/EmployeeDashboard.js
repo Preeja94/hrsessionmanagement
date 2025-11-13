@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -43,6 +43,7 @@ import {
   Star as StarIcon,
   Edit as EditIcon,
   Logout as LogoutIcon,
+  Lock as LockIcon,
   Person as PersonIcon,
   Phone as PhoneIcon,
   Work as WorkIcon,
@@ -56,6 +57,7 @@ import CourseLibrary from './CourseLibrary';
 import Reports from './Reports';
 import SessionDetail from './SessionDetail';
 import SessionContentView from './SessionContentView';
+import GrowGridLogo from '../assets/Grow Grid logo.PNG';
 
 const DashboardContainer = styled(Box)(({ theme }) => ({
   minHeight: '100vh',
@@ -65,11 +67,12 @@ const DashboardContainer = styled(Box)(({ theme }) => ({
 
 const Sidebar = styled(Box)(({ theme }) => ({
   width: 280,
-  backgroundColor: '#1e293b',
-  color: 'white',
+  backgroundColor: 'white',
+  color: '#374151',
   padding: theme.spacing(2),
   display: 'flex',
   flexDirection: 'column',
+  borderRight: '1px solid #e5e7eb',
 }));
 
 const MainContent = styled(Box)(({ theme }) => ({
@@ -78,19 +81,50 @@ const MainContent = styled(Box)(({ theme }) => ({
   flexDirection: 'column',
 }));
 
+const normalizePublishedSession = (session = {}) => ({
+  ...session,
+  scheduledDate: session.scheduledDate || null,
+  scheduledTime: session.scheduledTime || null,
+  scheduledDateTime: session.scheduledDateTime || null,
+  dueDate: session.dueDate || null,
+  dueTime: session.dueTime || null,
+  dueDateTime: session.dueDateTime || null,
+  isLocked: session.isLocked ?? false,
+  approvalExpiresAt: session.approvalExpiresAt || null,
+  lastApprovalDate: session.lastApprovalDate || null,
+  lockedAt: session.lockedAt || null,
+  completedAt: session.completedAt || null,
+  lastCompletionScore: session.lastCompletionScore ?? null,
+  lastFeedback: session.lastFeedback || null
+});
+
+const loadPublishedSessions = () => {
+  const stored = localStorage.getItem('published_sessions');
+  if (stored) {
+    try {
+      const parsed = JSON.parse(stored);
+      return Array.isArray(parsed) ? parsed.map(normalizePublishedSession) : [];
+    } catch (error) {
+      console.error('Failed to load published sessions', error);
+    }
+  }
+  return [];
+};
+
 const HeaderBar = styled(AppBar)(({ theme }) => ({
   backgroundColor: 'white',
   color: '#374151',
   boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
 }));
 
-const MetricsCard = styled(Card)(({ theme, color }) => ({
-  padding: theme.spacing(3),
+const MetricsCard = styled(Card)(({ theme, color = '#153B1A' }) => ({
+  padding: theme.spacing(2),
   textAlign: 'center',
-  background: color || 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-  color: 'white',
+  backgroundColor: 'white',
+  color: '#333',
   borderRadius: theme.spacing(2),
   boxShadow: '0 4px 20px rgba(0,0,0,0.1)',
+  border: `2px solid ${color}`,
   '&:hover': {
     transform: 'translateY(-2px)',
     boxShadow: '0 8px 25px rgba(0,0,0,0.15)',
@@ -118,10 +152,43 @@ const EmployeeDashboard = () => {
   const [selectedSession, setSelectedSession] = useState(null);
   
   // Dynamic metrics state
-  const [completedSessions, setCompletedSessions] = useState([2]); // Array of completed session IDs
+  const [completedSessions, setCompletedSessions] = useState(() => {
+    try {
+      const stored = localStorage.getItem('employee_completed_sessions');
+      const parsed = stored ? JSON.parse(stored) : [];
+      const initialSet = new Set([2, ...parsed]);
+      return Array.from(initialSet);
+    } catch (error) {
+      console.error('Failed to load completed sessions', error);
+      return [2];
+    }
+  }); // Array of completed session IDs
   const [activeSessions, setActiveSessions] = useState(1);
   const [totalSessionsStarted, setTotalSessionsStarted] = useState(2);
   const [certificatesEarned, setCertificatesEarned] = useState(1);
+  const [sessionCertifications, setSessionCertifications] = useState(() => {
+    try {
+      const stored = localStorage.getItem('session_certifications');
+      return stored ? JSON.parse(stored) : {};
+    } catch (error) {
+      console.error('Failed to read session certifications', error);
+      return {};
+    }
+  });
+  const [publishedSessions, setPublishedSessions] = useState(loadPublishedSessions);
+  const persistPublishedSessions = useCallback((updater) => {
+    setPublishedSessions(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      const normalized = Array.isArray(next) ? next.map(normalizePublishedSession) : [];
+      try {
+        localStorage.setItem('published_sessions', JSON.stringify(normalized));
+        window.dispatchEvent(new Event('published-sessions-updated'));
+      } catch (error) {
+        console.error('Failed to persist published sessions', error);
+      }
+      return normalized;
+    });
+  }, []);
   
   // Profile data
   const [profileData, setProfileData] = useState({
@@ -164,18 +231,258 @@ const EmployeeDashboard = () => {
 
   const [notificationAnchorEl, setNotificationAnchorEl] = useState(null);
 
+  const hasCertificationForSession = (sessionId) => {
+    if (!sessionId) return false;
+    return Boolean(sessionCertifications && sessionCertifications[sessionId]);
+  };
+
+  useEffect(() => {
+    const syncSessionCertifications = () => {
+      try {
+        const stored = localStorage.getItem('session_certifications');
+        setSessionCertifications(stored ? JSON.parse(stored) : {});
+      } catch (error) {
+        console.error('Failed to sync session certifications', error);
+      }
+    };
+
+    window.addEventListener('session-certifications-updated', syncSessionCertifications);
+    window.addEventListener('storage', syncSessionCertifications);
+
+    return () => {
+      window.removeEventListener('session-certifications-updated', syncSessionCertifications);
+      window.removeEventListener('storage', syncSessionCertifications);
+    };
+  }, []);
+
+  useEffect(() => {
+    const syncPublished = () => {
+      const loaded = loadPublishedSessions();
+      console.log('Employee dashboard: Published sessions updated', loaded.length, 'sessions');
+      setPublishedSessions(loaded);
+    };
+
+    window.addEventListener('published-sessions-updated', syncPublished);
+    const handleStorage = (event) => {
+      if (event.key === 'published_sessions') {
+        console.log('Employee dashboard: Storage event detected for published_sessions');
+        syncPublished();
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+
+    return () => {
+      window.removeEventListener('published-sessions-updated', syncPublished);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('employee_completed_sessions', JSON.stringify(completedSessions));
+      window.dispatchEvent(new Event('employee-completions-updated'));
+    } catch (error) {
+      console.error('Failed to persist employee completed sessions', error);
+    }
+  }, [completedSessions]);
+
+  useEffect(() => {
+    if (!publishedSessions.length) return;
+
+    const now = new Date();
+    let changed = false;
+
+    const updatedSessions = publishedSessions.map((session) => {
+      const completed = completedSessions.includes(session.id);
+      const dueDateTime = session.dueDateTime ? new Date(session.dueDateTime) : null;
+      const approvalExpiresAt = session.approvalExpiresAt ? new Date(session.approvalExpiresAt) : null;
+
+      if (completed) {
+        if (session.status !== 'completed' || session.isLocked || session.approvalExpiresAt) {
+          changed = true;
+          return normalizePublishedSession({
+            ...session,
+            status: 'completed',
+            isLocked: false,
+            approvalExpiresAt: null,
+            lockedAt: null
+          });
+        }
+        return session;
+      }
+
+      let shouldLock = false;
+      if (approvalExpiresAt && now > approvalExpiresAt) {
+        shouldLock = true;
+      } else if (dueDateTime && now > dueDateTime) {
+        shouldLock = true;
+      }
+
+      if (shouldLock) {
+        if (!session.isLocked || session.status !== 'locked') {
+          changed = true;
+          return normalizePublishedSession({
+            ...session,
+            isLocked: true,
+            status: 'locked',
+            lockedAt: session.lockedAt || new Date().toISOString()
+          });
+        }
+      } else if (session.isLocked) {
+        changed = true;
+        return normalizePublishedSession({
+          ...session,
+          isLocked: false,
+          status: session.status === 'locked' ? 'scheduled' : session.status,
+          lockedAt: null
+        });
+      }
+
+      return session;
+    });
+
+    if (changed) {
+      persistPublishedSessions(updatedSessions);
+    }
+  }, [publishedSessions, completedSessions, persistPublishedSessions]);
+
+  useEffect(() => {
+    const earnedCount = completedSessions.reduce((count, sessionId) => {
+      return sessionCertifications && sessionCertifications[sessionId] ? count + 1 : count;
+    }, 0);
+    setCertificatesEarned(earnedCount);
+  }, [completedSessions, sessionCertifications]);
+
+  useEffect(() => {
+    const total = publishedSessions.length;
+    setTotalSessionsStarted(total);
+    const activeCount = publishedSessions.filter(
+      session => !session.isLocked && !completedSessions.includes(session.id)
+    ).length;
+    setActiveSessions(activeCount);
+  }, [publishedSessions, completedSessions]);
+
+  useEffect(() => {
+    setSelectedSession((prev) => {
+      if (!prev) return prev;
+      const hasCertification = hasCertificationForSession(prev.id) || prev.certificate || prev.hasCertificate;
+      if (prev.hasCertificate === hasCertification && prev.certificate === hasCertification) {
+        return prev;
+      }
+      return {
+        ...prev,
+        hasCertificate: hasCertification,
+        certificate: hasCertification
+      };
+    });
+  }, [sessionCertifications, publishedSessions]);
+
+  const enrichedSessions = useMemo(() => {
+    if (!publishedSessions.length) return [];
+    return publishedSessions.map((session) => {
+      const completed = completedSessions.includes(session.id);
+      const hasCertification = Boolean(sessionCertifications[session.id]);
+      const dueDateObj = session.dueDateTime ? new Date(session.dueDateTime) : null;
+      const approvalExpiresObj = session.approvalExpiresAt ? new Date(session.approvalExpiresAt) : null;
+      const scheduledDateObj = session.scheduledDateTime ? new Date(session.scheduledDateTime) : null;
+      const status = completed
+        ? 'completed'
+        : session.isLocked
+          ? 'locked'
+          : session.status && session.status !== 'locked'
+            ? session.status
+            : 'in-progress';
+
+      const progress = completed ? 100 : session.progress ?? 0;
+
+      return {
+        ...session,
+        status,
+        completed,
+        progress,
+        instructor: session.instructor || 'HR Team',
+        dueDateObj,
+        approvalExpiresObj,
+        scheduledDateObj,
+        hasCertificate: hasCertification && completed,
+        certificate: hasCertification && completed
+      };
+    });
+  }, [publishedSessions, completedSessions, sessionCertifications]);
+
+  const lockedSessionsList = useMemo(
+    () => enrichedSessions.filter(session => session.status === 'locked' && !session.completed),
+    [enrichedSessions]
+  );
+
+  const openSessionsList = useMemo(
+    () => enrichedSessions.filter(session => session.status !== 'locked'),
+    [enrichedSessions]
+  );
+
+  const getPrimarySessionDate = useCallback((session) => {
+    if (!session) return null;
+    if (session.scheduledDateObj) return session.scheduledDateObj;
+    if (session.dueDateObj) return session.dueDateObj;
+    if (session.approvalExpiresObj) return session.approvalExpiresObj;
+    if (session.createdAt) {
+      const created = new Date(session.createdAt);
+      if (!Number.isNaN(created.getTime())) return created;
+    }
+    return null;
+  }, []);
+
+  const formatRelativeTime = useCallback((value) => {
+    if (!value) return 'Just now';
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return 'Just now';
+
+    const diffMs = Date.now() - date.getTime();
+    if (diffMs <= 0) return 'Just now';
+
+    const diffMinutes = Math.round(diffMs / 60000);
+    if (diffMinutes < 1) return 'Just now';
+    if (diffMinutes < 60) return `${diffMinutes} minute${diffMinutes === 1 ? '' : 's'} ago`;
+
+    const diffHours = Math.round(diffMinutes / 60);
+    if (diffHours < 24) return `${diffHours} hour${diffHours === 1 ? '' : 's'} ago`;
+
+    const diffDays = Math.round(diffHours / 24);
+    if (diffDays < 7) return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
+
+    const diffWeeks = Math.round(diffDays / 7);
+    if (diffWeeks < 4) return `${diffWeeks} week${diffWeeks === 1 ? '' : 's'} ago`;
+
+    return date.toLocaleDateString();
+  }, []);
+
+  const getSessionDetails = useCallback((session) => {
+    if (!session) return null;
+    const base = typeof session === 'object'
+      ? session
+      : enrichedSessions.find(item => item.id === session);
+
+    if (!base) return null;
+
+    const hasCertification = hasCertificationForSession(base.id) || base.certificate || base.hasCertificate;
+
+    return {
+      ...base,
+      hasCertificate: hasCertification && base.completed,
+      certificate: hasCertification && base.completed
+    };
+  }, [enrichedSessions, sessionCertifications]);
+
+  const completionRateValue = totalSessionsStarted > 0
+    ? Math.round((completedSessions.length / totalSessionsStarted) * 100)
+    : 0;
+
   const metrics = [
     { 
-      label: 'Total Sessions Attended', 
+      label: 'Total Sessions', 
       value: totalSessionsStarted, 
-      color: '#3b82f6', 
+      color: '#153B1A', 
       icon: <CheckCircleIcon /> 
-    },
-    { 
-      label: 'Completion Rate', 
-      value: `${Math.round((completedSessions.length / totalSessionsStarted) * 100)}%`, 
-      color: '#10b981', 
-      icon: <TrendingUpIcon /> 
     },
     { 
       label: 'Active Sessions', 
@@ -188,48 +495,75 @@ const EmployeeDashboard = () => {
       value: certificatesEarned, 
       color: '#ef4444', 
       icon: <StarIcon /> 
+    },
+    { 
+      label: 'Completion Rate', 
+      value: `${completionRateValue}%`, 
+      color: '#10b981', 
+      icon: <TrendingUpIcon /> 
     }
   ];
 
-  const latestSession = {
-    id: 1,
-    title: 'Mental Health & Wellbeing',
-    instructor: 'Dr. Sarah Johnson',
-    date: '2024-12-25',
-    time: '10:00 AM',
-    duration: '60 minutes',
-    status: 'live',
-    description: 'Comprehensive session on maintaining mental wellness in the workplace'
-  };
+  const latestSession = useMemo(() => {
+    const latestPublished = [...enrichedSessions].sort(
+      (a, b) => (b.scheduledDateObj || new Date(b.createdAt || '')).getTime() - (a.scheduledDateObj || new Date(a.createdAt || '')).getTime()
+    )[0];
 
-  const recentActivity = [
-    {
-      id: 1,
-      action: 'Completed session',
-      session: 'JavaScript ES6+ Mastery',
-      time: '2 hours ago',
-      icon: <CheckCircleIcon />
-    },
-    {
-      id: 2,
-      action: 'Started session',
-      session: 'Mental Health & Wellbeing',
-      time: '1 day ago',
-      icon: <PlayIcon />
-    },
-    {
-      id: 3,
-      action: 'Earned certificate',
-      session: 'React Fundamentals',
-      time: '3 days ago',
-      icon: <StarIcon />
+    if (latestPublished) {
+      return {
+        id: latestPublished.id,
+        title: latestPublished.title || 'Latest Session',
+        instructor: latestPublished.instructor || 'HR Team',
+        date: latestPublished.date || (latestPublished.scheduledDateObj ? latestPublished.scheduledDateObj.toLocaleDateString() : 'TBD'),
+        time: latestPublished.time || (latestPublished.scheduledDateObj ? latestPublished.scheduledDateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'TBD'),
+        duration: latestPublished.duration || '60 minutes',
+        status: latestPublished.status || 'in-progress',
+        description: latestPublished.description || 'Stay tuned for more details.'
+      };
     }
-  ];
+
+    return {
+      id: null,
+      title: 'No sessions available yet',
+      instructor: 'HR Team',
+      date: 'TBD',
+      time: 'TBD',
+      duration: 'TBD',
+      status: 'info',
+      description: 'Once new sessions are published, they will appear here.'
+    };
+  }, [enrichedSessions]);
+
+  const recentActivity = useMemo(() => {
+    if (!enrichedSessions.length) return [];
+
+    const events = enrichedSessions.map((session) => {
+      const referenceDate = session.completed
+        ? new Date(session.completedAt || session.lastCompletionScoreDate || session.scheduledDateTime || session.createdAt || Date.now())
+        : getPrimarySessionDate(session) || new Date(session.createdAt || Date.now());
+
+      const isCompleted = session.completed;
+      const isLocked = session.isLocked;
+
+      return {
+        id: `${session.id}-${isCompleted ? 'completed' : 'upcoming'}`,
+        action: isCompleted ? 'Completed session' : isLocked ? 'Session locked' : 'Upcoming session',
+        session: session.title || 'Untitled session',
+        time: formatRelativeTime(referenceDate),
+                  icon: isCompleted ? <CheckCircleIcon sx={{ color: '#10b981' }} /> : isLocked ? <LockIcon sx={{ color: '#ef4444' }} /> : <ScheduleIcon sx={{ color: '#153B1A' }} />,
+        sortDate: referenceDate ? referenceDate.getTime() : Date.now()
+      };
+    });
+
+    return events
+      .sort((a, b) => b.sortDate - a.sortDate)
+      .slice(0, 5);
+  }, [enrichedSessions, formatRelativeTime, getPrimarySessionDate]);
 
   const navigationItems = [
     { id: 'dashboard', label: 'Dashboard', icon: <DashboardIcon /> },
-    { id: 'my-courses', label: 'My Courses', icon: <SchoolIcon /> },
-    { id: 'course-library', label: 'Course Library', icon: <LibraryIcon /> },
+    { id: 'my-courses', label: 'My Sessions', icon: <SchoolIcon /> },
+    { id: 'course-library', label: 'Session Library', icon: <LibraryIcon /> },
     { id: 'reports', label: 'Reports', icon: <ReportsIcon /> },
   ];
 
@@ -273,15 +607,45 @@ const EmployeeDashboard = () => {
     setShowProfile(true);
   };
 
-  const handleSessionComplete = (sessionId) => {
-    setCompletedSessions(prev => [...prev, sessionId]);
-    setActiveSessions(prev => Math.max(0, prev - 1));
-    setCertificatesEarned(prev => prev + 1);
+  const handleSessionComplete = (session) => {
+    if (!session || !session.id) return;
+    const sessionId = session.id;
+    const alreadyCompleted = completedSessions.includes(sessionId);
+    const completionDate = new Date().toISOString();
+    const score = session.score ?? session.lastCompletionScore ?? null;
+    const feedback = session.feedback ?? session.lastFeedback ?? null;
+
+    if (!alreadyCompleted) {
+      setCompletedSessions(prev => [...prev, sessionId]);
+      setActiveSessions(prev => Math.max(0, prev - 1));
+    }
+
+    persistPublishedSessions(prev => prev.map(s => {
+      if (s.id !== sessionId) return s;
+      return normalizePublishedSession({
+        ...s,
+        status: 'completed',
+        isLocked: false,
+        approvalExpiresAt: null,
+        lockedAt: null,
+        completedAt: completionDate,
+        lastCompletionScore: score,
+        lastFeedback: feedback
+      });
+    }));
   };
 
   const handleSessionStart = (sessionId) => {
-    setActiveSessions(prev => prev + 1);
-    setTotalSessionsStarted(prev => prev + 1);
+    if (!sessionId) return;
+    persistPublishedSessions(prev => prev.map(session => {
+      if (session.id !== sessionId) return session;
+      if (session.status === 'locked') return session;
+      return normalizePublishedSession({
+        ...session,
+        status: session.status === 'completed' ? session.status : 'in-progress',
+        isLocked: false
+      });
+    }));
   };
 
   const handleJoinSession = () => {
@@ -290,7 +654,9 @@ const EmployeeDashboard = () => {
   };
 
   const handleSessionClick = (session) => {
-    setSelectedSession(session);
+    const details = getSessionDetails(session);
+    if (!details) return;
+    setSelectedSession(details);
     setCurrentView('session-detail');
   };
 
@@ -300,12 +666,22 @@ const EmployeeDashboard = () => {
   };
 
   const handleGetStarted = (session) => {
+    if (!session) return;
+    const details = getSessionDetails(session);
+    if (!details) return;
     setCurrentView('session-content');
-    setSelectedSession(session);
+    setSelectedSession(details);
   };
 
-  const handleSessionCompleteFlow = (session) => {
-    handleSessionComplete(session.id);
+  const handleSessionCompleteFlow = ({ session, score, feedback }) => {
+    if (session) {
+      const details = getSessionDetails(session);
+      handleSessionComplete({
+        ...(details || session),
+        score,
+        feedback
+      });
+    }
     setCurrentView('my-courses');
     setActiveTab('my-courses');
   };
@@ -358,7 +734,7 @@ const EmployeeDashboard = () => {
       {/* Header */}
       <Box mb={4}>
         <Typography variant="h4" fontWeight="bold" gutterBottom>
-          Welcome back, {profileData.firstName}!
+          Dashboard
         </Typography>
         <Typography variant="body1" color="text.secondary">
           Ready to continue your learning journey
@@ -370,13 +746,13 @@ const EmployeeDashboard = () => {
         {metrics.map((metric, index) => (
           <Grid item xs={12} sm={6} md={3} key={index}>
             <MetricsCard color={metric.color}>
-              <Box display="flex" alignItems="center" justifyContent="center" mb={2}>
+              <Box display="flex" alignItems="center" justifyContent="center" mb={2} sx={{ color: metric.color }}>
                 {metric.icon}
               </Box>
-              <Typography variant="h3" fontWeight="bold" gutterBottom>
+              <Typography variant="h4" fontWeight="bold" gutterBottom sx={{ color: metric.color }}>
                 {metric.value}
               </Typography>
-              <Typography variant="body1" sx={{ opacity: 0.9 }}>
+              <Typography variant="body2" color="text.secondary">
                 {metric.label}
               </Typography>
             </MetricsCard>
@@ -422,8 +798,8 @@ const EmployeeDashboard = () => {
                 startIcon={<PlayIcon />}
                 onClick={handleJoinSession}
                 sx={{ 
-                  backgroundColor: '#10b981', 
-                  '&:hover': { backgroundColor: '#059669' },
+                  backgroundColor: '#153B1A', 
+                  '&:hover': { backgroundColor: '#0d2a12' },
                   px: 4,
                   py: 1.5
                 }}
@@ -442,19 +818,25 @@ const EmployeeDashboard = () => {
             <Typography variant="h6" fontWeight="bold" gutterBottom>
               Recent Activity
             </Typography>
-            <List>
-              {recentActivity.map((activity) => (
-                <ListItem key={activity.id} sx={{ px: 0 }}>
-                  <ListItemIcon>
-                    {activity.icon}
-                  </ListItemIcon>
-                  <ListItemText
-                    primary={activity.action}
-                    secondary={`${activity.session} • ${activity.time}`}
-                  />
-                </ListItem>
-              ))}
-            </List>
+            {recentActivity.length === 0 ? (
+              <Typography variant="body2" color="text.secondary">
+                Your upcoming sessions and recent progress will appear here once available.
+              </Typography>
+            ) : (
+              <List>
+                {recentActivity.map((activity) => (
+                  <ListItem key={activity.id} sx={{ px: 0 }}>
+                    <ListItemIcon>
+                      {activity.icon}
+                    </ListItemIcon>
+                    <ListItemText
+                      primary={activity.action}
+                      secondary={`${activity.session} • ${activity.time}`}
+                    />
+                  </ListItem>
+                ))}
+              </List>
+            )}
           </ActivityCard>
         </Grid>
 
@@ -471,7 +853,7 @@ const EmployeeDashboard = () => {
                 onClick={() => setActiveTab('my-courses')}
                 fullWidth
               >
-                View My Courses
+                View My Sessions
               </Button>
               <Button
                 variant="outlined"
@@ -479,7 +861,7 @@ const EmployeeDashboard = () => {
                 onClick={() => setActiveTab('course-library')}
                 fullWidth
               >
-                Browse Library
+                Browse Session Library
               </Button>
               <Button
                 variant="outlined"
@@ -536,7 +918,7 @@ const EmployeeDashboard = () => {
               variant="contained"
               startIcon={<EditIcon />}
               onClick={handleEditProfile}
-              sx={{ backgroundColor: '#3b82f6', '&:hover': { backgroundColor: '#2563eb' } }}
+              sx={{ backgroundColor: '#153B1A', '&:hover': { backgroundColor: '#0d2a12' } }}
             >
               Edit Profile
             </Button>
@@ -706,7 +1088,7 @@ const EmployeeDashboard = () => {
           <Button
             variant="contained"
             onClick={handleProfileSave}
-            sx={{ backgroundColor: '#10b981', '&:hover': { backgroundColor: '#059669' } }}
+            sx={{ backgroundColor: '#153B1A', '&:hover': { backgroundColor: '#0d2a12' } }}
           >
             Save Changes
           </Button>
@@ -725,10 +1107,57 @@ const EmployeeDashboard = () => {
     <DashboardContainer>
       {/* Sidebar */}
       <Sidebar>
-        <Typography variant="h5" fontWeight="bold" gutterBottom>
-          Employee Portal
-        </Typography>
-        <Divider sx={{ my: 2, backgroundColor: '#374151' }} />
+        {/* Logo and Text Side by Side */}
+        <Box 
+          sx={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: 1.5,
+            mb: 2,
+            height: 64
+          }}
+        >
+          <Box
+            component="img"
+            src={GrowGridLogo}
+            alt="GrowGrid logo"
+            sx={{ 
+              width: 'auto', 
+              height: 64, 
+              maxWidth: '80px',
+              display: 'block',
+              objectFit: 'contain',
+              flexShrink: 0
+            }}
+          />
+          <Box>
+            <Typography 
+              variant="h5" 
+              fontWeight="bold" 
+              sx={{ 
+                lineHeight: 1.1,
+                letterSpacing: '0.02em',
+                mb: 0,
+                color: '#374151'
+              }}
+            >
+              GROW
+            </Typography>
+            <Typography 
+              variant="h5" 
+              fontWeight="bold"
+              sx={{ 
+                lineHeight: 1.1,
+                letterSpacing: '0.02em',
+                mt: 0,
+                color: '#374151'
+              }}
+            >
+              GRID
+            </Typography>
+          </Box>
+        </Box>
+        <Divider sx={{ my: 2, backgroundColor: '#e5e7eb' }} />
         <List>
           {navigationItems.map((item) => (
             <ListItem 
@@ -736,18 +1165,24 @@ const EmployeeDashboard = () => {
               button 
               onClick={() => handleTabChange(item.id)}
               sx={{
-                backgroundColor: activeTab === item.id ? '#3b82f6' : 'transparent',
+                backgroundColor: activeTab === item.id ? '#153B1A' : 'transparent',
                 borderRadius: 1,
                 mb: 1,
                 '&:hover': {
-                  backgroundColor: activeTab === item.id ? '#3b82f6' : '#374151',
+                  backgroundColor: activeTab === item.id ? '#153B1A' : '#f0fdf4',
                 },
               }}
             >
-              <ListItemIcon sx={{ color: 'white' }}>
+              <ListItemIcon sx={{ color: activeTab === item.id ? 'white' : '#374151' }}>
                 {item.icon}
               </ListItemIcon>
-              <ListItemText primary={item.label} />
+              <ListItemText 
+                primary={item.label}
+                primaryTypographyProps={{
+                  color: activeTab === item.id ? 'white' : '#374151',
+                  fontWeight: activeTab === item.id ? 600 : 400
+                }}
+              />
             </ListItem>
           ))}
         </List>
@@ -756,12 +1191,9 @@ const EmployeeDashboard = () => {
       <MainContent>
         {/* Header */}
         <HeaderBar position="static">
-          <Toolbar>
+          <Toolbar sx={{ minHeight: '64px !important' }}>
             <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-              {activeTab === 'dashboard' ? 'Dashboard' : 
-               activeTab === 'my-courses' ? 'My Courses' :
-               activeTab === 'course-library' ? 'Course Library' :
-               activeTab === 'reports' ? 'Reports' : 'Dashboard'}
+              Welcome back, {profileData.firstName}!
             </Typography>
             
             {/* Notifications */}
@@ -797,12 +1229,13 @@ const EmployeeDashboard = () => {
            <SessionContentView 
              session={selectedSession}
              onComplete={handleSessionCompleteFlow}
+            onBack={handleBackToCourses}
            />
          ) :
          activeTab === 'dashboard' ? renderDashboard() :
          activeTab === 'my-courses' ? (
            <MyCourses 
-             completedSessions={completedSessions.length}
+            sessions={openSessionsList}
              onSessionComplete={handleSessionComplete}
              onSessionStart={handleSessionStart}
              onSessionClick={handleSessionClick}
@@ -810,7 +1243,7 @@ const EmployeeDashboard = () => {
          ) :
          activeTab === 'course-library' ? (
            <CourseLibrary 
-             completedSessions={completedSessions}
+            lockedSessions={lockedSessionsList}
            />
          ) :
          activeTab === 'reports' ? (

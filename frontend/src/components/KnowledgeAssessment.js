@@ -12,7 +12,10 @@ import {
   FormLabel,
   LinearProgress,
   Grid,
-  Chip
+  Chip,
+  Checkbox,
+  FormGroup,
+  Alert
 } from '@mui/material';
 import {
   ArrowBack as ArrowBackIcon,
@@ -27,7 +30,7 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
   const [quizStarted, setQuizStarted] = useState(false);
   const [showResults, setShowResults] = useState(false);
 
-  const questions = [
+  const defaultQuestions = [
     {
       id: 1,
       question: "What is the primary purpose of mental health awareness in the workplace?",
@@ -85,14 +88,138 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
     }
   ];
 
+  const assessmentInfo = session?.assessmentInfo || {};
+  const rawQuestions = session?.quiz?.questions || session?.questions || assessmentInfo?.questions || [];
+
+  const normalizedQuestions = rawQuestions.map((question, index) => {
+    const options = question.options || [];
+
+    const normalizeOption = (option) => {
+      if (typeof option === 'string') return option;
+      if (option?.text) return option.text;
+      if (option?.label) return option.label;
+      if (option?.value) return option.value;
+      return '';
+    };
+
+    const normalizedOptions = options.map(normalizeOption);
+
+    const sanitizeIndex = (idx) =>
+      idx !== null &&
+      idx !== undefined &&
+      !Number.isNaN(idx) &&
+      idx >= 0 &&
+      idx < normalizedOptions.length
+        ? idx
+        : null;
+
+    let correctIndices = [];
+    if (question.correctAnswer !== undefined && question.correctAnswer !== null) {
+      if (typeof question.correctAnswer === 'number') {
+        const sanitized = sanitizeIndex(question.correctAnswer);
+        if (sanitized !== null) {
+          correctIndices = [sanitized];
+        }
+      } else if (typeof question.correctAnswer === 'string') {
+        const matchIndex = normalizedOptions.findIndex(
+          (option) => option.trim().toLowerCase() === question.correctAnswer.trim().toLowerCase()
+        );
+        if (matchIndex !== -1) {
+          correctIndices = [matchIndex];
+        }
+      }
+    } else if (question.correct !== undefined) {
+      const sanitized = sanitizeIndex(question.correct);
+      if (sanitized !== null) {
+        correctIndices = [sanitized];
+      }
+    }
+
+    if (Array.isArray(question.correctAnswers) && question.correctAnswers.length > 0) {
+      const sanitizedList = question.correctAnswers
+        .map((idx) => sanitizeIndex(idx))
+        .filter((idx) => idx !== null);
+      if (sanitizedList.length > 0) {
+        correctIndices = sanitizedList;
+      }
+    }
+
+    if (!correctIndices.length && normalizedOptions.some((option) => typeof option === 'object' && option?.isCorrect)) {
+      const indices = normalizedOptions
+        .map((option, optIndex) => (option?.isCorrect ? optIndex : null))
+        .filter((idx) => idx !== null);
+      if (indices.length > 0) {
+        correctIndices = indices;
+      }
+    }
+
+    const uniqueCorrectIndices = [...new Set(correctIndices)];
+
+    return {
+      id: question.id ?? question.questionId ?? index + 1,
+      question: question.text || question.question || `Question ${index + 1}`,
+      options: normalizedOptions.length > 0 ? normalizedOptions : ['Option A', 'Option B', 'Option C', 'Option D'],
+      correct: uniqueCorrectIndices.length ? uniqueCorrectIndices[0] : null,
+      correctAnswers: uniqueCorrectIndices,
+      type: question.type || 'multiple-choice'
+    };
+  });
+
+  const questions = normalizedQuestions.length > 0 ? normalizedQuestions : defaultQuestions;
+
   const totalQuestions = questions.length;
   const progress = ((currentQuestion + 1) / totalQuestions) * 100;
 
-  const handleAnswerChange = (questionId, answer) => {
+  const isQuestionMultiSelect = (question) =>
+    question.type === 'checkbox' || (Array.isArray(question.correctAnswers) && question.correctAnswers.length > 1);
+
+  const questionHasSolution = (question) => {
+    if (Array.isArray(question.correctAnswers) && question.correctAnswers.length > 0) return true;
+    return question.correct !== null && question.correct !== undefined;
+  };
+
+  const isAnswerCorrect = (question, selectedAnswer) => {
+    if (!questionHasSolution(question)) return false;
+
+    const expected =
+      Array.isArray(question.correctAnswers) && question.correctAnswers.length > 0
+        ? question.correctAnswers
+        : question.correct !== null && question.correct !== undefined
+        ? [question.correct]
+        : [];
+
+    if (!expected.length) return false;
+
+    if (isQuestionMultiSelect(question) || expected.length > 1) {
+      if (!Array.isArray(selectedAnswer) || selectedAnswer.length === 0) return false;
+      const sortedExpected = [...new Set(expected)].sort();
+      const sortedSelected = [...new Set(selectedAnswer)].sort();
+      if (sortedExpected.length !== sortedSelected.length) return false;
+      return sortedExpected.every((value, index) => value === sortedSelected[index]);
+    }
+
+    return selectedAnswer === expected[0];
+  };
+
+  const handleSingleAnswerChange = (questionId, answer) => {
     setAnswers(prev => ({
       ...prev,
       [questionId]: answer
     }));
+  };
+
+  const handleMultiAnswerToggle = (questionId, optionIndex) => {
+    setAnswers(prev => {
+      const currentForQuestion = Array.isArray(prev[questionId]) ? prev[questionId] : [];
+      const exists = currentForQuestion.includes(optionIndex);
+      const updated = exists
+        ? currentForQuestion.filter((idx) => idx !== optionIndex)
+        : [...currentForQuestion, optionIndex];
+      return {
+        ...prev,
+        [questionId]: updated
+      };
+    });
   };
 
   const handleNext = () => {
@@ -110,17 +237,20 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
   };
 
   const handleStartQuiz = () => {
+    setAnswers({});
+    setCurrentQuestion(0);
+    setShowResults(false);
     setQuizStarted(true);
   };
 
   const calculateScore = () => {
-    let correct = 0;
-    questions.forEach(question => {
-      if (answers[question.id] === question.correct) {
-        correct++;
-      }
-    });
-    return Math.round((correct / totalQuestions) * 100);
+    const evaluableQuestions = questions.filter(questionHasSolution);
+    if (!evaluableQuestions.length) return 0;
+    const correctCount = evaluableQuestions.reduce((count, question) => {
+      const selectedAnswer = answers[question.id];
+      return isAnswerCorrect(question, selectedAnswer) ? count + 1 : count;
+    }, 0);
+    return Math.round((correctCount / evaluableQuestions.length) * 100);
   };
 
   const getScoreColor = (score) => {
@@ -135,23 +265,41 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
     return "Keep studying! Review the material and try again.";
   };
 
+  const checkpointTitle = assessmentInfo.quizTitle || 'Checkpoint Assessment';
+  const checkpointDescription = assessmentInfo.description || 'Test your understanding of this session before moving forward.';
+  const passingScoreValue =
+    assessmentInfo.passingScore !== undefined && assessmentInfo.passingScore !== '' ? assessmentInfo.passingScore : null;
+  const maxAttemptsValue =
+    assessmentInfo.maxAttempts !== undefined && assessmentInfo.maxAttempts !== '' ? assessmentInfo.maxAttempts : null;
+  const criteriaValue =
+    assessmentInfo.criteria || assessmentInfo.criteriaDescription || assessmentInfo.successCriteria || null;
+
+  const assessmentHighlights = [
+    totalQuestions ? `${totalQuestions} question${totalQuestions === 1 ? '' : 's'}` : null,
+    passingScoreValue ? `Passing score: ${passingScoreValue}%` : null,
+    maxAttemptsValue ? `Maximum attempts: ${maxAttemptsValue}` : null,
+    criteriaValue ? `Criteria: ${criteriaValue}` : null
+  ].filter(Boolean);
+
   if (!quizStarted) {
     return (
       <Box p={3}>
         <Box mb={4}>
-          <Button
-            startIcon={<ArrowBackIcon />}
-            onClick={onBack}
-            sx={{ mb: 2 }}
-          >
-            Back to Session
-          </Button>
           <Typography variant="h4" fontWeight="bold" gutterBottom>
-            Knowledge Assessment
+            {checkpointTitle}
           </Typography>
           <Typography variant="body1" color="text.secondary">
-            Test your understanding of the material covered in this session
+            {checkpointDescription}
           </Typography>
+          {onBack && (
+            <Button
+              startIcon={<ArrowBackIcon />}
+              onClick={onBack}
+              sx={{ mt: 2 }}
+            >
+              Back to My Sessions
+            </Button>
+          )}
         </Box>
 
         <Card sx={{ p: 4, textAlign: 'center' }}>
@@ -173,10 +321,10 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
           </Box>
           
           <Typography variant="h5" fontWeight="bold" gutterBottom>
-            Ready to Test Your Knowledge?
+            Ready for Your Checkpoint?
           </Typography>
           <Typography variant="body1" color="text.secondary" mb={3}>
-            This assessment contains {totalQuestions} questions about mental health and wellbeing in the workplace.
+            This checkpoint assessment is tailored for the "{session?.title || 'current'}" session.
           </Typography>
           
           <Box mb={3}>
@@ -184,15 +332,17 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
               Assessment Details:
             </Typography>
             <Box display="flex" flexDirection="column" gap={1}>
-              <Typography variant="body2">
-                • {totalQuestions} multiple choice questions
-              </Typography>
-              <Typography variant="body2">
-                • Estimated time: 10-15 minutes
-              </Typography>
-              <Typography variant="body2">
-                • Passing score: 60%
-              </Typography>
+              {assessmentHighlights.length > 0 ? (
+                assessmentHighlights.map((detail, index) => (
+                  <Typography variant="body2" key={index}>
+                    • {detail}
+                  </Typography>
+                ))
+              ) : (
+                <Typography variant="body2">
+                  • Review the session material before attempting the checkpoint.
+                </Typography>
+              )}
             </Box>
           </Box>
 
@@ -207,7 +357,7 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
               py: 1.5
             }}
           >
-            Get Started
+            Begin Assessment
           </Button>
         </Card>
       </Box>
@@ -216,16 +366,34 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
 
   if (showResults) {
     const score = calculateScore();
-    const correctAnswers = Object.values(answers).filter((answer, index) => 
-      answer === questions[index].correct
-    ).length;
+    const evaluableQuestions = questions.filter(questionHasSolution);
+    const correctAnswersCount = evaluableQuestions.reduce((count, question) => {
+      const selectedAnswer = answers[question.id];
+      return isAnswerCorrect(question, selectedAnswer) ? count + 1 : count;
+    }, 0);
+    const incorrectAnswers = Math.max(evaluableQuestions.length - correctAnswersCount, 0);
+    const passingScoreNumeric =
+      passingScoreValue !== null && !Number.isNaN(parseFloat(passingScoreValue))
+        ? parseFloat(passingScoreValue)
+        : null;
+    const meetsPassingScore = passingScoreNumeric !== null ? score >= passingScoreNumeric : true;
+    const isPassing = meetsPassingScore;
 
     return (
       <Box p={3}>
         <Box mb={4}>
           <Typography variant="h4" fontWeight="bold" gutterBottom>
-            Assessment Results
+            Checkpoint Assessment Results
           </Typography>
+          {onBack && (
+            <Button
+              startIcon={<ArrowBackIcon />}
+              onClick={onBack}
+              sx={{ mt: 2 }}
+            >
+              Back to My Sessions
+            </Button>
+          )}
         </Box>
 
         <Card sx={{ p: 4, textAlign: 'center', backgroundColor: '#f0f9ff' }}>
@@ -248,23 +416,63 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
             </Box>
           </Box>
           
-          <Typography variant="h4" fontWeight="bold" gutterBottom sx={{ color: '#059669' }}>
-            WOOHOO, CONGRATS!
-          </Typography>
-          
-          <Typography variant="h6" fontWeight="bold" gutterBottom>
-            You scored {score}% on this assessment
-          </Typography>
-          
-          <Typography variant="body1" color="text.secondary" mb={3}>
-            {getScoreMessage(score)}
-          </Typography>
+          {isPassing ? (
+            <>
+              <Typography variant="h4" fontWeight="bold" gutterBottom sx={{ color: '#059669' }}>
+                Congratulations!
+              </Typography>
+              <Typography variant="h6" fontWeight="bold" gutterBottom>
+                You scored {score}% on this assessment
+              </Typography>
+              <Typography variant="body1" color="text.secondary" mb={3}>
+                {getScoreMessage(score)}
+              </Typography>
+              <Alert severity="success" sx={{ mb: 3, textAlign: 'left' }}>
+                You have successfully completed the session and met the passing criteria.
+                {criteriaValue && (
+                  <>
+                    <br />
+                    <strong>Criteria:</strong> {criteriaValue}
+                  </>
+                )}
+              </Alert>
+            </>
+          ) : (
+            <>
+              <Typography variant="h4" fontWeight="bold" gutterBottom sx={{ color: '#ef4444' }}>
+                Keep Going!
+              </Typography>
+              <Typography variant="h6" fontWeight="bold" gutterBottom>
+                You scored {score}% on this assessment
+              </Typography>
+              <Typography variant="body1" color="text.secondary" mb={3}>
+                {getScoreMessage(score)}
+              </Typography>
+              <Alert severity="warning" sx={{ mb: 3, textAlign: 'left' }}>
+                You have not yet met the passing criteria.
+                {passingScoreNumeric !== null && (
+                  <>
+                    <br />
+                    Minimum passing score: {passingScoreNumeric}%
+                  </>
+                )}
+                {criteriaValue && (
+                  <>
+                    <br />
+                    <strong>Criteria:</strong> {criteriaValue}
+                  </>
+                )}
+                <br />
+                Please review the content and try again.
+              </Alert>
+            </>
+          )}
 
           <Grid container spacing={3} mb={4}>
             <Grid item xs={6}>
               <Box textAlign="center">
                 <Typography variant="h4" fontWeight="bold" color="#10b981">
-                  {correctAnswers}
+                  {correctAnswersCount}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
                   Correct Answers
@@ -274,7 +482,7 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
             <Grid item xs={6}>
               <Box textAlign="center">
                 <Typography variant="h4" fontWeight="bold" color="#ef4444">
-                  {totalQuestions - correctAnswers}
+                  {incorrectAnswers}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
                   Incorrect Answers
@@ -283,20 +491,37 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
             </Grid>
           </Grid>
 
-          <Button
-            variant="contained"
-            size="large"
-            startIcon={<CheckCircleIcon />}
-            onClick={() => onComplete(score)}
-            sx={{ 
-              backgroundColor: '#10b981', 
-              '&:hover': { backgroundColor: '#059669' },
-              px: 4,
-              py: 1.5
-            }}
-          >
-            Get Certificate
-          </Button>
+          {isPassing ? (
+            <Button
+              variant="contained"
+              size="large"
+              startIcon={<CheckCircleIcon />}
+              onClick={() => onComplete(score)}
+              sx={{ 
+                backgroundColor: '#10b981', 
+                '&:hover': { backgroundColor: '#059669' },
+                px: 4,
+                py: 1.5
+              }}
+            >
+              Get Certificate
+            </Button>
+          ) : (
+            <Button
+              variant="contained"
+              size="large"
+              startIcon={<ArrowBackIcon />}
+              onClick={handleStartQuiz}
+              sx={{ 
+                backgroundColor: '#3b82f6', 
+                '&:hover': { backgroundColor: '#2563eb' },
+                px: 4,
+                py: 1.5
+              }}
+            >
+              Retake Assessment
+            </Button>
+          )}
         </Card>
       </Box>
     );
@@ -308,19 +533,21 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
     <Box p={3}>
       {/* Header */}
       <Box mb={4}>
-        <Button
-          startIcon={<ArrowBackIcon />}
-          onClick={onBack}
-          sx={{ mb: 2 }}
-        >
-          Back to Session
-        </Button>
         <Typography variant="h4" fontWeight="bold" gutterBottom>
-          Knowledge Assessment
+          {checkpointTitle}
         </Typography>
         <Typography variant="body1" color="text.secondary">
           Question {currentQuestion + 1} of {totalQuestions}
         </Typography>
+        {onBack && (
+          <Button
+            startIcon={<ArrowBackIcon />}
+            onClick={onBack}
+            sx={{ mt: 2 }}
+          >
+            Back to My Sessions
+          </Button>
+        )}
       </Box>
 
       {/* Progress */}
@@ -347,20 +574,42 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
         </Typography>
 
         <FormControl component="fieldset" sx={{ mt: 2 }}>
-          <RadioGroup
-            value={answers[currentQ.id] || ''}
-            onChange={(e) => handleAnswerChange(currentQ.id, parseInt(e.target.value))}
-          >
-            {currentQ.options.map((option, index) => (
-              <FormControlLabel
-                key={index}
-                value={index}
-                control={<Radio />}
-                label={option}
-                sx={{ mb: 1 }}
-              />
-            ))}
-          </RadioGroup>
+          {isQuestionMultiSelect(currentQ) ? (
+            <FormGroup>
+              {currentQ.options.map((option, index) => (
+                <FormControlLabel
+                  key={index}
+                  control={
+                    <Checkbox
+                      checked={Array.isArray(answers[currentQ.id]) ? answers[currentQ.id].includes(index) : false}
+                      onChange={() => handleMultiAnswerToggle(currentQ.id, index)}
+                    />
+                  }
+                  label={option}
+                  sx={{ mb: 1 }}
+                />
+              ))}
+            </FormGroup>
+          ) : (
+            <RadioGroup
+              value={
+                answers[currentQ.id] !== undefined && answers[currentQ.id] !== null
+                  ? String(answers[currentQ.id])
+                  : ''
+              }
+              onChange={(e) => handleSingleAnswerChange(currentQ.id, parseInt(e.target.value, 10))}
+            >
+              {currentQ.options.map((option, index) => (
+                <FormControlLabel
+                  key={index}
+                  value={String(index)}
+                  control={<Radio />}
+                  label={option}
+                  sx={{ mb: 1 }}
+                />
+              ))}
+            </RadioGroup>
+          )}
         </FormControl>
       </Card>
 
@@ -383,7 +632,13 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
             variant="contained"
             endIcon={currentQuestion === totalQuestions - 1 ? <CheckCircleIcon /> : <ArrowForwardIcon />}
             onClick={handleNext}
-            disabled={!answers[currentQ.id] && answers[currentQ.id] !== 0}
+            disabled={(() => {
+              const currentAnswer = answers[currentQ.id];
+              if (isQuestionMultiSelect(currentQ)) {
+                return !Array.isArray(currentAnswer) || currentAnswer.length === 0;
+              }
+              return currentAnswer === undefined || currentAnswer === null;
+            })()}
             sx={{ 
               backgroundColor: '#3b82f6', 
               '&:hover': { backgroundColor: '#2563eb' }

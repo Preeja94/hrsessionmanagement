@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   Box,
   Typography,
@@ -26,8 +26,14 @@ import {
   Quiz as QuizIcon,
   CheckCircle as CheckCircleIcon
 } from '@mui/icons-material';
+import { buildSessionContentItems } from '../utils/sessionContent';
 
 const SessionDetail = ({ session, onBack, onGetStarted }) => {
+  const contentItems = useMemo(
+    () => buildSessionContentItems(session),
+    [session]
+  );
+
   if (!session) {
     return (
       <Box p={3} textAlign="center">
@@ -39,23 +45,19 @@ const SessionDetail = ({ session, onBack, onGetStarted }) => {
           onClick={onBack}
           sx={{ mt: 2 }}
         >
-          Back to Courses
+          Back to Sessions
         </Button>
       </Box>
     );
   }
 
-  const sessionContent = [
-    { type: 'video', title: 'Introduction to Mental Health', duration: '15 min', completed: true },
-    { type: 'presentation', title: 'Stress Management Techniques', duration: '20 min', completed: true },
-    { type: 'interactive', title: 'Mindfulness Exercise', duration: '10 min', completed: false },
-    { type: 'assessment', title: 'Knowledge Check', duration: '15 min', completed: false }
-  ];
-
   const getContentIcon = (type) => {
     switch (type) {
       case 'video': return <VideoIcon />;
       case 'presentation': return <DescriptionIcon />;
+      case 'document': return <DescriptionIcon />;
+      case 'file': return <DescriptionIcon />;
+      case 'ai': return <SchoolIcon />;
       case 'interactive': return <PlayIcon />;
       case 'assessment': return <QuizIcon />;
       default: return <SchoolIcon />;
@@ -66,102 +68,138 @@ const SessionDetail = ({ session, onBack, onGetStarted }) => {
     switch (type) {
       case 'video': return '#3b82f6';
       case 'presentation': return '#10b981';
+      case 'document': return '#6366f1';
+      case 'file': return '#3b82f6';
+      case 'ai': return '#8b5cf6';
       case 'interactive': return '#f59e0b';
       case 'assessment': return '#ef4444';
-      default: return '#6b7280';
+      default: return '#94a3b8';
     }
   };
 
-  const completedContent = sessionContent.filter(item => item.completed).length;
-  const totalContent = sessionContent.length;
-  const progressPercentage = (completedContent / totalContent) * 100;
+  const totalContent = contentItems.length;
+  const progressPercentage = (() => {
+    if (typeof session.progress === 'number') {
+      return Math.min(100, Math.max(0, session.progress));
+    }
+    return session.completed ? 100 : 0;
+  })();
+  const completedContent = session.completed
+    ? totalContent
+    : Math.min(totalContent, Math.round((progressPercentage / 100) * totalContent));
+  const lastAccessedValue =
+    session.lastAccessed ||
+    session.updatedAt ||
+    session.scheduledDateTime ||
+    session.dueDateTime ||
+    session.createdAt ||
+    null;
+  const lastAccessedLabel = lastAccessedValue
+    ? new Date(lastAccessedValue).toLocaleString()
+    : 'Not available';
+  const statusColorMap = {
+    completed: '#10b981',
+    'in-progress': '#f59e0b',
+    scheduled: '#3b82f6',
+    published: '#6366f1',
+    locked: '#ef4444',
+  };
+  const normalizedStatus = session.status ? session.status.toLowerCase() : 'draft';
+  const statusLabel = normalizedStatus
+    .split('-')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+  const statusColor = statusColorMap[normalizedStatus] || '#6366f1';
+  const hasDownloadableMaterials = contentItems.some(item => item.downloadable);
 
   return (
     <Box p={3}>
       {/* Header */}
       <Box mb={4}>
-        <Button
-          startIcon={<ArrowBackIcon />}
-          onClick={onBack}
-          sx={{ mb: 2 }}
-        >
-          Back to My Courses
-        </Button>
         <Typography variant="h4" fontWeight="bold" gutterBottom>
           {session.title}
         </Typography>
-        <Typography variant="body1" color="text.secondary">
+        <Typography variant="body1" color="text.secondary" mb={2}>
           {session.description}
         </Typography>
+        <Button
+          startIcon={<ArrowBackIcon />}
+          onClick={onBack}
+        >
+          Back to My Sessions
+        </Button>
       </Box>
 
       <Grid container spacing={3}>
-        {/* Session Information */}
-        <Grid item xs={12} md={8}>
+        <Grid item xs={12}>
           <Card sx={{ p: 3, mb: 3 }}>
             <Typography variant="h6" fontWeight="bold" gutterBottom>
               Session Information
             </Typography>
-            
-            <Grid container spacing={3}>
-              <Grid item xs={12} md={6}>
-                <Box display="flex" alignItems="center" mb={2}>
-                  <PersonIcon sx={{ mr: 2, color: '#6b7280' }} />
-                  <Box>
-                    <Typography variant="body2" color="text.secondary">
-                      Instructor
-                    </Typography>
-                    <Typography variant="body1" fontWeight="medium">
-                      {session.instructor}
-                    </Typography>
-                  </Box>
-                </Box>
-              </Grid>
-              <Grid item xs={12} md={6}>
-                <Box display="flex" alignItems="center" mb={2}>
-                  <TimeIcon sx={{ mr: 2, color: '#6b7280' }} />
-                  <Box>
-                    <Typography variant="body2" color="text.secondary">
-                      Duration
-                    </Typography>
-                    <Typography variant="body1" fontWeight="medium">
-                      {session.duration}
-                    </Typography>
-                  </Box>
-                </Box>
-              </Grid>
-              <Grid item xs={12} md={6}>
-                <Box display="flex" alignItems="center" mb={2}>
-                  <SchoolIcon sx={{ mr: 2, color: '#6b7280' }} />
-                  <Box>
-                    <Typography variant="body2" color="text.secondary">
-                      Status
-                    </Typography>
-                    <Chip
-                      label={session.status === 'in-progress' ? 'In Progress' : 'Completed'}
-                      sx={{ 
-                        backgroundColor: session.status === 'in-progress' ? '#f59e0b' : '#10b981',
-                        color: 'white'
-                      }}
-                    />
-                  </Box>
-                </Box>
-              </Grid>
-              <Grid item xs={12} md={6}>
-                <Box display="flex" alignItems="center" mb={2}>
-                  <TimeIcon sx={{ mr: 2, color: '#6b7280' }} />
-                  <Box>
-                    <Typography variant="body2" color="text.secondary">
-                      Last Accessed
-                    </Typography>
-                    <Typography variant="body1" fontWeight="medium">
-                      {new Date(session.lastAccessed).toLocaleDateString()}
-                    </Typography>
-                  </Box>
-                </Box>
-              </Grid>
-            </Grid>
+            <Box display="flex" flexWrap="wrap" gap={4}>
+              <Box>
+                <Typography variant="body2" color="text.secondary">
+                  Instructor
+                </Typography>
+                <Typography variant="body1" fontWeight="medium">
+                  {session.instructor || 'HR Team'}
+                </Typography>
+              </Box>
+              <Box>
+                <Typography variant="body2" color="text.secondary">
+                  Duration
+                </Typography>
+                <Typography variant="body1" fontWeight="medium">
+                  {session.duration || 'Self-paced'}
+                </Typography>
+              </Box>
+              <Box>
+                <Typography variant="body2" color="text.secondary">
+                  Status
+                </Typography>
+                <Chip
+                  label={statusLabel}
+                  sx={{
+                    textTransform: 'capitalize',
+                    backgroundColor: statusColor,
+                    color: 'white'
+                  }}
+                />
+              </Box>
+              <Box>
+                <Typography variant="body2" color="text.secondary">
+                  Last Accessed
+                </Typography>
+                <Typography variant="body1" fontWeight="medium">
+                  {lastAccessedLabel}
+                </Typography>
+              </Box>
+            </Box>
           </Card>
+
+          <Box display="flex" gap={2} mb={3}>
+            <Button
+              variant="contained"
+              startIcon={<PlayIcon />}
+              onClick={() => onGetStarted(session)}
+              sx={{ 
+                backgroundColor: '#10b981', 
+                '&:hover': { backgroundColor: '#059669' },
+                py: 1.5,
+                px: 3
+              }}
+            >
+              {session.status === 'in-progress' ? 'Resume Session' : 'Start Session'}
+            </Button>
+            {hasDownloadableMaterials && (
+              <Button
+                variant="outlined"
+                sx={{ py: 1.5, px: 3 }}
+              >
+                Download Materials
+              </Button>
+            )}
+          </Box>
 
           {/* Progress */}
           <Card sx={{ p: 3, mb: 3 }}>
@@ -184,7 +222,9 @@ const SessionDetail = ({ session, onBack, onGetStarted }) => {
               />
             </Box>
             <Typography variant="body2" color="text.secondary">
-              {completedContent} of {totalContent} sections completed
+              {totalContent > 0
+                ? `${completedContent} of ${totalContent} sections completed`
+                : 'Session progress will appear once content is added'}
             </Typography>
           </Card>
 
@@ -194,8 +234,8 @@ const SessionDetail = ({ session, onBack, onGetStarted }) => {
               Session Content
             </Typography>
             <List>
-              {sessionContent.map((content, index) => (
-                <ListItem key={index} sx={{ px: 0 }}>
+              {contentItems.map((content) => (
+                <ListItem key={content.id} sx={{ px: 0 }}>
                   <ListItemIcon>
                     <Box
                       sx={{
@@ -216,9 +256,16 @@ const SessionDetail = ({ session, onBack, onGetStarted }) => {
                     primary={content.title}
                     secondary={
                       <Box>
-                        <Typography variant="body2" color="text.secondary">
-                          {content.duration}
-                        </Typography>
+                        {content.description && (
+                          <Typography variant="body2" color="text.secondary">
+                            {content.description}
+                          </Typography>
+                        )}
+                        {content.meta && (
+                          <Typography variant="caption" color="text.secondary" display="block">
+                            {content.meta}
+                          </Typography>
+                        )}
                         {content.completed && (
                           <Chip
                             label="Completed"
@@ -232,61 +279,6 @@ const SessionDetail = ({ session, onBack, onGetStarted }) => {
                 </ListItem>
               ))}
             </List>
-          </Card>
-        </Grid>
-
-        {/* Sidebar */}
-        <Grid item xs={12} md={4}>
-          <Card sx={{ p: 3, mb: 3 }}>
-            <Typography variant="h6" fontWeight="bold" gutterBottom>
-              Quick Actions
-            </Typography>
-            <Box display="flex" flexDirection="column" gap={2}>
-              <Button
-                variant="contained"
-                startIcon={<PlayIcon />}
-                onClick={() => onGetStarted(session)}
-                fullWidth
-                sx={{ 
-                  backgroundColor: '#10b981', 
-                  '&:hover': { backgroundColor: '#059669' },
-                  py: 1.5
-                }}
-              >
-                Get Started
-              </Button>
-              <Button
-                variant="outlined"
-                fullWidth
-                sx={{ py: 1.5 }}
-              >
-                Download Materials
-              </Button>
-              <Button
-                variant="outlined"
-                fullWidth
-                sx={{ py: 1.5 }}
-              >
-                Share Session
-              </Button>
-            </Box>
-          </Card>
-
-          {/* Session Tags */}
-          <Card sx={{ p: 3 }}>
-            <Typography variant="h6" fontWeight="bold" gutterBottom>
-              Tags
-            </Typography>
-            <Box display="flex" flexWrap="wrap" gap={1}>
-              {session.tags && session.tags.map((tag, index) => (
-                <Chip
-                  key={index}
-                  label={tag}
-                  size="small"
-                  variant="outlined"
-                />
-              ))}
-            </Box>
           </Card>
         </Grid>
       </Grid>
