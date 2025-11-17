@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -19,7 +19,12 @@ import {
   Divider,
   Grid,
   Tabs,
-  Tab
+  Tab,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Select
 } from '@mui/material';
 import {
   MoreVert as MoreVertIcon,
@@ -39,8 +44,11 @@ import {
   CloudUpload as CloudUploadIcon,
   Save as SaveIcon,
   ArrowBack as ArrowBackIcon,
+  ArrowForward as ArrowForwardIcon,
   UploadFile as UploadFileIcon,
-  Close as CloseIcon
+  Close as CloseIcon,
+  Preview as PreviewIcon,
+  Visibility as VisibilityIcon
 } from '@mui/icons-material';
 import { styled } from '@mui/material/styles';
 
@@ -61,17 +69,19 @@ const FormTitleCard = styled(Card)(({ theme }) => ({
   marginBottom: theme.spacing(2),
 }));
 
-const QuestionCard = styled(Card)(({ theme, selected }) => ({
+const QuestionCard = styled(Card)(({ theme, selected, isDragging }) => ({
   padding: theme.spacing(3),
   backgroundColor: 'white',
   borderRadius: theme.spacing(2),
-  boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+  boxShadow: isDragging ? '0 4px 12px rgba(17, 68, 23, 0.3)' : '0 2px 8px rgba(0,0,0,0.1)',
   marginBottom: theme.spacing(2),
   position: 'relative',
-  borderLeft: selected ? '4px solid #4285f4' : '4px solid transparent',
-  transition: 'border-left 0.2s ease',
+  borderLeft: selected ? '4px solid #114417DB' : '4px solid transparent',
+  transition: 'border-left 0.2s ease, box-shadow 0.2s ease',
+  cursor: 'move',
+  opacity: isDragging ? 0.7 : 1,
   '&:hover': {
-    borderLeft: '4px solid #4285f4',
+    borderLeft: '4px solid #114417DB',
   }
 }));
 
@@ -105,6 +115,9 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
   const [showBulkUpload, setShowBulkUpload] = useState(false);
   const [bulkUploadFile, setBulkUploadFile] = useState(null);
   const [activeTab, setActiveTab] = useState(0);
+  const [draggedIndex, setDraggedIndex] = useState(null);
+  const [showPreview, setShowPreview] = useState(false);
+  const questionsEndRef = useRef(null);
 
   // Debug: Log when questionTypeAnchor changes
   useEffect(() => {
@@ -154,7 +167,7 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
 
   const handleAddQuestion = () => {
     const newQuestion = {
-      id: questions.length + 1,
+      id: Date.now(),
       text: 'Untitled Question',
       type: 'multiple-choice',
       options: ['Option 1'],
@@ -165,6 +178,10 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
     };
     setQuestions([...questions, newQuestion]);
     setSelectedQuestion(questions.length);
+    // Auto-scroll to the new question
+    setTimeout(() => {
+      questionsEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 100);
   };
 
   const handleDuplicateQuestion = (index) => {
@@ -187,6 +204,41 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
         setSelectedQuestion(newQuestions.length - 1);
       }
     }
+  };
+
+  // Drag and drop handlers
+  const handleDragStart = (index) => {
+    setDraggedIndex(index);
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+  };
+
+  const handleDrop = (e, dropIndex) => {
+    e.preventDefault();
+    if (draggedIndex === null || draggedIndex === dropIndex) {
+      setDraggedIndex(null);
+      return;
+    }
+
+    const newQuestions = [...questions];
+    const draggedQuestion = newQuestions[draggedIndex];
+    
+    // Remove dragged item
+    newQuestions.splice(draggedIndex, 1);
+    
+    // Insert at new position
+    const newDropIndex = draggedIndex < dropIndex ? dropIndex - 1 : dropIndex;
+    newQuestions.splice(newDropIndex, 0, draggedQuestion);
+    
+    setQuestions(newQuestions);
+    setSelectedQuestion(newDropIndex);
+    setDraggedIndex(null);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedIndex(null);
   };
 
   const handleQuestionChange = (index, field, value) => {
@@ -415,17 +467,17 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
   return (
     <Box sx={{ width: '100%', p: 3 }}>
 
-      {/* Main Content - Grid Layout */}
-      <Grid container spacing={3} sx={{ pt: 2, pb: 4 }}>
-        {/* Left Sidebar - Assessment Information */}
-        <Grid item xs={12} md={4}>
-          <Card sx={{ p: 3, position: 'sticky', top: 20 }}>
+      {/* Main Content - Vertical Stack Layout */}
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, pt: 2, pb: 4 }}>
+        {/* Assessment Information - Full Width */}
+        <Card sx={{ p: 3, width: '100%' }}>
             <Typography variant="h6" fontWeight="bold" gutterBottom>
               Assessment Information
             </Typography>
             <Divider sx={{ my: 2 }} />
             
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <Grid container spacing={3}>
+            <Grid item xs={12} md={6}>
               <TextField
                 label="Quiz Title"
                 value={assessmentInfo.quizTitle}
@@ -434,7 +486,9 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
                 placeholder="Enter quiz title"
                 variant="outlined"
               />
+            </Grid>
               
+            <Grid item xs={12} md={3}>
               <TextField
                 label="Passing Score (%)"
                 type="number"
@@ -445,7 +499,9 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
                 variant="outlined"
                 inputProps={{ min: 0, max: 100 }}
               />
+            </Grid>
               
+            <Grid item xs={12} md={3}>
               <TextField
                 label="Max Attempts"
                 type="number"
@@ -456,7 +512,9 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
                 variant="outlined"
                 inputProps={{ min: 1 }}
               />
+            </Grid>
               
+            <Grid item xs={12}>
               <TextField
                 label="Passing Criteria"
                 value={assessmentInfo.criteriaDescription}
@@ -473,16 +531,33 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
                 multiline
                 minRows={2}
               />
-            </Box>
-          </Card>
         </Grid>
+          </Grid>
+        </Card>
 
-        {/* Right Content - Quiz Form with Tabs */}
-        <Grid item xs={12} md={8}>
+        {/* Create Questions Section - Full Width */}
           <Card sx={{ width: '100%' }}>
             {/* Tabs */}
             <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-              <Tabs value={activeTab} onChange={(e, newValue) => setActiveTab(newValue)}>
+              <Tabs 
+                value={activeTab} 
+                onChange={(e, newValue) => setActiveTab(newValue)}
+                sx={{
+                  '& .MuiTab-root': {
+                    color: '#6b7280',
+                    textTransform: 'none',
+                    fontWeight: 500,
+                    fontSize: '0.95rem',
+                    '&.Mui-selected': {
+                      color: '#114417DB',
+                      fontWeight: 600
+                    }
+                  },
+                  '& .MuiTabs-indicator': {
+                    backgroundColor: '#114417DB'
+                  }
+                }}
+              >
                 <Tab label="Create Questions" />
                 <Tab label="Bulk Upload Quiz" />
               </Tabs>
@@ -491,13 +566,12 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
             {/* Tab Content */}
             <Box sx={{ p: 3 }}>
               {activeTab === 0 && (
-                <Box sx={{ display: 'flex', justifyContent: 'center' }}>
-                  <Box sx={{ width: '100%', maxWidth: 640 }}>
+              <Box sx={{ width: '100%' }}>
                     {/* Bulk Upload Info */}
                     {bulkUploadFile && (
-                      <Card sx={{ p: 2, mb: 2, backgroundColor: '#d1fae5', border: '1px solid #10b981' }}>
+                      <Card sx={{ p: 2, mb: 2, backgroundColor: 'rgba(17, 68, 23, 0.04)', border: '1px solid #114417DB' }}>
                         <Box display="flex" alignItems="center" gap={1}>
-                          <UploadFileIcon sx={{ color: '#10b981' }} />
+                          <UploadFileIcon sx={{ color: '#114417DB' }} />
                           <Typography variant="body2" fontWeight="medium">
                             Uploaded: {bulkUploadFile.name}
                           </Typography>
@@ -511,7 +585,13 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
                 <QuestionCard 
                   key={question.id} 
                   selected={selectedQuestion === index}
+                  isDragging={draggedIndex === index}
                   onClick={() => setSelectedQuestion(index)}
+                  draggable
+                  onDragStart={() => handleDragStart(index)}
+                  onDragOver={handleDragOver}
+                  onDrop={(e) => handleDrop(e, index)}
+                  onDragEnd={handleDragEnd}
                 >
                   <Box display="flex" alignItems="center" mb={2}>
                 <TextField
@@ -533,7 +613,7 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
                     setSelectedQuestion(index);
                     setQuestionTypeAnchor(e.currentTarget);
                   }}
-                  sx={{ ml: 1, textTransform: 'none', color: '#666' }}
+                  sx={{ ml: 1, textTransform: 'none', color: '#114417DB' }}
                 >
                   {getQuestionTypeLabel(question.type)}
                 </Button>
@@ -610,25 +690,20 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
                       </IconButton>
                     </Box>
                   ))}
-                  <Box display="flex" alignItems="center" ml={4}>
-                    <Radio disabled />
-                    <Typography
-                      variant="body2"
-                      color="text.secondary"
-                      sx={{ cursor: 'pointer' }}
+                  <Box display="flex" alignItems="center" ml={4} mt={1}>
+                    <Button
+                      startIcon={<AddIcon />}
                       onClick={() => handleAddOption(index)}
+                      sx={{
+                        textTransform: 'none',
+                        color: '#114417DB',
+                        '&:hover': {
+                          backgroundColor: 'rgba(17, 68, 23, 0.08)'
+                        }
+                      }}
                     >
-                      Add option or{' '}
-                      <span
-                        style={{ color: '#1976d2', cursor: 'pointer' }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleAddOption(index);
-                        }}
-                      >
-                        add "Other"
-                      </span>
-                    </Typography>
+                      Add another option
+                    </Button>
                   </Box>
                 </RadioGroup>
               )}
@@ -659,16 +734,20 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
                       </IconButton>
                     </Box>
                   ))}
-                  <Box display="flex" alignItems="center" ml={4}>
-                    <CheckBoxIcon sx={{ color: '#ccc', mr: 1 }} />
-                    <Typography 
-                      variant="body2" 
-                      color="text.secondary" 
-                      sx={{ cursor: 'pointer' }}
+                  <Box display="flex" alignItems="center" ml={4} mt={1}>
+                    <Button
+                      startIcon={<AddIcon />}
                       onClick={() => handleAddOption(index)}
+                      sx={{
+                        textTransform: 'none',
+                        color: '#114417DB',
+                        '&:hover': {
+                          backgroundColor: 'rgba(17, 68, 23, 0.08)'
+                        }
+                      }}
                     >
-                      Add option
-                    </Typography>
+                      Add another option
+                    </Button>
                   </Box>
                 </Box>
               )}
@@ -695,28 +774,33 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
                       </IconButton>
                     </Box>
                   ))}
-                  <Box display="flex" alignItems="center" ml={5}>
-                    <Typography 
-                      variant="body2" 
-                      color="primary" 
-                      sx={{ cursor: 'pointer' }}
+                  <Box display="flex" alignItems="center" ml={5} mt={1}>
+                    <Button
+                      startIcon={<AddIcon />}
                       onClick={() => handleAddOption(index)}
+                      sx={{
+                        textTransform: 'none',
+                        color: '#114417DB',
+                        '&:hover': {
+                          backgroundColor: 'rgba(17, 68, 23, 0.08)'
+                        }
+                      }}
                     >
-                      Add option
-                    </Typography>
+                      Add another option
+                    </Button>
                   </Box>
                 </Box>
               )}
 
               {/* Question Controls */}
               <Box display="flex" alignItems="center" mt={3} pt={2} borderTop="1px solid #e0e0e0">
-                <IconButton size="small" sx={{ cursor: 'grab', color: '#999', mr: 1 }}>
+                <IconButton size="small" sx={{ cursor: 'grab', color: '#114417DB', mr: 1 }} title="Drag to reorder">
                   <DragIndicatorIcon fontSize="small" />
                 </IconButton>
-                <IconButton size="small" onClick={() => handleDuplicateQuestion(index)} title="Duplicate">
+                <IconButton size="small" onClick={() => handleDuplicateQuestion(index)} title="Duplicate" sx={{ color: '#114417DB' }}>
                   <ContentCopyIcon fontSize="small" />
                 </IconButton>
-                <IconButton size="small" onClick={() => handleDeleteQuestion(index)} title="Delete">
+                <IconButton size="small" onClick={() => handleDeleteQuestion(index)} title="Delete" sx={{ color: '#ef4444' }}>
                   <DeleteIcon fontSize="small" />
                 </IconButton>
                 <Box flex={1} />
@@ -729,38 +813,38 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
             startIcon={<AddIcon />}
             onClick={handleAddQuestion}
             sx={{
-              border: '2px dashed #ddd',
+              border: '2px dashed #114417DB',
               borderRadius: 2,
               py: 2,
               width: '100%',
-              color: '#666',
+              color: '#114417DB',
               mb: 3,
               '&:hover': {
-                borderColor: '#8e7cc3',
-                backgroundColor: '#f8f9fa'
+                borderColor: '#0a2f0e',
+                backgroundColor: 'rgba(17, 68, 23, 0.04)'
               }
             }}
           >
             Add question
           </Button>
+          <div ref={questionsEndRef} />
 
-                    {/* Save Assessment Button */}
+                    {/* Preview Button */}
                     <Box display="flex" justifyContent="center" mt={3}>
                       <Button 
                         variant="contained" 
-                        startIcon={<SaveIcon />}
-                        onClick={handleSaveQuiz}
+                        startIcon={<VisibilityIcon />}
+                        onClick={() => setShowPreview(true)}
                         sx={{ 
-                          backgroundColor: '#3b82f6',
+                          backgroundColor: '#114417DB',
                           px: 4,
                           py: 1.5,
-                          '&:hover': { backgroundColor: '#2563eb' }
+                          '&:hover': { backgroundColor: '#0a2f0e' }
                         }}
                       >
-                        Save Assessment
+                        Preview
                       </Button>
                     </Box>
-                  </Box>
                 </Box>
               )}
 
@@ -783,10 +867,10 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
                       onClick={handleBulkUploadClick}
                       size="large"
                       sx={{ 
-                        backgroundColor: '#10b981',
+                        backgroundColor: '#114417DB',
                         px: 4,
                         py: 1.5,
-                        '&:hover': { backgroundColor: '#059669' }
+                        '&:hover': { backgroundColor: '#0a2f0e' }
                       }}
                     >
                       Upload File
@@ -810,10 +894,10 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
                         startIcon={<SaveIcon />}
                         onClick={handleSaveQuiz}
                         sx={{ 
-                          backgroundColor: '#3b82f6',
+                          backgroundColor: '#114417DB',
                           px: 4,
                           py: 1.5,
-                          '&:hover': { backgroundColor: '#2563eb' }
+                          '&:hover': { backgroundColor: '#0a2f0e' }
                         }}
                       >
                         Save Assessment
@@ -824,8 +908,7 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
               )}
             </Box>
           </Card>
-        </Grid>
-      </Grid>
+        </Box>
 
       {/* Question Type Menu */}
       <Menu
@@ -907,6 +990,154 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
         <MenuItem>Go to section based on answer</MenuItem>
       </Menu>
 
+      {/* Preview Dialog */}
+      <Dialog
+        open={showPreview}
+        onClose={() => setShowPreview(false)}
+        maxWidth="md"
+        fullWidth
+        PaperProps={{
+          sx: {
+            maxHeight: '90vh'
+          }
+        }}
+      >
+        <DialogTitle>
+          <Box display="flex" justifyContent="space-between" alignItems="center">
+            <Typography variant="h6" fontWeight="bold">
+              Assessment Preview
+            </Typography>
+            <IconButton onClick={() => setShowPreview(false)} size="small">
+              <CloseIcon />
+            </IconButton>
+          </Box>
+        </DialogTitle>
+        <DialogContent dividers sx={{ overflowY: 'auto' }}>
+          {/* Assessment Info Preview */}
+          {assessmentInfo.quizTitle && (
+            <Box mb={3}>
+              <Typography variant="h5" fontWeight="bold" gutterBottom>
+                {assessmentInfo.quizTitle}
+              </Typography>
+              {assessmentInfo.criteriaDescription && (
+                <Typography variant="body2" color="text.secondary" paragraph>
+                  {assessmentInfo.criteriaDescription}
+                </Typography>
+              )}
+              <Box display="flex" gap={2} mt={2}>
+                {assessmentInfo.passingScore && (
+                  <Chip label={`Passing Score: ${assessmentInfo.passingScore}%`} size="small" />
+                )}
+                {assessmentInfo.maxAttempts && (
+                  <Chip label={`Max Attempts: ${assessmentInfo.maxAttempts}`} size="small" />
+                )}
+              </Box>
+            </Box>
+          )}
+
+          {/* Questions Preview */}
+          {questions.map((question, index) => (
+            <Card key={question.id} sx={{ p: 3, mb: 3 }}>
+              <Typography variant="h6" gutterBottom>
+                {index + 1}. {question.text || 'Untitled Question'}
+              </Typography>
+
+              {question.type === 'multiple-choice' && (
+                <RadioGroup>
+                  {question.options.map((option, optIndex) => (
+                    <FormControlLabel
+                      key={optIndex}
+                      value={String(optIndex)}
+                      control={
+                        <Radio 
+                          sx={{
+                            color: '#114417DB',
+                            '&.Mui-checked': {
+                              color: '#114417DB'
+                            }
+                          }}
+                        />
+                      }
+                      label={option}
+                      disabled
+                    />
+                  ))}
+                </RadioGroup>
+              )}
+
+              {question.type === 'checkbox' && (
+                <Box>
+                  {question.options.map((option, optIndex) => (
+                    <FormControlLabel
+                      key={optIndex}
+                      control={
+                        <Checkbox 
+                          sx={{
+                            color: '#114417DB',
+                            '&.Mui-checked': {
+                              color: '#114417DB'
+                            }
+                          }}
+                        />
+                      }
+                      label={option}
+                      disabled
+                      sx={{ display: 'block', mb: 1 }}
+                    />
+                  ))}
+                </Box>
+              )}
+
+              {question.type === 'dropdown' && (
+                <FormControl fullWidth sx={{ mt: 2 }}>
+                  <Select
+                    value=""
+                    disabled
+                    displayEmpty
+                  >
+                    <MenuItem value="" disabled>
+                      Select an option
+                    </MenuItem>
+                    {question.options.map((option, optIndex) => (
+                      <MenuItem key={optIndex} value={optIndex}>
+                        {option}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              )}
+
+              {question.type === 'short-answer' && (
+                <TextField
+                  fullWidth
+                  variant="outlined"
+                  placeholder="Your answer"
+                  disabled
+                  sx={{ mt: 2 }}
+                />
+              )}
+
+              {question.type === 'paragraph' && (
+                <TextField
+                  fullWidth
+                  variant="outlined"
+                  multiline
+                  rows={4}
+                  placeholder="Your answer"
+                  disabled
+                  sx={{ mt: 2 }}
+                />
+              )}
+            </Card>
+          ))}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowPreview(false)} sx={{ color: '#114417DB' }}>
+            Close
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       {/* Bottom Buttons */}
       {onSaveDraft && onSkip && (
         <Box display="flex" gap={2} mt={4} justifyContent="center">
@@ -915,11 +1146,11 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
             startIcon={<SaveIcon />}
             onClick={() => onSaveDraft(buildQuizData())}
             sx={{
-              borderColor: '#10b981',
-              color: '#10b981',
+              borderColor: '#114417DB',
+              color: '#114417DB',
               '&:hover': {
-                borderColor: '#059669',
-                backgroundColor: '#d1fae5'
+                borderColor: '#0a2f0e',
+                backgroundColor: 'rgba(17, 68, 23, 0.08)'
               },
               textTransform: 'none',
               fontWeight: 600,
@@ -963,7 +1194,29 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
             Cancel
           </Button>
           <Button
+            variant="outlined"
+            startIcon={<ArrowBackIcon />}
+            onClick={() => {
+              // Go back to Content Creator step
+              if (onCancel) onCancel();
+            }}
+            sx={{
+              borderColor: '#6b7280',
+              color: '#6b7280',
+              '&:hover': {
+                borderColor: '#4b5563',
+                backgroundColor: '#f3f4f6'
+              },
+              textTransform: 'none',
+              fontWeight: 600,
+              minWidth: 150
+            }}
+          >
+            Previous
+          </Button>
+          <Button
             variant="contained"
+            endIcon={<ArrowForwardIcon />}
             onClick={handleSaveQuiz}
             sx={{
               backgroundColor: '#114417DB',
@@ -975,7 +1228,7 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
               minWidth: 150
             }}
           >
-            Save
+            Next
           </Button>
         </Box>
       )}

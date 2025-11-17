@@ -48,7 +48,9 @@ import {
   TableHead,
   TableRow,
   TablePagination,
-  Alert
+  Alert,
+  CircularProgress,
+  Snackbar
 } from '@mui/material';
 import {
   BarChart as BarChartIcon,
@@ -69,6 +71,7 @@ import {
   Edit as EditIcon,
   LocalFireDepartment as FireIcon,
   ArrowBack as ArrowBackIcon,
+  ArrowForward as ArrowForwardIcon,
   CloudUpload as CloudUploadIcon,
   Description as DescriptionIcon,
   Article as ArticleIcon,
@@ -111,12 +114,14 @@ import {
   Cancel as CancelIcon,
   CardMembership as CertificateIcon,
   EmojiEvents as AwardIcon,
-  PlayCircleFilled as PlayCircleFilledIcon
+  PlayCircleFilled as PlayCircleFilledIcon,
+  School as SchoolIcon
 } from '@mui/icons-material';
 import { styled } from '@mui/material/styles';
 import Analytics from './Analytics';
 import Approvals from './Approvals';
 import InteractiveQuiz from './InteractiveQuiz';
+import SessionDetail from './SessionDetail';
 import GrowGridLogo from '../assets/Grow Grid logo.PNG';
 
 const DashboardContainer = styled(Box)(({ theme }) => ({
@@ -187,6 +192,10 @@ const ActivityCard = styled(Card)(({ theme }) => ({
 const AdminDashboard = () => {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [dateRangeFilter, setDateRangeFilter] = useState('all'); // 'all', '7days', '30days', 'custom'
+  const [showCustomDateDialog, setShowCustomDateDialog] = useState(false);
+  const [customStartDate, setCustomStartDate] = useState('');
+  const [customEndDate, setCustomEndDate] = useState('');
   const [profileAnchorEl, setProfileAnchorEl] = useState(null);
   const [showContentCreator, setShowContentCreator] = useState(false);
   const [contentCreatorView, setContentCreatorView] = useState('main'); // 'main', 'ai-creator', 'creation-modes', 'upload-file', 'live-trainings'
@@ -195,8 +204,23 @@ const AdminDashboard = () => {
   const [dragOver, setDragOver] = useState(false);
   const [aiContentGenerated, setAiContentGenerated] = useState(false);
   const [aiKeywords, setAiKeywords] = useState('');
+  const [isGeneratingContent, setIsGeneratingContent] = useState(false);
+  const [chatgptResponse, setChatgptResponse] = useState('');
+  const [parsedContent, setParsedContent] = useState(null);
   const [showContentPreview, setShowContentPreview] = useState(false);
-  const [selectedCreationMode, setSelectedCreationMode] = useState(null); // 'powerpoint', 'word', 'video'
+  // Toast notification state
+  const [toast, setToast] = useState({ open: false, message: '', severity: 'info' });
+  const [selectedCreationMode, setSelectedCreationMode] = useState(null);
+
+  // Show toast notification
+  const showToast = (message, severity = 'info') => {
+    setToast({ open: true, message, severity });
+  };
+
+  // Close toast
+  const closeToast = () => {
+    setToast(prev => ({ ...prev, open: false }));
+  }; // 'powerpoint', 'word', 'video'
   const [showSuccessPopup, setShowSuccessPopup] = useState(false);
   const [showScheduleDialog, setShowScheduleDialog] = useState(false);
   const [selectedSession, setSelectedSession] = useState(null);
@@ -699,6 +723,8 @@ const AdminDashboard = () => {
   // Certification Templates states
   const [certificationView, setCertificationView] = useState('templates'); // 'templates', 'configure', 'permissions'
   const [selectedTemplate, setSelectedTemplate] = useState(null);
+  const [fieldsSaved, setFieldsSaved] = useState(false);
+  const [showCertificatePreview, setShowCertificatePreview] = useState(false);
   const [certificateFields, setCertificateFields] = useState({
     title: 'CERTIFICATE',
     subtitle: '-OF APPRECIATION-',
@@ -803,17 +829,29 @@ const AdminDashboard = () => {
         }
       }
       
-      // Clean up saved assessments (keep only last 20 if aggressive, 50 otherwise)
+      // Clean up saved assessments (keep only last 10 if aggressive, 20 otherwise)
       const assessments = localStorage.getItem('saved_assessments');
       if (assessments) {
-        const parsed = JSON.parse(assessments);
-        const keepCount = aggressive ? 20 : 50;
-        if (parsed.length > keepCount) {
-          const cleaned = parsed.slice(0, keepCount);
-          const oldSize = assessments.length;
-          localStorage.setItem('saved_assessments', JSON.stringify(cleaned));
-          cleanedBytes += oldSize - JSON.stringify(cleaned).length;
-          console.log(`Cleaned up ${parsed.length - keepCount} old assessments`);
+        try {
+          const parsed = JSON.parse(assessments);
+          // Check size first - if it's over 2MB, be more aggressive
+          const dataSize = new Blob([assessments]).size;
+          const isLarge = dataSize > 2 * 1024 * 1024; // 2MB
+          const keepCount = isLarge ? 5 : (aggressive ? 10 : 20);
+          
+          if (parsed.length > keepCount || isLarge) {
+            // Keep only the most recent assessments
+            const cleaned = parsed.slice(0, keepCount);
+            const oldSize = assessments.length;
+            localStorage.setItem('saved_assessments', JSON.stringify(cleaned));
+            cleanedBytes += oldSize - JSON.stringify(cleaned).length;
+            console.log(`Cleaned up ${parsed.length - keepCount} old assessments. Reduced size from ${(dataSize / 1024 / 1024).toFixed(2)}MB to ${(new Blob([JSON.stringify(cleaned)]).size / 1024 / 1024).toFixed(2)}MB`);
+          }
+        } catch (error) {
+          console.error('Error cleaning up assessments:', error);
+          // If parsing fails, clear it entirely
+          localStorage.removeItem('saved_assessments');
+          console.log('Removed corrupted saved_assessments data');
         }
       }
       
@@ -925,13 +963,13 @@ const AdminDashboard = () => {
             } catch (finalError) {
               console.error(`Final attempt failed:`, finalError);
             }
-            const message = `Storage limit reached. The app has automatically cleaned up old data, but storage is still full.\n\nPlease:\n1. Refresh the page to reload data\n2. Or manually clear old sessions from the dashboard\n\nYour current work will be saved in memory but may be lost on refresh.`;
-            alert(message);
+            const message = `Storage limit reached. The app has automatically cleaned up old data, but storage is still full. Please refresh the page to reload data or manually clear old sessions from the dashboard. Your current work will be saved in memory but may be lost on refresh.`;
+            showToast(message, 'warning');
             return false;
           }
         } else {
-          const message = `Storage limit reached. Unable to clean up automatically.\n\nPlease:\n1. Refresh the page\n2. Or clear browser storage manually\n\nYour current work will be saved in memory but may be lost on refresh.`;
-          alert(message);
+          const message = `Storage limit reached. Unable to clean up automatically. Please refresh the page or clear browser storage manually. Your current work will be saved in memory but may be lost on refresh.`;
+          showToast(message, 'warning');
           return false;
         }
       }
@@ -949,6 +987,23 @@ useEffect(() => {
     window.dispatchEvent(new Event('published-sessions-updated'));
   }
 }, [publishedSessions]);
+
+  // Run cleanup on mount, especially for large saved_assessments
+  useEffect(() => {
+    // Check for large saved_assessments and clean aggressively
+    const assessments = localStorage.getItem('saved_assessments');
+    if (assessments) {
+      const dataSize = new Blob([assessments]).size;
+      if (dataSize > 2 * 1024 * 1024) { // If over 2MB
+        console.log('Large saved_assessments detected, running aggressive cleanup...');
+        cleanupOldData(true); // Aggressive cleanup
+      } else {
+        cleanupOldData(); // Normal cleanup
+      }
+    } else {
+      cleanupOldData(); // Normal cleanup
+    }
+  }, []);
 
   useEffect(() => {
     safeSetLocalStorage('saved_assessments', savedAssessments);
@@ -1161,28 +1216,97 @@ useEffect(() => {
     description: ''
   });
 
+  // Function to get date range based on filter
+  const getDateRange = (filter) => {
+    const now = new Date();
+    const startDate = new Date();
+    
+    switch (filter) {
+      case '7days':
+        startDate.setDate(now.getDate() - 7);
+        startDate.setHours(0, 0, 0, 0);
+        break;
+      case '30days':
+        startDate.setDate(now.getDate() - 30);
+        startDate.setHours(0, 0, 0, 0);
+        break;
+      case 'custom':
+        if (customStartDate && customEndDate) {
+          const start = new Date(customStartDate);
+          start.setHours(0, 0, 0, 0);
+          const end = new Date(customEndDate);
+          end.setHours(23, 59, 59, 999);
+          return { startDate: start, endDate: end };
+        }
+        return null; // If custom dates not set, don't filter
+      default:
+        return null; // 'all' - no date filter
+    }
+    
+    return { startDate, endDate: now };
+  };
+
+  // Function to check if a date is within the filter range
+  const isWithinDateRange = (dateString, filter) => {
+    if (!dateString || filter === 'all') return true;
+    const dateRange = getDateRange(filter);
+    if (!dateRange) return true;
+    const date = new Date(dateString);
+    return date >= dateRange.startDate && date <= dateRange.endDate;
+  };
+
+  // Handle custom date range selection
+  const handleCustomDateFilter = () => {
+    setShowCustomDateDialog(true);
+  };
+
+  // Apply custom date filter
+  const handleApplyCustomDate = () => {
+    if (customStartDate && customEndDate) {
+      setDateRangeFilter('custom');
+      setShowCustomDateDialog(false);
+    }
+  };
+
+  // Handle date filter change
+  const handleDateRangeChange = (value) => {
+    if (value === 'custom') {
+      handleCustomDateFilter();
+    } else {
+      setDateRangeFilter(value);
+    }
+  };
+
   // Real-time metrics using useMemo
   const metrics = useMemo(() => {
-    const totalSessionsCreated = savedSessions.length;
+    const filteredSessions = dateRangeFilter === 'all' 
+      ? savedSessions 
+      : savedSessions.filter(s => isWithinDateRange(s.createdAt, dateRangeFilter));
+    
+    const totalSessionsCreated = filteredSessions.length;
     const activeEmployees = employees.length;
-    const upcomingSessions = savedSessions.filter(s => s.status === 'scheduled').length;
-    const totalActiveSessions = savedSessions.filter(s => s.status === 'in_progress').length;
+    const upcomingSessions = filteredSessions.filter(s => s.status === 'scheduled').length;
+    const totalActiveSessions = filteredSessions.filter(s => s.status === 'in_progress').length;
 
     return [
       { label: 'Total Sessions Created', value: totalSessionsCreated.toString(), color: '#3b82f6', icon: <BarChartIcon sx={{ color: '#3b82f6' }} /> },
-      { label: 'Active Employees', value: activeEmployees.toString(), color: '#10b981', icon: <PeopleIcon sx={{ color: '#10b981' }} /> },
+      { label: 'Active Employees', value: activeEmployees.toString(), color: '#114417DB', icon: <PeopleIcon sx={{ color: '#114417DB' }} /> },
       { label: 'Upcoming Sessions', value: upcomingSessions.toString(), color: '#f59e0b', icon: <CalendarIcon sx={{ color: '#f59e0b' }} /> },
       { label: 'Total Active Sessions', value: totalActiveSessions.toString(), color: '#ef4444', icon: <PlayCircleFilledIcon sx={{ color: '#ef4444' }} /> }
     ];
-  }, [savedSessions, employees]);
+  }, [savedSessions, employees, dateRangeFilter, customStartDate, customEndDate]);
 
   // Real-time session status data using useMemo
   const sessionStatusData = useMemo(() => {
-    const completedSessions = savedSessions.filter(s => s.status === 'completed').length;
-    const inProgressSessions = savedSessions.filter(s => s.status === 'in_progress').length;
-    const scheduledSessions = savedSessions.filter(s => s.status === 'scheduled').length;
-    const draftSessionsCount = savedSessions.filter(s => s.status === 'draft').length;
-    const totalSessionCount = savedSessions.length;
+    const filteredSessions = dateRangeFilter === 'all' 
+      ? savedSessions 
+      : savedSessions.filter(s => isWithinDateRange(s.createdAt, dateRangeFilter));
+    
+    const completedSessions = filteredSessions.filter(s => s.status === 'completed').length;
+    const inProgressSessions = filteredSessions.filter(s => s.status === 'in_progress').length;
+    const scheduledSessions = filteredSessions.filter(s => s.status === 'scheduled').length;
+    const draftSessionsCount = filteredSessions.filter(s => s.status === 'draft').length;
+    const totalSessionCount = filteredSessions.length;
     
     return [
       { label: 'All', value: totalSessionCount, percentage: 100 },
@@ -1191,7 +1315,7 @@ useEffect(() => {
       { label: 'Completed', value: completedSessions, percentage: totalSessionCount > 0 ? Math.round((completedSessions / totalSessionCount) * 100) : 0 },
       { label: 'Draft', value: draftSessionsCount, percentage: totalSessionCount > 0 ? Math.round((draftSessionsCount / totalSessionCount) * 100) : 0 }
     ];
-  }, [savedSessions]);
+  }, [savedSessions, dateRangeFilter, customStartDate, customEndDate]);
 
   // Function to add new activity
   const addActivity = (action, user, type = 'info', iconType = 'default') => {
@@ -1284,7 +1408,11 @@ useEffect(() => {
 
   // Real-time recent activity from activities state
   const getRecentActivity = () => {
-    return activities
+    const filtered = dateRangeFilter === 'all'
+      ? activities
+      : activities.filter(a => isWithinDateRange(a.timestamp, dateRangeFilter));
+    
+    return filtered
       .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
       .slice(0, 10)
       .map((activity) => ({
@@ -1312,7 +1440,7 @@ useEffect(() => {
   // Memoize recent activity to recalculate when activities or currentTime changes
   const recentActivity = useMemo(() => {
     return getRecentActivity();
-  }, [activities, currentTime]);
+  }, [activities, currentTime, dateRangeFilter, customStartDate, customEndDate]);
 
   // Memoize top performers for Leader Board
   const topPerformers = useMemo(() => {
@@ -1324,7 +1452,7 @@ useEffect(() => {
       sessionsCompleted: Math.floor(Math.random() * 10) + 1,
       completionRate: Math.floor(Math.random() * 40) + 60,
       rank: index + 1,
-      rankColor: index === 0 ? '#10b981' : index === 1 ? '#f59e0b' : index === 2 ? '#ef4444' : '#6b7280'
+      rankColor: index === 0 ? '#114417DB' : index === 1 ? '#f59e0b' : index === 2 ? '#ef4444' : '#6b7280'
     }));
   }, [employees]);
 
@@ -1458,6 +1586,55 @@ useEffect(() => {
     return currentStep; // If already at last step, stay there
   };
 
+  // Helper function to get the previous step in the flow
+  const getPreviousStep = (currentStep) => {
+    const stepOrder = ['create', 'content-creator', 'assessment', 'certification', 'all-sessions', 'schedule'];
+    const currentIndex = stepOrder.indexOf(currentStep);
+    if (currentIndex > 0) {
+      return stepOrder[currentIndex - 1];
+    }
+    return currentStep; // If already at first step, stay there
+  };
+
+  // Handler for Previous button - moves to previous step
+  const handlePreviousStep = () => {
+    const previousStep = getPreviousStep(manageSessionTab);
+    setManageSessionTab(previousStep);
+    setManageSessionView(previousStep);
+    
+    // Handle step-specific setup
+    if (previousStep === 'create') {
+      setShowContentCreator(false);
+      setContentCreatorView('main');
+    } else if (previousStep === 'content-creator') {
+      setShowContentCreator(true);
+      setContentCreatorView('main');
+      setShowQuizForm(false);
+    } else if (previousStep === 'assessment') {
+      setShowContentCreator(false);
+      setShowQuizForm(false);
+    }
+  };
+
+  // Handler for Next button - moves to next step
+  const handleNextStep = () => {
+    const nextStep = getNextStep(manageSessionTab);
+    setManageSessionTab(nextStep);
+    setManageSessionView(nextStep);
+    
+    // Handle step-specific setup
+    if (nextStep === 'content-creator') {
+      setShowContentCreator(true);
+      setContentCreatorView('main');
+    } else if (nextStep === 'assessment') {
+      setShowContentCreator(false);
+      setShowQuizForm(false);
+    } else if (nextStep === 'certification') {
+      setShowContentCreator(false);
+      setShowQuizForm(false);
+    }
+  };
+
   // Handler for Skip button - moves to next step
   const handleSkipToNextStep = () => {
     const nextStep = getNextStep(manageSessionTab);
@@ -1561,7 +1738,7 @@ useEffect(() => {
         window.dispatchEvent(new Event('employee-completions-updated'));
         window.dispatchEvent(new Event('session-certifications-updated'));
         
-        alert('All sessions have been cleared successfully!');
+        showToast('All sessions have been cleared successfully!', 'success');
         
         // Log activity
         addActivity(
@@ -1572,7 +1749,7 @@ useEffect(() => {
         );
       } catch (error) {
         console.error('Error clearing sessions:', error);
-        alert('Error clearing sessions. Please try again.');
+        showToast('Error clearing sessions. Please try again.', 'error');
       }
     }
   };
@@ -1619,22 +1796,22 @@ useEffect(() => {
 
   const handlePasswordReset = () => {
     if (!passwordData.currentPassword || !passwordData.newPassword || !passwordData.confirmPassword) {
-      alert('Please fill in all fields');
+      showToast('Please fill in all fields', 'warning');
       return;
     }
 
     if (passwordData.currentPassword !== adminCredentials.password) {
-      alert('Current password is incorrect');
+      showToast('Current password is incorrect', 'error');
       return;
     }
 
     if (passwordData.newPassword !== passwordData.confirmPassword) {
-      alert('New passwords do not match');
+      showToast('New passwords do not match', 'error');
       return;
     }
 
     if (passwordData.newPassword.length < 6) {
-      alert('Password must be at least 6 characters long');
+      showToast('Password must be at least 6 characters long', 'warning');
       return;
     }
 
@@ -1649,7 +1826,7 @@ useEffect(() => {
       confirmPassword: ''
     });
 
-    alert('Password updated successfully!');
+    showToast('Password updated successfully!', 'success');
   };
 
   const handleClosePasswordManager = () => {
@@ -1679,7 +1856,7 @@ useEffect(() => {
     } else if (notification.action === 'view_employee') {
       setActiveTab('employees');
     } else if (notification.action === 'view_details') {
-      alert('System maintenance details: Scheduled maintenance will occur from 11 PM to 1 AM EST.');
+      showToast('System maintenance details: Scheduled maintenance will occur from 11 PM to 1 AM EST.', 'info');
     }
     setNotificationAnchorEl(null);
   };
@@ -1762,7 +1939,7 @@ useEffect(() => {
     const hasContent = selectedFiles.length > 0 || aiContentGenerated || selectedCreationMode;
     
     if (!hasContent) {
-      alert('Please generate content, create a file, or upload a file before proceeding.');
+      showToast('Please generate content, create a file, or upload a file before proceeding.', 'warning');
       return;
     }
     
@@ -1781,7 +1958,7 @@ useEffect(() => {
     const hasContent = selectedFiles.length > 0 || aiContentGenerated || selectedCreationMode;
     
     if (!hasContent) {
-      alert('Please generate content, create a file, or upload a file before proceeding.');
+      showToast('Please generate content, create a file, or upload a file before proceeding.', 'warning');
       return;
     }
     
@@ -1789,14 +1966,187 @@ useEffect(() => {
     handleProceedToQuiz();
   };
 
-  const handleGenerateAIContent = () => {
+  // Generate the prompt based on keywords
+  const generatePrompt = () => {
     if (!aiKeywords.trim()) {
-      alert('Please enter keywords or topics to generate content.');
+      showToast('Please enter keywords or topics to generate a prompt.', 'warning');
       return;
     }
-    // Simulate AI content generation
+    
+    // Create a ChatGPT prompt for training content
+    const prompt = `Create comprehensive training content for a learning session about: ${aiKeywords}
+
+Please provide:
+1. A clear and engaging title
+2. A detailed description (2-3 paragraphs)
+3. Structured learning content with:
+   - Key concepts and definitions
+   - Best practices and guidelines
+   - Real-world examples and case studies
+   - Interactive learning activities
+   - Summary and key takeaways
+
+Format the response as JSON with the following structure:
+{
+  "title": "Training Session Title",
+  "description": "Detailed description...",
+  "content": "Full structured content with sections...",
+  "keyPoints": ["Point 1", "Point 2", "Point 3"],
+  "learningObjectives": ["Objective 1", "Objective 2"]
+}
+
+Make the content professional, educational, and suitable for workplace training.`;
+    
+    // Store the generated prompt
+    if (!sessionContentSnapshot) {
+      setSessionContentSnapshot({
+        aiContent: {
+          keywords: aiKeywords,
+          title: `Training Session: ${aiKeywords}`,
+          description: `Content generation redirected to ChatGPT. Copy the generated content and paste it here when ready.`,
+          content: prompt,
+          keyPoints: [],
+          learningObjectives: [],
+          provider: 'chatgpt-redirect',
+          generatedAt: new Date().toISOString()
+        },
+        sessionForm: { ...sessionFormData }
+      });
+    } else {
+      setSessionContentSnapshot(prev => ({
+        ...prev,
+        aiContent: {
+          keywords: aiKeywords,
+          title: `Training Session: ${aiKeywords}`,
+          description: `Content generation redirected to ChatGPT. Copy the generated content and paste it here when ready.`,
+          content: prompt,
+          keyPoints: [],
+          learningObjectives: [],
+          provider: 'chatgpt-redirect',
+          generatedAt: new Date().toISOString()
+        }
+      }));
+    }
+    
+    // Show the prompt
     setAiContentGenerated(true);
-    alert('AI Content generated successfully! You can now proceed to create the questionnaire.');
+  };
+
+  // Copy prompt and open ChatGPT
+  const handleCopyAndOpenChatGPT = async () => {
+    const prompt = sessionContentSnapshot?.aiContent?.content || '';
+    
+    if (!prompt) {
+      showToast('Please generate a prompt first.', 'warning');
+      return;
+    }
+    
+    try {
+      // Copy the prompt to clipboard
+      await navigator.clipboard.writeText(prompt);
+      
+      // Open ChatGPT in a new tab
+      const chatgptUrl = 'https://chat.openai.com/';
+      window.open(chatgptUrl, '_blank');
+      
+      // Show success message
+      setTimeout(() => {
+        showToast('ChatGPT opened! Prompt copied to clipboard. Paste (Ctrl+V) into ChatGPT and press Enter.', 'success');
+      }, 500);
+      
+    } catch (err) {
+      // Fallback if clipboard API fails
+      console.error('Failed to copy to clipboard:', err);
+      
+      // Open ChatGPT
+      window.open('https://chat.openai.com/', '_blank');
+      
+      // Show prompt in toast as fallback
+      setTimeout(() => {
+        showToast('ChatGPT opened! Please copy and paste the prompt into ChatGPT.', 'info');
+      }, 500);
+    }
+  };
+
+  // Parse and process ChatGPT JSON response
+  const handleProcessChatGPTResponse = () => {
+    if (!chatgptResponse.trim()) {
+      showToast('Please paste the JSON response from ChatGPT.', 'warning');
+      return;
+    }
+
+    try {
+      // Try to parse the JSON response
+      let jsonData;
+      
+      // Remove markdown code blocks if present
+      let cleanedResponse = chatgptResponse.trim();
+      if (cleanedResponse.startsWith('```json')) {
+        cleanedResponse = cleanedResponse.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+      } else if (cleanedResponse.startsWith('```')) {
+        cleanedResponse = cleanedResponse.replace(/^```\s*/, '').replace(/\s*```$/, '');
+      }
+      
+      jsonData = JSON.parse(cleanedResponse);
+      
+      // Helper function to convert content to string if it's an object
+      const convertContentToString = (content) => {
+        if (typeof content === 'string') {
+          return content;
+        } else if (typeof content === 'object' && content !== null) {
+          // If content is an object, convert it to a formatted string
+          return Object.entries(content)
+            .map(([key, value]) => {
+              const formattedKey = key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase());
+              return `## ${formattedKey}\n\n${value || ''}\n`;
+            })
+            .join('\n');
+        }
+        return '';
+      };
+      
+      const contentString = convertContentToString(jsonData.content);
+      
+      // Update the session content snapshot with parsed data
+      if (!sessionContentSnapshot) {
+        setSessionContentSnapshot({
+          aiContent: {
+            keywords: aiKeywords,
+            title: jsonData.title || `Training Session: ${aiKeywords}`,
+            description: jsonData.description || '',
+            content: contentString,
+            keyPoints: jsonData.keyPoints || [],
+            learningObjectives: jsonData.learningObjectives || [],
+            provider: 'chatgpt',
+            generatedAt: new Date().toISOString(),
+            rawResponse: jsonData
+          },
+          sessionForm: sessionFormData || {}
+        });
+      } else {
+        setSessionContentSnapshot(prev => ({
+          ...prev,
+          aiContent: {
+            keywords: aiKeywords,
+            title: jsonData.title || `Training Session: ${aiKeywords}`,
+            description: jsonData.description || '',
+            content: contentString,
+            keyPoints: jsonData.keyPoints || [],
+            learningObjectives: jsonData.learningObjectives || [],
+            provider: 'chatgpt',
+            generatedAt: new Date().toISOString(),
+            rawResponse: jsonData
+          }
+        }));
+      }
+      
+      setParsedContent(jsonData);
+      showToast('Content parsed successfully! The content is now ready to use in your session.', 'success');
+      
+    } catch (error) {
+      console.error('Error parsing JSON:', error);
+      showToast(`Failed to parse JSON. Please make sure you copied the complete JSON response from ChatGPT. Error: ${error.message}`, 'error');
+    }
   };
 
   const handleProceedToQuiz = () => {
@@ -1902,7 +2252,7 @@ useEffect(() => {
       'session_published'
     );
     
-    alert('Session published successfully! It is now ready to schedule.');
+    showToast('Session published successfully! It is now ready to schedule.', 'success');
     setCurrentQuizData(null);
     setShowQuizForm(false);
     // Navigate to Schedule step in manage section
@@ -1912,7 +2262,7 @@ useEffect(() => {
 
   const handleQuizPreview = (quizData) => {
     // Show preview of quiz - could open a dialog or navigate to preview page
-    alert('Preview functionality - Quiz preview will open in a new window');
+    showToast('Preview functionality - Quiz preview will open in a new window', 'info');
     // You can implement a preview modal here
   };
 
@@ -2083,7 +2433,7 @@ useEffect(() => {
       'session_saved'
     );
 
-    alert(existingDraftId ? 'Draft updated successfully!' : 'Draft saved successfully!');
+    showToast(existingDraftId ? 'Draft updated successfully!' : 'Draft saved successfully!', 'success');
   };
 
   const handleSaveSession = () => {
@@ -2339,7 +2689,7 @@ useEffect(() => {
     setShowPublishDialog(false);
     setSessionToPublish(null);
     
-    alert('Assessment saved successfully!');
+    showToast('Assessment saved successfully!', 'success');
   };
 
   const handleQuizSkip = () => {
@@ -2394,7 +2744,7 @@ useEffect(() => {
         );
       }
       
-      alert('Session deleted successfully!');
+      showToast('Session deleted successfully!', 'success');
     }
   };
 
@@ -2457,7 +2807,7 @@ useEffect(() => {
     setSelectedAllSessionItem(sessionWithFolder);
     setEditingSession(null);
     setViewMode('preview');
-    alert('Session updated successfully!');
+    showToast('Session updated successfully!', 'success');
   };
 
   const handleCancelEdit = () => {
@@ -2611,7 +2961,7 @@ useEffect(() => {
         );
       }
       
-      alert('Draft session deleted successfully!');
+      showToast('Draft session deleted successfully!', 'success');
     }
   };
 
@@ -2630,7 +2980,7 @@ useEffect(() => {
         );
       }
       
-      alert('Assessment deleted successfully!');
+      showToast('Assessment deleted successfully!', 'success');
     }
   };
 
@@ -2640,7 +2990,7 @@ useEffect(() => {
       setPublishedSessions(prev => {
         const session = prev.find(s => s.id === sessionId);
         if (!session) {
-          alert('Session not found!');
+          showToast('Session not found!', 'error');
           return prev; // Return unchanged if session not found
         }
         
@@ -2670,7 +3020,7 @@ useEffect(() => {
       }
       
       // Show success message
-      alert('Published session deleted successfully!');
+      showToast('Published session deleted successfully!', 'success');
     }
   };
 
@@ -2696,11 +3046,11 @@ useEffect(() => {
         // If it's a URL string
         window.open(fileToOpen, '_blank');
       } else {
-        alert(`Unable to open file: ${file.name || 'Unknown file'}\n\nThe file may no longer be available in memory.`);
+        showToast(`Unable to open file: ${file.name || 'Unknown file'}. The file may no longer be available in memory.`, 'error');
       }
     } catch (error) {
       console.error('Error opening file:', error);
-      alert(`Error opening file: ${file.name || 'Unknown file'}`);
+      showToast(`Error opening file: ${file.name || 'Unknown file'}`, 'error');
     }
   };
 
@@ -2717,7 +3067,7 @@ useEffect(() => {
       } else if (file.dataUrl) {
         url = file.dataUrl;
       } else {
-        alert('Unable to download file');
+        showToast('Unable to download file', 'error');
         return;
       }
       
@@ -2735,7 +3085,7 @@ useEffect(() => {
       }
     } catch (error) {
       console.error('Error downloading file:', error);
-      alert(`Error downloading file: ${file.name || 'Unknown file'}`);
+      showToast(`Error downloading file: ${file.name || 'Unknown file'}`, 'error');
     }
   };
 
@@ -2760,27 +3110,27 @@ useEffect(() => {
         setTimeout(() => {
           const fallback = window.open(appProtocols[appName], '_blank');
           if (!fallback) {
-            alert(`Please manually open ${appName} from your Start menu or desktop.`);
+            showToast(`Please manually open ${appName} from your Start menu or desktop.`, 'info');
           }
         }, 100);
       } else {
-        alert(`Please manually open ${appName} to create your content.`);
+        showToast(`Please manually open ${appName} to create your content.`, 'info');
       }
     } catch (error) {
-      alert(`Please manually open ${appName} to create your content.`);
+      showToast(`Please manually open ${appName} to create your content.`, 'info');
     }
   };
 
   const handleScheduleSubmit = () => {
     if (!scheduleData.date || !scheduleData.startTime || !scheduleData.endTime || !selectedDepartment) {
-      alert('Please fill in all required fields and select a department');
+      showToast('Please fill in all required fields and select a department', 'warning');
       return;
     }
 
     const sessionToSchedule = selectedSession || selectedSessionForScheduling;
 
     if (!sessionToSchedule) {
-      alert('No session selected. Please select a session first.');
+      showToast('No session selected. Please select a session first.', 'warning');
       return;
     }
 
@@ -2869,29 +3219,58 @@ useEffect(() => {
             Comprehensive session management and employee oversight
           </Typography>
         </Box>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => {
-            setActiveTab('manage-session');
-            setManageSessionTab('create');
-            handleManageSessionClick('create');
-          }}
-          sx={{
-            backgroundColor: '#114417DB',
-            color: 'white',
-            '&:hover': {
-              backgroundColor: '#0a2f0e',
-            },
-            textTransform: 'none',
-            fontWeight: 600,
-            px: 3,
-            py: 1.5,
-            height: 'fit-content'
-          }}
-        >
-          Create New Session
-        </Button>
+        <Box display="flex" gap={2} alignItems="center">
+          <FormControl size="small" sx={{ minWidth: 180 }}>
+            <InputLabel id="date-range-filter-label">Date Range</InputLabel>
+            <Select
+              labelId="date-range-filter-label"
+              id="date-range-filter"
+              value={dateRangeFilter}
+              label="Date Range"
+              onChange={(e) => handleDateRangeChange(e.target.value)}
+              sx={{
+                backgroundColor: 'white',
+                '& .MuiOutlinedInput-notchedOutline': {
+                  borderColor: '#e5e7eb',
+                },
+                '&:hover .MuiOutlinedInput-notchedOutline': {
+                  borderColor: '#114417DB',
+                },
+                '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+                  borderColor: '#114417DB',
+                },
+              }}
+            >
+              <MenuItem value="all">All Time</MenuItem>
+              <MenuItem value="7days">Last 7 days</MenuItem>
+              <MenuItem value="30days">Last 30 days</MenuItem>
+              <MenuItem value="custom">Custom</MenuItem>
+            </Select>
+          </FormControl>
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => {
+              setActiveTab('manage-session');
+              setManageSessionTab('create');
+              handleManageSessionClick('create');
+            }}
+            sx={{
+              backgroundColor: '#114417DB',
+              color: 'white',
+              '&:hover': {
+                backgroundColor: '#0a2f0e',
+              },
+              textTransform: 'none',
+              fontWeight: 600,
+              px: 3,
+              py: 1.5,
+              height: 'fit-content'
+            }}
+          >
+            Create New Session
+          </Button>
+        </Box>
       </Box>
 
       {/* Key Metrics */}
@@ -2929,7 +3308,7 @@ useEffect(() => {
                       case 'All': return '#114417DB';
                       case 'Scheduled': return '#3b82f6';
                       case 'In Progress': return '#f59e0b';
-                      case 'Completed': return '#10b981';
+                      case 'Completed': return '#114417DB';
                       case 'Draft': return '#ef4444';
                       default: return '#6b7280';
                     }
@@ -3388,6 +3767,108 @@ useEffect(() => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Custom Date Range Dialog */}
+      <Dialog 
+        open={showCustomDateDialog} 
+        onClose={() => setShowCustomDateDialog(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>
+          <Typography variant="h6" fontWeight="bold">
+            Select Custom Date Range
+          </Typography>
+        </DialogTitle>
+        <DialogContent>
+          <Box display="flex" flexDirection="column" gap={3} sx={{ mt: 2 }}>
+            <TextField
+              label="Start Date"
+              type="date"
+              value={customStartDate}
+              onChange={(e) => setCustomStartDate(e.target.value)}
+              fullWidth
+              InputLabelProps={{
+                shrink: true,
+              }}
+              inputProps={{
+                max: customEndDate || undefined
+              }}
+              sx={{
+                '& .MuiOutlinedInput-root': {
+                  '&:hover fieldset': {
+                    borderColor: '#114417DB',
+                  },
+                  '&.Mui-focused fieldset': {
+                    borderColor: '#114417DB',
+                  },
+                },
+              }}
+            />
+            <TextField
+              label="End Date"
+              type="date"
+              value={customEndDate}
+              onChange={(e) => setCustomEndDate(e.target.value)}
+              fullWidth
+              InputLabelProps={{
+                shrink: true,
+              }}
+              inputProps={{
+                min: customStartDate || undefined
+              }}
+              sx={{
+                '& .MuiOutlinedInput-root': {
+                  '&:hover fieldset': {
+                    borderColor: '#114417DB',
+                  },
+                  '&.Mui-focused fieldset': {
+                    borderColor: '#114417DB',
+                  },
+                },
+              }}
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button
+            onClick={() => {
+              setShowCustomDateDialog(false);
+              setCustomStartDate('');
+              setCustomEndDate('');
+            }}
+            sx={{
+              color: '#6b7280',
+              '&:hover': {
+                backgroundColor: 'rgba(107, 114, 128, 0.08)',
+              },
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={handleApplyCustomDate}
+            variant="contained"
+            disabled={!customStartDate || !customEndDate || customStartDate > customEndDate}
+            sx={{
+              backgroundColor: '#114417DB',
+              color: 'white',
+              '&:hover': {
+                backgroundColor: '#0a2f0e',
+              },
+              '&.Mui-disabled': {
+                backgroundColor: '#e5e7eb',
+                color: '#9ca3af',
+              },
+              textTransform: 'none',
+              fontWeight: 600,
+              px: 3,
+            }}
+          >
+            Apply
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 
@@ -3413,11 +3894,11 @@ useEffect(() => {
               onClick={handleSaveSession}
               startIcon={<SaveIcon />}
               sx={{
-                borderColor: '#10b981',
-                color: '#10b981',
+                borderColor: '#114417DB',
+                color: '#114417DB',
                 '&:hover': {
-                  borderColor: '#059669',
-                  backgroundColor: '#d1fae5'
+                  borderColor: '#0a2f0e',
+                  backgroundColor: 'rgba(17, 68, 23, 0.08)'
                 },
                 textTransform: 'none',
                 fontWeight: 600
@@ -3480,6 +3961,26 @@ useEffect(() => {
 
   const handleTemplateSelect = (template) => {
     setSelectedTemplate(template);
+    // Automatically show Configure Fields section
+    setCertificationView('configure');
+    setFieldsSaved(false); // Reset fields saved state when selecting a new template
+    // Reset certificate fields to template defaults
+    setCertificateFields({
+      title: template.title || 'CERTIFICATE',
+      subtitle: template.subtitle || '-OF APPRECIATION-',
+      recipientLabel: template.recipientLabel || 'Presented to',
+      descriptionText: template.descriptionText || 'who gave the best and completed the course',
+      userName: 'User Name',
+      dateOfIssue: '01 Sept 2026',
+      authorisedBy: 'Country Head'
+    });
+    // Scroll to Configure Fields section after a short delay to ensure it's rendered
+    setTimeout(() => {
+      const configureFieldsSection = document.getElementById('configure-fields-section');
+      if (configureFieldsSection) {
+        configureFieldsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 100);
   };
 
   const handleTemplateMenuOpen = (event, template) => {
@@ -3496,7 +3997,7 @@ useEffect(() => {
   const handleSetAsDefault = () => {
     if (selectedMenuTemplate) {
       setDefaultTemplateId(selectedMenuTemplate.id);
-      alert(`Template "${selectedMenuTemplate.name}" has been set as default.`);
+      showToast(`Template "${selectedMenuTemplate.name}" has been set as default.`, 'success');
     }
     handleTemplateMenuClose();
   };
@@ -3513,10 +4014,10 @@ useEffect(() => {
     if (selectedMenuTemplate) {
       if (disabledTemplateIds.includes(selectedMenuTemplate.id)) {
         setDisabledTemplateIds(prev => prev.filter(id => id !== selectedMenuTemplate.id));
-        alert(`Template "${selectedMenuTemplate.name}" has been enabled.`);
+        showToast(`Template "${selectedMenuTemplate.name}" has been enabled.`, 'success');
       } else {
         setDisabledTemplateIds(prev => [...prev, selectedMenuTemplate.id]);
-        alert(`Template "${selectedMenuTemplate.name}" has been disabled.`);
+        showToast(`Template "${selectedMenuTemplate.name}" has been disabled.`, 'info');
         // If the disabled template was selected, clear selection
         if (selectedTemplate?.id === selectedMenuTemplate.id) {
           setSelectedTemplate(null);
@@ -3528,7 +4029,7 @@ useEffect(() => {
 
   const handleConfirmTemplate = () => {
     if (!selectedTemplate) {
-      alert('Please select a template first.');
+      showToast('Please select a template first.', 'warning');
       return;
     }
     setCertificationView('configure');
@@ -3544,10 +4045,32 @@ useEffect(() => {
     });
   };
 
-  const handleUpdateFields = () => {
-    // Save certificate fields and navigate to permissions
+  const handleSaveFields = () => {
+    // Save certificate fields
+    setFieldsSaved(true);
+    // Show Permissions section
     setCertificationView('permissions');
+    // Scroll to permissions section after a short delay to ensure it's rendered
+    setTimeout(() => {
+      const permissionsSection = document.getElementById('permissions-section');
+      if (permissionsSection) {
+        permissionsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 100);
     // In real app, this would save to backend
+  };
+
+  const handleEditFields = () => {
+    // Allow editing fields again
+    setFieldsSaved(false);
+    setCertificationView('configure');
+    // Scroll back to Configure Fields section
+    setTimeout(() => {
+      const configureFieldsSection = document.getElementById('configure-fields-section');
+      if (configureFieldsSection) {
+        configureFieldsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 100);
   };
 
   const handlePermissionsSave = () => {
@@ -3684,7 +4207,7 @@ useEffect(() => {
               transform: isDisabled ? 'none' : 'translateY(-2px)'
             }
           }}
-          onClick={() => !isDisabled && setSelectedTemplate(template)}
+          onClick={() => !isDisabled && handleTemplateSelect(template)}
         >
           {/* Default Badge */}
           {isDefault && (
@@ -3694,7 +4217,7 @@ useEffect(() => {
                 top: 8,
                 left: 8,
                 zIndex: 2,
-                backgroundColor: '#10b981',
+                backgroundColor: '#114417DB',
                 color: 'white',
                 px: 1,
                 py: 0.5,
@@ -3921,63 +4444,8 @@ useEffect(() => {
 
     return (
       <Box p={3} sx={{ minHeight: '100vh', backgroundColor: '#ffffff' }}>
-        <Box mb={4} display="flex" justifyContent="space-between" alignItems="flex-start">
-          <Box>
-            <Typography variant="h4" fontWeight="bold" gutterBottom>
-              Certification
-            </Typography>
-            <Typography variant="body1" color="text.secondary">
-              Configure certification templates and settings for your training sessions
-            </Typography>
-          </Box>
-          <Box display="flex" gap={2}>
-            <Button
-              variant="outlined"
-              onClick={handleSaveSession}
-              startIcon={<SaveIcon />}
-              sx={{
-                borderColor: '#10b981',
-                color: '#10b981',
-                '&:hover': {
-                  borderColor: '#059669',
-                  backgroundColor: '#d1fae5'
-                },
-                textTransform: 'none',
-                fontWeight: 600
-              }}
-            >
-              Save as Draft
-            </Button>
-            <Button
-              variant="outlined"
-              onClick={handleSkipToNextStep}
-              sx={{
-                borderColor: '#6b7280',
-                color: '#6b7280',
-                '&:hover': {
-                  borderColor: '#4b5563',
-                  backgroundColor: '#f3f4f6'
-                },
-                textTransform: 'none',
-                fontWeight: 600
-              }}
-            >
-              Skip
-            </Button>
-          </Box>
-        </Box>
-
-        {/* Sub-header Tabs */}
-        <Box mb={3} sx={{ borderBottom: 1, borderColor: 'divider' }}>
-          <Tabs value={certificationView} onChange={(e, newValue) => setCertificationView(newValue)}>
-            <Tab label="Templates" value="templates" />
-            <Tab label="Configure Fields" value="configure" />
-            <Tab label="Permissions" value="permissions" />
-          </Tabs>
-        </Box>
-
-        {/* Tab Content */}
-        {certificationView === 'templates' && (
+        {/* Template Selection Section */}
+        <Box id="template-selection-section">
           <Card sx={{ p: 3 }}>
             <Typography variant="h6" fontWeight="bold" mb={3}>
               Select template
@@ -3991,46 +4459,6 @@ useEffect(() => {
                 </Grid>
               ))}
             </Grid>
-
-            {/* Action Buttons */}
-            <Box display="flex" justifyContent="flex-end" gap={2} mt={4}>
-              <Button
-                variant="outlined"
-                onClick={() => {
-                  setSelectedTemplate(null);
-                  setCertificationView('templates');
-                }}
-                sx={{
-                  borderColor: '#10b981',
-                  color: '#10b981',
-                  '&:hover': { 
-                    borderColor: '#059669', 
-                    backgroundColor: '#f0fdf4' 
-                  }
-                }}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="contained"
-                disabled={!selectedTemplate || disabledTemplateIds.includes(selectedTemplate?.id)}
-                onClick={() => {
-                  if (selectedTemplate) {
-                    handleConfirmTemplate();
-                  }
-                }}
-                sx={{
-                  backgroundColor: '#10b981',
-                  '&:hover': { backgroundColor: '#059669' },
-                  '&:disabled': {
-                    backgroundColor: '#d1d5db',
-                    color: '#9ca3af'
-                  }
-                }}
-              >
-                Save
-              </Button>
-            </Box>
 
             {/* Template Menu */}
             <Menu
@@ -4216,179 +4644,71 @@ useEffect(() => {
               </DialogActions>
             </Dialog>
           </Card>
-        )}
+        </Box>
 
-        {certificationView === 'configure' && (
-          <Card sx={{ p: 3 }}>
-            <Box display="flex" alignItems="center" gap={2} mb={3}>
-              <EditIcon sx={{ fontSize: 32, color: '#10b981' }} />
-              <Typography variant="h5" fontWeight="bold">
-                Configure Fields
-              </Typography>
+        {/* Configure Fields Section - Show after template is selected */}
+        {selectedTemplate && (
+          <Card id="configure-fields-section" sx={{ p: 3, mt: 4 }}>
+            <Box display="flex" alignItems="center" justifyContent="space-between" mb={3}>
+              <Box display="flex" alignItems="center" gap={2}>
+                <EditIcon sx={{ fontSize: 32, color: '#114417DB' }} />
+                <Typography variant="h5" fontWeight="bold">
+                  Configure Fields
+                </Typography>
+              </Box>
+              <Box display="flex" alignItems="center" gap={2}>
+                <IconButton
+                  onClick={() => setShowCertificatePreview(true)}
+                  sx={{
+                    color: '#114417DB',
+                    '&:hover': {
+                      backgroundColor: 'rgba(17, 68, 23, 0.08)'
+                    }
+                  }}
+                >
+                  <VisibilityIcon />
+                </IconButton>
+                {!fieldsSaved ? (
+                  <Button
+                    variant="contained"
+                    startIcon={<SaveIcon />}
+                    onClick={handleSaveFields}
+                    sx={{
+                      backgroundColor: '#114417DB',
+                      '&:hover': { backgroundColor: '#0a2f0e' },
+                      textTransform: 'none',
+                      fontWeight: 600,
+                      minWidth: 120
+                    }}
+                  >
+                    Save
+                  </Button>
+                ) : (
+                  <Button
+                    variant="outlined"
+                    startIcon={<EditIcon />}
+                    onClick={handleEditFields}
+                    sx={{
+                      borderColor: '#114417DB',
+                      color: '#114417DB',
+                      '&:hover': {
+                        borderColor: '#0a2f0e',
+                        backgroundColor: 'rgba(17, 68, 23, 0.08)'
+                      },
+                      textTransform: 'none',
+                      fontWeight: 600,
+                      minWidth: 120
+                    }}
+                  >
+                    Edit
+                  </Button>
+                )}
+              </Box>
             </Box>
             
-            {selectedTemplate ? (
-              <Box>
-                {/* Preview Section */}
-                <Box mb={3}>
-                    <Typography variant="h6" fontWeight="bold" mb={2}>
-                      Preview
-                    </Typography>
-                    <Card 
-                      sx={{ 
-                        p: 4, 
-                        backgroundColor: '#ffffff',
-                        border: '2px solid #e5e7eb',
-                        borderRadius: 2,
-                        maxWidth: '800px',
-                        margin: '0 auto',
-                        minHeight: '500px',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        justifyContent: 'space-between'
-                      }}
-                    >
-                      <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-                        {/* Top Section - Certificate Heading */}
-                        <Box sx={{ textAlign: 'center', mb: 2 }}>
-                          <Typography 
-                            variant="h4" 
-                            sx={{ 
-                              fontWeight: 'bold',
-                              fontStyle: 'italic',
-                              color: '#000000',
-                              mb: 1,
-                              letterSpacing: '2px'
-                            }}
-                          >
-                            {certificateFields.title}
-                          </Typography>
-                          <Typography 
-                            variant="h6" 
-                            sx={{ 
-                              color: '#000000',
-                              mb: 3
-                            }}
-                          >
-                            {certificateFields.subtitle}
-                          </Typography>
-                          
-                          {/* Decorative Line */}
-                          <Box 
-                            sx={{ 
-                              width: '60%', 
-                              height: '2px', 
-                              backgroundColor: '#fbbf24', 
-                              margin: '0 auto 2rem',
-                              opacity: 0.6
-                            }} 
-                          />
-                          
-                          {/* Presented to */}
-                          <Typography 
-                            variant="body1" 
-                            sx={{ 
-                              color: '#6b7280',
-                              mb: 2
-                            }}
-                          >
-                            {certificateFields.recipientLabel}
-                          </Typography>
-                          
-                          {/* User Name */}
-                          <Typography 
-                            variant="h4" 
-                            sx={{ 
-                              fontWeight: 'bold',
-                              color: '#000000',
-                              mb: 2
-                            }}
-                          >
-                            {certificateFields.userName}
-                          </Typography>
-                          
-                          {/* Description */}
-                          <Typography 
-                            variant="body2" 
-                            sx={{ 
-                              color: '#6b7280',
-                              fontStyle: 'italic',
-                              mb: 2
-                            }}
-                          >
-                            {certificateFields.descriptionText}
-                          </Typography>
-                        </Box>
-                        
-                        {/* Bottom Section - Date and Authorisation */}
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', mt: 'auto' }}>
-                          {/* Left - Date of Issue */}
-                          <Box>
-                            <Typography 
-                              variant="body2" 
-                              sx={{ 
-                                color: '#6b7280',
-                                mb: 1
-                              }}
-                            >
-                              Date of Issue
-                            </Typography>
-                            <Typography 
-                              variant="body1" 
-                              sx={{ 
-                                color: '#000000',
-                                fontWeight: 'medium'
-                              }}
-                            >
-                              {certificateFields.dateOfIssue}
-                            </Typography>
-                          </Box>
-                          
-                          {/* Right - Authorised by */}
-                          <Box sx={{ textAlign: 'right' }}>
-                            <Typography 
-                              variant="body2" 
-                              sx={{ 
-                                color: '#6b7280',
-                                mb: 1
-                              }}
-                            >
-                              Authorised by
-                            </Typography>
-                            <Typography 
-                              variant="body1" 
-                              sx={{ 
-                                color: '#000000',
-                                fontWeight: 'medium',
-                                mb: 1
-                              }}
-                            >
-                              {certificateFields.authorisedBy}
-                            </Typography>
-                            {/* Signature Line */}
-                            <Box 
-                              sx={{ 
-                                width: '120px', 
-                                height: '2px', 
-                                backgroundColor: '#000000', 
-                                marginLeft: 'auto',
-                                mt: 1
-                              }} 
-                            />
-                          </Box>
-                        </Box>
-                      </Box>
-                    </Card>
-                    <Typography variant="caption" color="text.secondary" mt={1} display="block">
-                      Note: The changes made to fields will be applied to all the templates.
-                    </Typography>
-                  </Box>
-
-                  {/* Editable Fields */}
-                  <Box mb={3}>
-                    <Typography variant="h6" fontWeight="bold" mb={2}>
-                      Configure Fields
-                    </Typography>
+            <Box>
+              {/* Editable Fields */}
+              <Box mb={3}>
                     <Grid container spacing={2}>
                       <Grid item xs={12} md={6}>
                         <TextField
@@ -4398,6 +4718,7 @@ useEffect(() => {
                           onChange={(e) => setCertificateFields(prev => ({ ...prev, title: e.target.value }))}
                           margin="normal"
                           helperText="Main certificate title (e.g., CERTIFICATE)"
+                          disabled={fieldsSaved}
                         />
                       </Grid>
                       <Grid item xs={12} md={6}>
@@ -4408,6 +4729,7 @@ useEffect(() => {
                           onChange={(e) => setCertificateFields(prev => ({ ...prev, subtitle: e.target.value }))}
                           margin="normal"
                           helperText="Certificate type (e.g., -OF APPRECIATION-)"
+                          disabled={fieldsSaved}
                         />
                       </Grid>
                       <Grid item xs={12} md={6}>
@@ -4418,6 +4740,7 @@ useEffect(() => {
                           onChange={(e) => setCertificateFields(prev => ({ ...prev, recipientLabel: e.target.value }))}
                           margin="normal"
                           helperText="Text before recipient name (e.g., Presented to)"
+                          disabled={fieldsSaved}
                         />
                       </Grid>
                       <Grid item xs={12} md={6}>
@@ -4428,6 +4751,7 @@ useEffect(() => {
                           onChange={(e) => setCertificateFields(prev => ({ ...prev, userName: e.target.value }))}
                           margin="normal"
                           helperText="Recipient name (will be updated per session)"
+                          disabled={fieldsSaved}
                         />
                       </Grid>
                       <Grid item xs={12}>
@@ -4440,6 +4764,7 @@ useEffect(() => {
                           rows={2}
                           margin="normal"
                           helperText="Description under recipient name"
+                          disabled={fieldsSaved}
                         />
                       </Grid>
                       <Grid item xs={12} md={6}>
@@ -4450,6 +4775,7 @@ useEffect(() => {
                           onChange={(e) => setCertificateFields(prev => ({ ...prev, dateOfIssue: e.target.value }))}
                           margin="normal"
                           helperText="Issue date format (e.g., 01 Sept 2026)"
+                          disabled={fieldsSaved}
                         />
                       </Grid>
                       <Grid item xs={12} md={6}>
@@ -4460,56 +4786,298 @@ useEffect(() => {
                           onChange={(e) => setCertificateFields(prev => ({ ...prev, authorisedBy: e.target.value }))}
                           margin="normal"
                           helperText="Authorizing authority (e.g., Country Head)"
+                          disabled={fieldsSaved}
                         />
                       </Grid>
                     </Grid>
                   </Box>
+            </Box>
 
-                  {/* Action Buttons */}
-                  <Box display="flex" justifyContent="flex-end" gap={2}>
-                    <Button
-                      variant="outlined"
-                      startIcon={<CancelIcon />}
-                      onClick={() => setCertificationView('templates')}
-                      sx={{
-                        borderColor: '#10b981',
-                        color: '#10b981',
-                        '&:hover': { borderColor: '#059669', backgroundColor: '#f0fdf4' }
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      variant="contained"
-                      startIcon={<DoneIcon />}
-                      onClick={handleUpdateFields}
-                      sx={{
-                        backgroundColor: '#10b981',
-                        '&:hover': { backgroundColor: '#059669' },
-                        border: '2px solid #8b5cf6',
-                        boxShadow: '0 0 0 2px rgba(139, 92, 246, 0.2)'
-                      }}
-                    >
-                      Update
-                    </Button>
+            {/* Certificate Preview Dialog */}
+            <Dialog
+              open={showCertificatePreview}
+              onClose={() => setShowCertificatePreview(false)}
+              maxWidth="md"
+              fullWidth
+              PaperProps={{
+                sx: {
+                  maxHeight: '90vh'
+                }
+              }}
+            >
+              <DialogTitle>
+                <Box display="flex" justifyContent="space-between" alignItems="center">
+                  <Typography variant="h6" fontWeight="bold">
+                    Certificate Preview
+                  </Typography>
+                  <IconButton onClick={() => setShowCertificatePreview(false)} size="small">
+                    <CloseIcon />
+                  </IconButton>
+                </Box>
+              </DialogTitle>
+              <DialogContent dividers sx={{ overflowY: 'auto' }}>
+                <Card 
+                  sx={{ 
+                    p: 4, 
+                    backgroundColor: '#ffffff',
+                    border: '2px solid #e5e7eb',
+                    borderRadius: 2,
+                    maxWidth: '800px',
+                    margin: '0 auto',
+                    minHeight: '500px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between'
+                  }}
+                >
+                  <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                    {/* Top Section - Certificate Heading */}
+                    <Box sx={{ textAlign: 'center', mb: 2 }}>
+                      <Typography 
+                        variant="h4" 
+                        sx={{ 
+                          fontWeight: 'bold',
+                          fontStyle: 'italic',
+                          color: '#000000',
+                          mb: 1,
+                          letterSpacing: '2px'
+                        }}
+                      >
+                        {certificateFields.title}
+                      </Typography>
+                      <Typography 
+                        variant="h6" 
+                        sx={{ 
+                          color: '#000000',
+                          mb: 3
+                        }}
+                      >
+                        {certificateFields.subtitle}
+                      </Typography>
+                      
+                      {/* Decorative Line */}
+                      <Box 
+                        sx={{ 
+                          width: '60%', 
+                          height: '2px', 
+                          backgroundColor: '#fbbf24', 
+                          margin: '0 auto 2rem',
+                          opacity: 0.6
+                        }} 
+                      />
+                      
+                      {/* Presented to */}
+                      <Typography 
+                        variant="body1" 
+                        sx={{ 
+                          color: '#6b7280',
+                          mb: 2
+                        }}
+                      >
+                        {certificateFields.recipientLabel}
+                      </Typography>
+                      
+                      {/* User Name */}
+                      <Typography 
+                        variant="h4" 
+                        sx={{ 
+                          fontWeight: 'bold',
+                          color: '#000000',
+                          mb: 2
+                        }}
+                      >
+                        {certificateFields.userName}
+                      </Typography>
+                      
+                      {/* Description */}
+                      <Typography 
+                        variant="body2" 
+                        sx={{ 
+                          color: '#6b7280',
+                          fontStyle: 'italic',
+                          mb: 2
+                        }}
+                      >
+                        {certificateFields.descriptionText}
+                      </Typography>
+                    </Box>
+                    
+                    {/* Bottom Section - Date and Authorisation */}
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', mt: 'auto' }}>
+                      {/* Left - Date of Issue */}
+                      <Box>
+                        <Typography 
+                          variant="body2" 
+                          sx={{ 
+                            color: '#6b7280',
+                            mb: 1
+                          }}
+                        >
+                          Date of Issue
+                        </Typography>
+                        <Typography 
+                          variant="body1" 
+                          sx={{ 
+                            color: '#000000',
+                            fontWeight: 'medium'
+                          }}
+                        >
+                          {certificateFields.dateOfIssue}
+                        </Typography>
+                      </Box>
+                      
+                      {/* Right - Authorised by */}
+                      <Box sx={{ textAlign: 'right' }}>
+                        <Typography 
+                          variant="body2" 
+                          sx={{ 
+                            color: '#6b7280',
+                            mb: 1
+                          }}
+                        >
+                          Authorised by
+                        </Typography>
+                        <Typography 
+                          variant="body1" 
+                          sx={{ 
+                            color: '#000000',
+                            fontWeight: 'medium',
+                            mb: 1
+                          }}
+                        >
+                          {certificateFields.authorisedBy}
+                        </Typography>
+                        {/* Signature Line */}
+                        <Box 
+                          sx={{ 
+                            width: '120px', 
+                            height: '2px', 
+                            backgroundColor: '#000000', 
+                            marginLeft: 'auto',
+                            mt: 1
+                          }} 
+                        />
+                      </Box>
+                    </Box>
                   </Box>
-              </Box>
-            ) : (
-              <Box textAlign="center" py={8}>
-                <EditIcon sx={{ fontSize: 64, color: '#d1d5db', mb: 2 }} />
-                <Typography variant="h6" color="text.secondary">
-                  Configure Fields
+                </Card>
+                <Typography variant="caption" color="text.secondary" mt={2} display="block" textAlign="center">
+                  Note: The changes made to fields will be applied to all the templates.
                 </Typography>
-                <Typography variant="body2" color="text.secondary" mt={1}>
-                  Please select a template from Templates tab first
-                </Typography>
+              </DialogContent>
+            </Dialog>
+
+            {/* All 5 Action Buttons - Only show when fields are not saved */}
+            {!fieldsSaved && (
+              <Box display="flex" gap={2} mt={4} justifyContent="center">
+                <Button
+                  variant="outlined"
+                  startIcon={<SaveIcon />}
+                  onClick={handleSaveSession}
+                  sx={{
+                    borderColor: '#114417DB',
+                    color: '#114417DB',
+                    '&:hover': {
+                      borderColor: '#0a2f0e',
+                      backgroundColor: 'rgba(17, 68, 23, 0.08)'
+                    },
+                    textTransform: 'none',
+                    fontWeight: 600,
+                    minWidth: 150
+                  }}
+                >
+                  Save as Draft
+                </Button>
+                <Button
+                  variant="outlined"
+                  onClick={handleSkipToNextStep}
+                  sx={{
+                    borderColor: '#6b7280',
+                    color: '#6b7280',
+                    '&:hover': {
+                      borderColor: '#4b5563',
+                      backgroundColor: '#f3f4f6'
+                    },
+                    textTransform: 'none',
+                    fontWeight: 600,
+                    minWidth: 150
+                  }}
+                >
+                  Skip
+                </Button>
+                <Button
+                  variant="outlined"
+                  onClick={() => setActiveTab('course-library')}
+                  sx={{
+                    borderColor: '#ef4444',
+                    color: '#ef4444',
+                    '&:hover': {
+                      borderColor: '#dc2626',
+                      backgroundColor: '#fef2f2'
+                    },
+                    textTransform: 'none',
+                    fontWeight: 600,
+                    minWidth: 150
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="outlined"
+                  startIcon={<ArrowBackIcon />}
+                  onClick={() => {
+                    setSelectedTemplate(null);
+                    setFieldsSaved(false);
+                    setCertificationView('templates');
+                    // Scroll back to template selection
+                    setTimeout(() => {
+                      const templateSection = document.getElementById('template-selection-section');
+                      if (templateSection) {
+                        templateSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      }
+                    }, 100);
+                  }}
+                  sx={{
+                    borderColor: '#6b7280',
+                    color: '#6b7280',
+                    '&:hover': {
+                      borderColor: '#4b5563',
+                      backgroundColor: '#f3f4f6'
+                    },
+                    textTransform: 'none',
+                    fontWeight: 600,
+                    minWidth: 150
+                  }}
+                >
+                  Previous
+                </Button>
+                <Button
+                  variant="contained"
+                  endIcon={<ArrowForwardIcon />}
+                  onClick={handleSaveFields}
+                  disabled={fieldsSaved}
+                  sx={{
+                    backgroundColor: '#114417DB',
+                    '&:hover': { backgroundColor: '#0a2f0e' },
+                    '&:disabled': {
+                      backgroundColor: '#d1d5db',
+                      color: '#9ca3af'
+                    },
+                    textTransform: 'none',
+                    fontWeight: 600,
+                    minWidth: 150
+                  }}
+                >
+                  Next
+                </Button>
               </Box>
             )}
           </Card>
         )}
 
-        {certificationView === 'permissions' && (
-          <Card sx={{ p: 3 }}>
+        {/* Permissions Section - Show after fields are saved */}
+        {fieldsSaved && certificationView === 'permissions' && (
+          <Card id="permissions-section" sx={{ p: 3, mt: 4 }}>
             <Box display="flex" alignItems="center" gap={2} mb={3}>
               <LockIcon sx={{ fontSize: 32, color: '#f59e0b' }} />
               <Typography variant="h5" fontWeight="bold">
@@ -4575,32 +5143,90 @@ useEffect(() => {
               </Box>
 
               {/* Action Buttons */}
-              <Box display="flex" justifyContent="flex-end" gap={2} mt={4}>
+              <Box display="flex" gap={2} mt={4} justifyContent="center">
                 <Button
                   variant="outlined"
-                  startIcon={<CancelIcon />}
-                  onClick={() => setCertificationView('configure')}
+                  startIcon={<SaveIcon />}
+                  onClick={handleSaveSession}
                   sx={{
-                    borderColor: '#10b981',
-                    color: '#10b981',
-                    '&:hover': { 
-                      borderColor: '#059669', 
-                      backgroundColor: '#f0fdf4' 
-                    }
+                    borderColor: '#114417DB',
+                    color: '#114417DB',
+                    '&:hover': {
+                      borderColor: '#0a2f0e',
+                      backgroundColor: 'rgba(17, 68, 23, 0.08)'
+                    },
+                    textTransform: 'none',
+                    fontWeight: 600,
+                    minWidth: 150
+                  }}
+                >
+                  Save as Draft
+                </Button>
+                <Button
+                  variant="outlined"
+                  onClick={handleSkipToNextStep}
+                  sx={{
+                    borderColor: '#6b7280',
+                    color: '#6b7280',
+                    '&:hover': {
+                      borderColor: '#4b5563',
+                      backgroundColor: '#f3f4f6'
+                    },
+                    textTransform: 'none',
+                    fontWeight: 600,
+                    minWidth: 150
+                  }}
+                >
+                  Skip
+                </Button>
+                <Button
+                  variant="outlined"
+                  onClick={() => setActiveTab('course-library')}
+                  sx={{
+                    borderColor: '#ef4444',
+                    color: '#ef4444',
+                    '&:hover': {
+                      borderColor: '#dc2626',
+                      backgroundColor: '#fef2f2'
+                    },
+                    textTransform: 'none',
+                    fontWeight: 600,
+                    minWidth: 150
                   }}
                 >
                   Cancel
                 </Button>
                 <Button
-                  variant="contained"
-                  startIcon={<SaveIcon />}
-                  onClick={handlePermissionsSave}
+                  variant="outlined"
+                  startIcon={<ArrowBackIcon />}
+                  onClick={handleEditFields}
                   sx={{
-                    backgroundColor: '#10b981',
-                    '&:hover': { backgroundColor: '#059669' }
+                    borderColor: '#6b7280',
+                    color: '#6b7280',
+                    '&:hover': {
+                      borderColor: '#4b5563',
+                      backgroundColor: '#f3f4f6'
+                    },
+                    textTransform: 'none',
+                    fontWeight: 600,
+                    minWidth: 150
                   }}
                 >
-                  Save
+                  Previous
+                </Button>
+                <Button
+                  variant="contained"
+                  endIcon={<ArrowForwardIcon />}
+                  onClick={handlePermissionsSave}
+                  sx={{
+                    backgroundColor: '#114417DB',
+                    '&:hover': { backgroundColor: '#0a2f0e' },
+                    textTransform: 'none',
+                    fontWeight: 600,
+                    minWidth: 150
+                  }}
+                >
+                  Next
                 </Button>
               </Box>
             </Box>
@@ -4620,8 +5246,11 @@ useEffect(() => {
               onChange={(e) => handleSessionFormChange('title', e.target.value)}
               fullWidth
               margin="normal"
+              required
+              error={!sessionFormData.title}
+              helperText={!sessionFormData.title ? 'Session title is required' : ''}
             />
-                        <FormControl fullWidth margin="normal">
+                        <FormControl fullWidth margin="normal" required error={!sessionFormData.type}>
                           <InputLabel>Session Type</InputLabel>
                           <Select
                             value={sessionFormData.type}
@@ -4638,8 +5267,13 @@ useEffect(() => {
                             <MenuItem value="security">Security Awareness</MenuItem>
                             <MenuItem value="live-training">Live Training</MenuItem>
                           </Select>
+                          {!sessionFormData.type && (
+                            <Typography variant="caption" color="error" sx={{ mt: 0.5, ml: 1.75 }}>
+                              Session type is required
+                            </Typography>
+                          )}
                         </FormControl>
-            <FormControl fullWidth margin="normal">
+            <FormControl fullWidth margin="normal" required error={!sessionFormData.audience}>
               <InputLabel>Participants</InputLabel>
               <Select
                 value={sessionFormData.audience}
@@ -4651,6 +5285,11 @@ useEffect(() => {
                 <MenuItem value="developers">Developers</MenuItem>
                 <MenuItem value="hr">HR Team</MenuItem>
               </Select>
+              {!sessionFormData.audience && (
+                <Typography variant="caption" color="error" sx={{ mt: 0.5, ml: 1.75 }}>
+                  Participants is required
+                </Typography>
+              )}
             </FormControl>
                         <TextField
                           label="Description"
@@ -4667,11 +5306,11 @@ useEffect(() => {
                 startIcon={<SaveIcon />}
                 onClick={handleSaveSession}
                 sx={{ 
-                  borderColor: '#10b981', 
-                  color: '#10b981', 
+                  borderColor: '#114417DB', 
+                  color: '#114417DB', 
                   '&:hover': { 
-                    borderColor: '#059669', 
-                    backgroundColor: '#d1fae5' 
+                    borderColor: '#0a2f0e', 
+                    backgroundColor: 'rgba(17, 68, 23, 0.08)' 
                   },
                   textTransform: 'none',
                   fontWeight: 600,
@@ -4719,7 +5358,34 @@ useEffect(() => {
                 Cancel
               </Button>
               <Button 
+                variant="outlined" 
+                startIcon={<ArrowBackIcon />}
+                onClick={() => {
+                  // Go back - this is the first step, so disable or navigate to session library
+                  setActiveTab('course-library');
+                }}
+                disabled
+                sx={{ 
+                  borderColor: '#6b7280', 
+                  color: '#6b7280', 
+                  '&:hover': { 
+                    borderColor: '#4b5563', 
+                    backgroundColor: '#f3f4f6' 
+                  },
+                  '&:disabled': {
+                    borderColor: '#e5e7eb',
+                    color: '#9ca3af'
+                  },
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  minWidth: 150
+                }}
+              >
+                Previous
+              </Button>
+              <Button 
                 variant="contained" 
+                endIcon={<ArrowForwardIcon />}
                 onClick={handleCreateSession}
                 sx={{ 
                   backgroundColor: '#114417DB', 
@@ -4731,7 +5397,7 @@ useEffect(() => {
                   minWidth: 150
                 }}
               >
-                Create
+                Next
               </Button>
             </Box>
           </Card>
@@ -4757,7 +5423,13 @@ useEffect(() => {
                 boxShadow: '0 8px 24px rgba(0,0,0,0.12)'
               } 
             }}
-            onClick={() => setContentCreatorView('ai-creator')}
+            onClick={() => {
+              if (contentCreatorView === 'ai-creator') {
+                setContentCreatorView('main');
+              } else {
+                setContentCreatorView('ai-creator');
+              }
+            }}
           >
             <FireIcon sx={{ fontSize: 64, color: '#f59e0b', mb: 2 }} />
             <Typography variant="h5" fontWeight="bold" gutterBottom>
@@ -4792,7 +5464,7 @@ useEffect(() => {
               }
             }}
           >
-            <CloudUploadIcon sx={{ fontSize: 64, color: '#10b981', mb: 2 }} />
+            <CloudUploadIcon sx={{ fontSize: 64, color: '#114417DB', mb: 2 }} />
             <Typography variant="h5" fontWeight="bold" gutterBottom>
               Upload File
             </Typography>
@@ -4829,6 +5501,159 @@ useEffect(() => {
           </Card>
         </Grid>
       </Grid>
+
+      {/* AI Content Creator Section - Shown when AI Content Creator is selected */}
+      {contentCreatorView === 'ai-creator' && (
+        <Box mt={4}>
+          <Card sx={{ p: 3 }}>
+            <Typography variant="h6" fontWeight="bold" gutterBottom>
+              AI Content Creator
+            </Typography>
+            {/* Keywords Input */}
+            <TextField
+              label="Enter keywords or topics"
+              placeholder="e.g., mental health wellbeing, workplace stress, mindfulness techniques"
+              fullWidth
+              multiline
+              rows={3}
+              margin="normal"
+              value={aiKeywords}
+              onChange={(e) => setAiKeywords(e.target.value)}
+              sx={{ mt: 0 }}
+            />
+            
+            {/* Generate Prompt Button */}
+            <Box sx={{ mt: 3, display: 'flex', justifyContent: 'flex-start' }}>
+              <Button
+                variant="contained"
+                size="large"
+                startIcon={<FireIcon />}
+                onClick={generatePrompt}
+                disabled={!aiKeywords.trim()}
+                sx={{ 
+                  backgroundColor: '#f59e0b',
+                  minWidth: 200,
+                  '&:hover': { backgroundColor: '#d97706' },
+                  '&:disabled': { backgroundColor: '#d1d5db', color: '#9ca3af' }
+                }}
+              >
+                GENERATE PROMPT
+              </Button>
+            </Box>
+            
+            {/* Generated Prompt Display */}
+            {aiContentGenerated && sessionContentSnapshot?.aiContent?.content && (
+              <Box mt={3}>
+                <Typography variant="subtitle2" fontWeight="bold" gutterBottom color="text.secondary">
+                  Generated Prompt:
+                </Typography>
+                <Box
+                  sx={{
+                    p: 2,
+                    mt: 1,
+                    backgroundColor: '#f8fafc',
+                    borderRadius: 2,
+                    border: '1px solid #e5e7eb',
+                    maxHeight: '300px',
+                    overflowY: 'auto',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    fontFamily: 'monospace',
+                    fontSize: '0.875rem'
+                  }}
+                >
+                  <Typography variant="body2" component="pre" sx={{ m: 0, whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
+                    {typeof sessionContentSnapshot.aiContent.content === 'string' 
+                      ? sessionContentSnapshot.aiContent.content 
+                      : JSON.stringify(sessionContentSnapshot.aiContent.content, null, 2)}
+                  </Typography>
+                </Box>
+                
+                {/* Copy and Open ChatGPT Button */}
+                <Box sx={{ mt: 2, display: 'flex', justifyContent: 'flex-start' }}>
+                  <Button
+                    variant="contained"
+                    size="large"
+                    startIcon={<FireIcon />}
+                    onClick={handleCopyAndOpenChatGPT}
+                    sx={{ 
+                      backgroundColor: '#114417DB',
+                      minWidth: 200,
+                      '&:hover': { backgroundColor: '#0a2f0e' }
+                    }}
+                  >
+                    COPY AND OPEN CHATGPT
+                  </Button>
+                </Box>
+              </Box>
+            )}
+
+            {/* Paste ChatGPT Response Section */}
+            {aiContentGenerated && (
+              <Box mt={4}>
+                <Typography variant="subtitle2" fontWeight="bold" gutterBottom color="text.secondary">
+                  Paste ChatGPT JSON Response:
+                </Typography>
+                <TextField
+                  label="Paste the JSON response from ChatGPT here"
+                  placeholder='Paste the JSON response here, e.g., {"title": "...", "description": "...", "content": "...", "keyPoints": [...], "learningObjectives": [...]}'
+                  fullWidth
+                  multiline
+                  rows={8}
+                  margin="normal"
+                  value={chatgptResponse}
+                  onChange={(e) => setChatgptResponse(e.target.value)}
+                  sx={{ 
+                    mt: 1,
+                    '& .MuiInputBase-input': {
+                      fontFamily: 'monospace',
+                      fontSize: '0.875rem'
+                    }
+                  }}
+                />
+                <Box sx={{ mt: 2, display: 'flex', justifyContent: 'flex-start' }}>
+                  <Button
+                    variant="contained"
+                    size="large"
+                    onClick={handleProcessChatGPTResponse}
+                    disabled={!chatgptResponse.trim()}
+                    sx={{ 
+                      backgroundColor: '#114417DB',
+                      minWidth: 200,
+                      '&:hover': { backgroundColor: '#0a2f0e' },
+                      '&:disabled': { backgroundColor: '#d1d5db', color: '#9ca3af' }
+                    }}
+                  >
+                    PROCESS AND USE CONTENT
+                  </Button>
+                </Box>
+
+                {/* Show parsed content preview */}
+                {parsedContent && (
+                  <Box mt={3} p={2} sx={{ backgroundColor: '#d1fae5', borderRadius: 2 }}>
+                    <Typography variant="body1" color="success.main" fontWeight="medium" gutterBottom>
+                      ✅ Content Processed Successfully!
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                      <strong>Title:</strong> {parsedContent.title || 'N/A'}
+                    </Typography>
+                    {parsedContent.description && (
+                      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                        <strong>Description:</strong> {typeof parsedContent.description === 'string' 
+                          ? parsedContent.description.substring(0, 100) + '...'
+                          : JSON.stringify(parsedContent.description).substring(0, 100) + '...'}
+                      </Typography>
+                    )}
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1, fontSize: '0.85rem' }}>
+                      The content is now ready to use in your session. You can proceed to the next step.
+                    </Typography>
+                  </Box>
+                )}
+              </Box>
+            )}
+          </Card>
+        </Box>
+      )}
 
       {/* Upload Section - Shown when Upload File is selected */}
       {contentCreatorView === 'upload-file' && (
@@ -4936,11 +5761,11 @@ useEffect(() => {
           startIcon={<SaveIcon />}
           onClick={handleSaveSession}
           sx={{
-            borderColor: '#10b981',
-            color: '#10b981',
+            borderColor: '#114417DB',
+            color: '#114417DB',
             '&:hover': {
-              borderColor: '#059669',
-              backgroundColor: '#d1fae5'
+              borderColor: '#0a2f0e',
+              backgroundColor: 'rgba(17, 68, 23, 0.08)'
             },
             textTransform: 'none',
             fontWeight: 600,
@@ -4984,9 +5809,33 @@ useEffect(() => {
           Cancel
         </Button>
         <Button
+          variant="outlined"
+          startIcon={<ArrowBackIcon />}
+          onClick={() => {
+            // Go back to Create Session step
+            setManageSessionTab('create');
+            setManageSessionView('create');
+            setShowContentCreator(false);
+            setContentCreatorView('main');
+          }}
+          sx={{
+            borderColor: '#6b7280',
+            color: '#6b7280',
+            '&:hover': {
+              borderColor: '#4b5563',
+              backgroundColor: '#f3f4f6'
+            },
+            textTransform: 'none',
+            fontWeight: 600,
+            minWidth: 150
+          }}
+        >
+          Previous
+        </Button>
+        <Button
           variant="contained"
+          endIcon={<ArrowForwardIcon />}
           onClick={handleProceedFromMainToQuiz}
-          startIcon={<QuizIcon />}
           sx={{
             backgroundColor: '#114417DB',
             '&:hover': {
@@ -4997,15 +5846,16 @@ useEffect(() => {
             minWidth: 150
           }}
         >
-          Proceed
+          Next
         </Button>
       </Box>
     </Box>
   );
 
   // AI Content Creator Page
-  const renderAIContentCreator = () => (
-    <Box p={3}>
+  const renderAIContentCreator = () => {
+    return (
+      <Box p={3}>
       <Box mb={4}>
         <Box display="flex" justifyContent="flex-end" alignItems="center" mb={2}>
           <Box display="flex" gap={2}>
@@ -5014,11 +5864,11 @@ useEffect(() => {
               onClick={handleSaveSession}
               startIcon={<SaveIcon />}
               sx={{
-                borderColor: '#10b981',
-                color: '#10b981',
+                borderColor: '#114417DB',
+                color: '#114417DB',
                 '&:hover': {
-                  borderColor: '#059669',
-                  backgroundColor: '#d1fae5'
+                  borderColor: '#0a2f0e',
+                  backgroundColor: 'rgba(17, 68, 23, 0.08)'
                 },
                 textTransform: 'none',
                 fontWeight: 600
@@ -5059,32 +5909,146 @@ useEffect(() => {
       <Grid container spacing={3} justifyContent="center">
         <Grid item xs={12} md={8} lg={6}>
           <Card sx={{ p: 3 }}>
+            {/* Keywords Input */}
             <TextField
               label="Enter keywords or topics"
-              placeholder="e.g., mental health, workplace stress, mindfulness techniques"
+              placeholder="e.g., mental health wellbeing, workplace stress, mindfulness techniques"
               fullWidth
               multiline
-              rows={6}
+              rows={3}
               margin="normal"
               value={aiKeywords}
               onChange={(e) => setAiKeywords(e.target.value)}
+              sx={{ mt: 0 }}
             />
-            <Button
-              variant="contained"
-              fullWidth
-              size="large"
-              startIcon={<FireIcon />}
-              onClick={handleGenerateAIContent}
-              sx={{ mt: 3, backgroundColor: '#f59e0b', '&:hover': { backgroundColor: '#d97706' } }}
-            >
-              Generate AI Content
-            </Button>
             
-            {aiContentGenerated && (
-              <Box mt={3} p={2} sx={{ backgroundColor: '#d1fae5', borderRadius: 2 }}>
-                <Typography variant="body1" color="success.main" fontWeight="medium">
-                  ✓ Content generated successfully based on: "{aiKeywords}"
+            {/* Generate Prompt Button */}
+            <Box sx={{ mt: 3, display: 'flex', justifyContent: 'flex-start' }}>
+              <Button
+                variant="contained"
+                size="large"
+                startIcon={<FireIcon />}
+                onClick={generatePrompt}
+                disabled={!aiKeywords.trim()}
+                sx={{ 
+                  backgroundColor: '#f59e0b',
+                  minWidth: 200,
+                  '&:hover': { backgroundColor: '#d97706' },
+                  '&:disabled': { backgroundColor: '#d1d5db', color: '#9ca3af' }
+                }}
+              >
+                GENERATE PROMPT
+              </Button>
+            </Box>
+            
+            {/* Generated Prompt Display */}
+            {aiContentGenerated && sessionContentSnapshot?.aiContent?.content && (
+              <Box mt={3}>
+                <Typography variant="subtitle2" fontWeight="bold" gutterBottom color="text.secondary">
+                  Generated Prompt:
                 </Typography>
+                <Box
+                  sx={{
+                    p: 2,
+                    mt: 1,
+                    backgroundColor: '#f8fafc',
+                    borderRadius: 2,
+                    border: '1px solid #e5e7eb',
+                    maxHeight: '300px',
+                    overflowY: 'auto',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    fontFamily: 'monospace',
+                    fontSize: '0.875rem'
+                  }}
+                >
+                  <Typography variant="body2" component="pre" sx={{ m: 0, whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
+                    {typeof sessionContentSnapshot.aiContent.content === 'string' 
+                      ? sessionContentSnapshot.aiContent.content 
+                      : JSON.stringify(sessionContentSnapshot.aiContent.content, null, 2)}
+                  </Typography>
+                </Box>
+                
+                {/* Copy and Open ChatGPT Button */}
+                <Box sx={{ mt: 2, display: 'flex', justifyContent: 'flex-start' }}>
+                  <Button
+                    variant="contained"
+                    size="large"
+                    startIcon={<FireIcon />}
+                    onClick={handleCopyAndOpenChatGPT}
+                    sx={{ 
+                      backgroundColor: '#114417DB',
+                      minWidth: 200,
+                      '&:hover': { backgroundColor: '#0a2f0e' }
+                    }}
+                  >
+                    COPY AND OPEN CHATGPT
+                  </Button>
+                </Box>
+              </Box>
+            )}
+
+            {/* Paste ChatGPT Response Section */}
+            {aiContentGenerated && (
+              <Box mt={4}>
+                <Typography variant="subtitle2" fontWeight="bold" gutterBottom color="text.secondary">
+                  Paste ChatGPT JSON Response:
+                </Typography>
+                <TextField
+                  label="Paste the JSON response from ChatGPT here"
+                  placeholder='Paste the JSON response here, e.g., {"title": "...", "description": "...", "content": "...", "keyPoints": [...], "learningObjectives": [...]}'
+                  fullWidth
+                  multiline
+                  rows={8}
+                  margin="normal"
+                  value={chatgptResponse}
+                  onChange={(e) => setChatgptResponse(e.target.value)}
+                  sx={{ 
+                    mt: 1,
+                    '& .MuiInputBase-input': {
+                      fontFamily: 'monospace',
+                      fontSize: '0.875rem'
+                    }
+                  }}
+                />
+                <Box sx={{ mt: 2, display: 'flex', justifyContent: 'flex-start' }}>
+                  <Button
+                    variant="contained"
+                    size="large"
+                    onClick={handleProcessChatGPTResponse}
+                    disabled={!chatgptResponse.trim()}
+                    sx={{ 
+                      backgroundColor: '#114417DB',
+                      minWidth: 200,
+                      '&:hover': { backgroundColor: '#0a2f0e' },
+                      '&:disabled': { backgroundColor: '#d1d5db', color: '#9ca3af' }
+                    }}
+                  >
+                    PROCESS AND USE CONTENT
+                  </Button>
+                </Box>
+
+                {/* Show parsed content preview */}
+                {parsedContent && (
+                  <Box mt={3} p={2} sx={{ backgroundColor: '#d1fae5', borderRadius: 2 }}>
+                    <Typography variant="body1" color="success.main" fontWeight="medium" gutterBottom>
+                      ✅ Content Processed Successfully!
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                      <strong>Title:</strong> {parsedContent.title || 'N/A'}
+                    </Typography>
+                    {parsedContent.description && (
+                      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                        <strong>Description:</strong> {typeof parsedContent.description === 'string' 
+                          ? parsedContent.description.substring(0, 100) + '...'
+                          : JSON.stringify(parsedContent.description).substring(0, 100) + '...'}
+                      </Typography>
+                    )}
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1, fontSize: '0.85rem' }}>
+                      The content is now ready to use in your session. You can proceed to the next step.
+                    </Typography>
+                  </Box>
+                )}
               </Box>
             )}
 
@@ -5104,25 +6068,48 @@ useEffect(() => {
                 Cancel
               </Button>
               <Button
+                variant="outlined"
+                startIcon={<ArrowBackIcon />}
+                fullWidth
+                size="large"
+                onClick={handlePreviousStep}
+                sx={{
+                  borderColor: '#6b7280',
+                  color: '#6b7280',
+                  '&:hover': {
+                    borderColor: '#4b5563',
+                    backgroundColor: '#f3f4f6'
+                  },
+                  textTransform: 'none',
+                  fontWeight: 600
+                }}
+              >
+                Previous
+              </Button>
+              <Button
                 variant="contained"
+                endIcon={<ArrowForwardIcon />}
                 fullWidth
                 size="large"
                 onClick={handleContentCreatorProceed}
                 disabled={!aiContentGenerated}
                 sx={{
-                  backgroundColor: '#10b981',
-                  '&:hover': { backgroundColor: '#059669' },
-                  '&:disabled': { backgroundColor: '#d1d5db', color: '#9ca3af' }
+                  backgroundColor: '#114417DB',
+                  '&:hover': { backgroundColor: '#0a2f0e' },
+                  '&:disabled': { backgroundColor: '#d1d5db', color: '#9ca3af' },
+                  textTransform: 'none',
+                  fontWeight: 600
                 }}
               >
-                Proceed
+                Next
               </Button>
             </Box>
           </Card>
         </Grid>
       </Grid>
-    </Box>
-  );
+      </Box>
+    );
+  };
 
 
   // Upload File Page
@@ -5136,11 +6123,11 @@ useEffect(() => {
               onClick={handleSaveSession}
               startIcon={<SaveIcon />}
               sx={{
-                borderColor: '#10b981',
-                color: '#10b981',
+                borderColor: '#114417DB',
+                color: '#114417DB',
                 '&:hover': {
-                  borderColor: '#059669',
-                  backgroundColor: '#d1fae5'
+                  borderColor: '#0a2f0e',
+                  backgroundColor: 'rgba(17, 68, 23, 0.08)'
                 },
                 textTransform: 'none',
                 fontWeight: 600
@@ -5260,18 +6247,40 @@ useEffect(() => {
                 Cancel
               </Button>
               <Button
+                variant="outlined"
+                startIcon={<ArrowBackIcon />}
+                fullWidth
+                size="large"
+                onClick={handlePreviousStep}
+                sx={{
+                  borderColor: '#6b7280',
+                  color: '#6b7280',
+                  '&:hover': {
+                    borderColor: '#4b5563',
+                    backgroundColor: '#f3f4f6'
+                  },
+                  textTransform: 'none',
+                  fontWeight: 600
+                }}
+              >
+                Previous
+              </Button>
+              <Button
                 variant="contained"
+                endIcon={<ArrowForwardIcon />}
                 fullWidth
                 size="large"
                 onClick={handleContentCreatorProceed}
                 disabled={selectedFiles.length === 0}
                 sx={{
-                  backgroundColor: '#10b981',
-                  '&:hover': { backgroundColor: '#059669' },
-                  '&:disabled': { backgroundColor: '#d1d5db', color: '#9ca3af' }
+                  backgroundColor: '#114417DB',
+                  '&:hover': { backgroundColor: '#0a2f0e' },
+                  '&:disabled': { backgroundColor: '#d1d5db', color: '#9ca3af' },
+                  textTransform: 'none',
+                  fontWeight: 600
                 }}
               >
-                Confirm
+                Next
               </Button>
             </Box>
           </Card>
@@ -5283,8 +6292,6 @@ useEffect(() => {
   // Main Content Creator Router
   const renderContentCreator = () => {
     switch (contentCreatorView) {
-      case 'ai-creator':
-        return renderAIContentCreator();
       case 'live-trainings':
         return renderLiveTrainingsContentCreator();
       default:
@@ -5380,20 +6387,41 @@ useEffect(() => {
               </Box>
             )}
 
-            {/* Proceed to Quiz Button */}
-            <Box mt={4}>
+            {/* Previous and Next Buttons */}
+            <Box display="flex" gap={2} mt={4}>
+              <Button
+                variant="outlined"
+                startIcon={<ArrowBackIcon />}
+                fullWidth
+                size="large"
+                onClick={handlePreviousStep}
+                sx={{
+                  borderColor: '#6b7280',
+                  color: '#6b7280',
+                  '&:hover': {
+                    borderColor: '#4b5563',
+                    backgroundColor: '#f3f4f6'
+                  },
+                  textTransform: 'none',
+                  fontWeight: 600
+                }}
+              >
+                Previous
+              </Button>
               <Button
                 variant="contained"
+                endIcon={<ArrowForwardIcon />}
                 fullWidth
                 size="large"
                 onClick={handleProceedToQuiz}
-                startIcon={<QuizIcon />}
                 sx={{
                   backgroundColor: '#114417DB',
-                  '&:hover': { backgroundColor: '#0a2f0e' }
+                  '&:hover': { backgroundColor: '#0a2f0e' },
+                  textTransform: 'none',
+                  fontWeight: 600
                 }}
               >
-                Create Questionnaire (Checkpoint Assessment)
+                Next
               </Button>
             </Box>
           </Card>
@@ -5426,7 +6454,7 @@ useEffect(() => {
 
   const handleConfirmSchedule = () => {
     if (!scheduleDate || !scheduleTime) {
-      alert('Please select both date and time');
+      showToast('Please select both date and time', 'warning');
       return;
     }
     setShowCalendar(false);
@@ -5434,12 +6462,12 @@ useEffect(() => {
 
   const handleSendAndPublish = () => {
     if (!scheduleDate || !scheduleTime) {
-      alert('Please select both date and time');
+      showToast('Please select both date and time', 'warning');
       return;
     }
 
     if (!scheduleDueDate || !scheduleDueTime) {
-      alert('Please select a due date and time');
+      showToast('Please select a due date and time', 'warning');
       return;
     }
 
@@ -5447,7 +6475,7 @@ useEffect(() => {
     const dueDateTime = new Date(`${scheduleDueDate}T${scheduleDueTime}`);
 
     if (dueDateTime <= scheduledDateTime) {
-      alert('Due date must be after the session start time.');
+      showToast('Due date must be after the session start time.', 'warning');
       return;
     }
     
@@ -5497,7 +6525,7 @@ useEffect(() => {
     // Navigate back to dashboard
     setActiveTab('course-library');
     
-    alert(`Session scheduled successfully! Calendar invites sent to ${employeeEmails.length} employees.`);
+    showToast(`Session scheduled successfully! Calendar invites sent to ${employeeEmails.length} employees.`, 'success');
   };
 
   const renderScheduleSessions = () => {
@@ -5619,10 +6647,10 @@ useEffect(() => {
                                       label="Session scheduled"
                                       size="small"
                                       sx={{
-                                        backgroundColor: '#10b981',
-                                        color: 'white',
-                                        fontWeight: 'medium',
-                                        fontSize: '0.7rem'
+                                    backgroundColor: '#114417DB',
+                                    color: 'white',
+                                    fontWeight: 'medium',
+                                    fontSize: '0.7rem'
                                       }}
                                     />
                                   )}
@@ -5644,8 +6672,8 @@ useEffect(() => {
                                 </Typography>
                                 {isScheduled && session.scheduledDateTime && (
                                   <Box display="flex" alignItems="center" gap={1}>
-                                    <CalendarIcon sx={{ fontSize: 16, color: '#10b981' }} />
-                                    <Typography variant="body2" color="#10b981" fontWeight="medium">
+                                    <CalendarIcon sx={{ fontSize: 16, color: '#114417DB' }} />
+                                    <Typography variant="body2" color="#114417DB" fontWeight="medium">
                                       Scheduled: {new Date(session.scheduledDateTime).toLocaleString()}
                                     </Typography>
                                   </Box>
@@ -5659,9 +6687,9 @@ useEffect(() => {
                                   startIcon={<CalendarIcon />}
                                   onClick={() => handleOpenScheduleDialog(session)}
                                   sx={{
-                                    backgroundColor: isScheduled ? '#10b981' : '#114417DB',
+                                    backgroundColor: isScheduled ? '#114417DB' : '#114417DB',
                                     '&:hover': { 
-                                      backgroundColor: isScheduled ? '#059669' : '#0a2f0e' 
+                                      backgroundColor: isScheduled ? '#0a2f0e' : '#0a2f0e' 
                                     }
                                   }}
                                 >
@@ -5717,10 +6745,10 @@ useEffect(() => {
                                     label="Session scheduled"
                                     size="small"
                                     sx={{
-                                      backgroundColor: '#10b981',
-                                      color: 'white',
-                                      fontWeight: 'medium',
-                                      fontSize: '0.7rem',
+                                    backgroundColor: '#114417DB',
+                                    color: 'white',
+                                    fontWeight: 'medium',
+                                    fontSize: '0.7rem',
                                       mb: 1
                                     }}
                                   />
@@ -5742,8 +6770,8 @@ useEffect(() => {
                                 </Typography>
                                 {isScheduled && session.scheduledDateTime && (
                                   <Box display="flex" alignItems="center" gap={1} mb={1}>
-                                    <CalendarIcon sx={{ fontSize: 16, color: '#10b981' }} />
-                                    <Typography variant="body2" color="#10b981" fontWeight="medium" fontSize="0.75rem">
+                                    <CalendarIcon sx={{ fontSize: 16, color: '#114417DB' }} />
+                                    <Typography variant="body2" color="#114417DB" fontWeight="medium" fontSize="0.75rem">
                                       {new Date(session.scheduledDateTime).toLocaleString()}
                                     </Typography>
                                   </Box>
@@ -5756,9 +6784,9 @@ useEffect(() => {
                                   startIcon={<CalendarIcon />}
                                   onClick={() => handleOpenScheduleDialog(session)}
                                   sx={{
-                                    backgroundColor: isScheduled ? '#10b981' : '#114417DB',
+                                    backgroundColor: isScheduled ? '#114417DB' : '#114417DB',
                                     '&:hover': { 
-                                      backgroundColor: isScheduled ? '#059669' : '#0a2f0e' 
+                                      backgroundColor: isScheduled ? '#0a2f0e' : '#0a2f0e' 
                                     },
                                     flex: 1
                                   }}
@@ -6286,8 +7314,8 @@ useEffect(() => {
                   <strong>Description:</strong> {selectedSessionForScheduling.description || 'No description'}
                 </Typography>
                 <Box display="flex" alignItems="center" gap={1} mt={2}>
-                  <CalendarIcon sx={{ color: '#10b981' }} />
-                  <Typography variant="body1" fontWeight="bold" color="#10b981">
+                  <CalendarIcon sx={{ color: '#114417DB' }} />
+                  <Typography variant="body1" fontWeight="bold" color="#114417DB">
                     Scheduled for: {new Date(`${scheduleDate}T${scheduleTime}`).toLocaleString()}
                   </Typography>
                 </Box>
@@ -6328,7 +7356,7 @@ useEffect(() => {
                           let FileIconComponent = FileIcon;
                           let iconColor = '#6b7280';
                           if (isVideo) { FileIconComponent = VideoLibraryIcon; iconColor = '#ef4444'; }
-                          else if (isImage) { FileIconComponent = ImageIcon; iconColor = '#10b981'; }
+                          else if (isImage) { FileIconComponent = ImageIcon; iconColor = '#114417DB'; }
                           else if (isPDF || isPresentation) { FileIconComponent = DescriptionIcon; iconColor = '#f59e0b'; }
                           else if (isWord) { FileIconComponent = ArticleIcon; iconColor = '#3b82f6'; }
                           
@@ -6456,8 +7484,8 @@ useEffect(() => {
                 startIcon={<SendIcon />}
                 onClick={handleSendAndPublish}
                 sx={{
-                  backgroundColor: '#10b981',
-                  '&:hover': { backgroundColor: '#059669' }
+                  backgroundColor: '#114417DB',
+                  '&:hover': { backgroundColor: '#0a2f0e' }
                 }}
               >
                 Send & Publish
@@ -6567,7 +7595,7 @@ useEffect(() => {
                 variant="contained"
                 startIcon={<SaveIcon />}
                 onClick={handleSaveEdits}
-                sx={{ backgroundColor: '#10b981', '&:hover': { backgroundColor: '#059669' } }}
+                sx={{ backgroundColor: '#114417DB', '&:hover': { backgroundColor: '#0a2f0e' } }}
               >
                 Save Changes
               </Button>
@@ -6651,7 +7679,7 @@ useEffect(() => {
                                 if (fileObj.fileObject) {
                                   handleFileView(fileObj);
                                 } else {
-                                  alert('File preview not available. The file may need to be re-uploaded.');
+                                  showToast('File preview not available. The file may need to be re-uploaded.', 'warning');
                                 }
                               }}
                             >
@@ -6665,7 +7693,7 @@ useEffect(() => {
                                 if (fileObj.fileObject) {
                                   handleFileDownload(fileObj);
                                 } else {
-                                  alert('File download not available. The file may need to be re-uploaded.');
+                                  showToast('File download not available. The file may need to be re-uploaded.', 'warning');
                                 }
                               }}
                             >
@@ -6816,12 +7844,12 @@ useEffect(() => {
 
         {/* Certificate Section */}
         {hasCertification(sessionToDisplay.id) && (
-          <Card sx={{ p: 3, mb: 3, backgroundColor: '#f0fdf4', border: '2px solid #10b981' }}>
+          <Card sx={{ p: 3, mb: 3, backgroundColor: 'rgba(17, 68, 23, 0.04)', border: '2px solid #114417DB' }}>
             <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
               <Box display="flex" alignItems="center" gap={2}>
-                <AwardIcon sx={{ color: '#10b981', fontSize: 40 }} />
+                <AwardIcon sx={{ color: '#114417DB', fontSize: 40 }} />
                 <Box>
-                  <Typography variant="h6" fontWeight="bold" color="#10b981">
+                  <Typography variant="h6" fontWeight="bold" color="#114417DB">
                     Certification Attached
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
@@ -6854,12 +7882,12 @@ useEffect(() => {
                 startIcon={<CertificateIcon />}
                 onClick={() => handleOpenCertifications(sessionToDisplay)}
                 sx={{
-                  borderColor: '#10b981',
-                  color: '#10b981',
-                  '&:hover': {
-                    borderColor: '#059669',
-                    backgroundColor: '#d1fae5'
-                  }
+                borderColor: '#114417DB',
+                color: '#114417DB',
+                '&:hover': {
+                  borderColor: '#0a2f0e',
+                  backgroundColor: 'rgba(17, 68, 23, 0.08)'
+                }
                 }}
               >
                 View Certificate Details
@@ -6871,12 +7899,12 @@ useEffect(() => {
                 startIcon={<CertificateIcon />}
                 onClick={() => handleOpenCertifications(sessionToDisplay)}
                 sx={{
-                  borderColor: '#10b981',
-                  color: '#10b981',
-                  '&:hover': {
-                    borderColor: '#059669',
-                    backgroundColor: '#d1fae5'
-                  }
+                borderColor: '#114417DB',
+                color: '#114417DB',
+                '&:hover': {
+                  borderColor: '#0a2f0e',
+                  backgroundColor: 'rgba(17, 68, 23, 0.08)'
+                }
                 }}
               >
                 Edit Certificate
@@ -7061,7 +8089,7 @@ useEffect(() => {
                   {/* Correct Answer if specified */}
                   {question.correctAnswer !== undefined && question.type !== 'multiple-choice' && (
                     <Box mt={2} p={2} sx={{ backgroundColor: '#f0fdf4', borderRadius: 1 }}>
-                      <Typography variant="body2" fontWeight="medium" color="#10b981">
+                      <Typography variant="body2" fontWeight="medium" color="#114417DB">
                         Correct Answer: {question.correctAnswer}
                       </Typography>
                     </Box>
@@ -7121,7 +8149,7 @@ useEffect(() => {
                   variant="contained"
                   startIcon={<PublishIcon />}
                   onClick={() => handleProceedToPublish(selectedAllSessionItem)}
-                  sx={{ backgroundColor: '#10b981', '&:hover': { backgroundColor: '#059669' } }}
+                  sx={{ backgroundColor: '#114417DB', '&:hover': { backgroundColor: '#0a2f0e' } }}
                 >
                   Proceed to Publish
                 </Button>
@@ -7140,7 +8168,7 @@ useEffect(() => {
                 variant="contained"
                 startIcon={<SaveIcon />}
                 onClick={() => {
-                  alert('Session updated successfully!');
+                  showToast('Session updated successfully!', 'success');
                   setViewMode('preview');
                 }}
               >
@@ -7261,6 +8289,31 @@ useEffect(() => {
   };
 
   const handleProceedToPublish = (session) => {
+    // Validate mandatory fields before showing publish dialog
+    const validationErrors = validateMandatoryFields(session);
+    if (validationErrors.length > 0) {
+      const errorMessage = `Please complete the following mandatory fields before publishing:\n${validationErrors.join('\n')}`;
+      showToast(errorMessage, 'error');
+      
+      // Navigate to the first missing section
+      if (validationErrors.some(err => err.includes('Title') || err.includes('Type') || err.includes('Participants'))) {
+        setManageSessionTab('create');
+        setManageSessionView('create');
+        setActiveTab('manage-session');
+      } else if (validationErrors.some(err => err.includes('Content Creator'))) {
+        setManageSessionTab('content-creator');
+        setManageSessionView('content-creator');
+        setShowContentCreator(true);
+        setActiveTab('manage-session');
+      } else if (validationErrors.some(err => err.includes('Schedule'))) {
+        setManageSessionTab('schedule');
+        setManageSessionView('schedule');
+        setActiveTab('manage-session');
+      }
+      
+      return;
+    }
+
     setSessionToPublish(session);
     setPublishCourseData({
       courseImage: null,
@@ -7271,9 +8324,71 @@ useEffect(() => {
     setShowPublishDialog(true);
   };
 
+  // Validation function for mandatory fields
+  const validateMandatoryFields = (sessionData = null) => {
+    const resolvedSessionForm = sessionData?.sessionForm || sessionContentSnapshot?.sessionForm || sessionFormData;
+    const errors = [];
+
+    // Validate Create New Session fields
+    if (!resolvedSessionForm.title || resolvedSessionForm.title.trim() === '') {
+      errors.push('Session Title');
+    }
+    if (!resolvedSessionForm.type || resolvedSessionForm.type.trim() === '') {
+      errors.push('Session Type');
+    }
+    if (!resolvedSessionForm.audience || resolvedSessionForm.audience.trim() === '') {
+      errors.push('Participants');
+    }
+
+    // Validate Content Creator: At least one content must be created
+    const resolvedAiContent = sessionData?.aiContent || (sessionContentSnapshot?.aiContent ?? (aiContentGenerated ? { keywords: aiKeywords } : null));
+    const resolvedFiles = sessionData?.files || (sessionContentSnapshot?.files ?? mapFilesToMetadata(selectedFiles));
+    const hasAiContent = resolvedAiContent && (resolvedAiContent.keywords || resolvedAiContent.content || resolvedAiContent.title);
+    const hasFiles = resolvedFiles && resolvedFiles.length > 0;
+    const hasLiveTraining = sessionData?.creationMode === 'live-training' || selectedCreationMode === 'live-training';
+    const hasQuiz = sessionData?.quiz || currentQuizData?.quiz;
+
+    if (!hasAiContent && !hasFiles && !hasLiveTraining && !hasQuiz) {
+      errors.push('Content Creator (at least one content type required: AI Content, Uploaded Files, Live Training, or Assessment)');
+    }
+
+    // Validate Schedule: Must be scheduled
+    const hasSchedule = sessionData?.scheduledDateTime || sessionData?.scheduledDate || scheduleDate;
+
+    if (!hasSchedule) {
+      errors.push('Schedule (session must be scheduled)');
+    }
+
+    return errors;
+  };
+
   const handlePublishNow = () => {
+    // Validate all mandatory fields before publishing
+    const validationErrors = validateMandatoryFields(sessionToPublish);
+    if (validationErrors.length > 0) {
+      const errorMessage = `Please complete the following mandatory fields:\n${validationErrors.join('\n')}`;
+      showToast(errorMessage, 'error');
+      
+      // Navigate to the first missing section
+      if (validationErrors.some(err => err.includes('Title') || err.includes('Type') || err.includes('Participants'))) {
+        setManageSessionTab('create');
+        setManageSessionView('create');
+      } else if (validationErrors.some(err => err.includes('Content Creator'))) {
+        setManageSessionTab('content-creator');
+        setManageSessionView('content-creator');
+        setShowContentCreator(true);
+      } else if (validationErrors.some(err => err.includes('Schedule'))) {
+        setManageSessionTab('schedule');
+        setManageSessionView('schedule');
+      }
+      
+      setShowPublishDialog(false);
+      setSessionToPublish(null);
+      return;
+    }
+
     if (!publishCourseData.courseTitle) {
-      alert('Please enter a session title');
+      showToast('Please enter a session title', 'warning');
       return;
     }
 
@@ -7331,7 +8446,7 @@ useEffect(() => {
     setSelectedSessionForScheduling(publishedSession);
     setShowScheduleDialog(true);
     
-    alert('Session published successfully! Please schedule the session.');
+    showToast('Session published successfully! Please schedule the session.', 'success');
   };
 
   const handleSaveForLater = () => {
@@ -7352,18 +8467,18 @@ useEffect(() => {
     
     setShowPublishDialog(false);
     setSessionToPublish(null);
-    alert('Changes saved for later');
+    showToast('Changes saved for later', 'success');
   };
 
   const handleImageUpload = (event) => {
     const file = event.target.files[0];
     if (file) {
       if (file.size > 5 * 1024 * 1024) {
-        alert('Image size should be less than 5 MB');
+        showToast('Image size should be less than 5 MB', 'warning');
         return;
       }
       if (!['image/jpeg', 'image/jpg', 'image/png'].includes(file.type)) {
-        alert('Please upload JPG, JPEG, or PNG format');
+        showToast('Please upload JPG, JPEG, or PNG format', 'warning');
         return;
       }
       const reader = new FileReader();
@@ -7404,521 +8519,487 @@ useEffect(() => {
       return renderPublishDialog();
     }
 
-    // Show session detail if one is selected
-    if (selectedAllSessionItem) {
-      return renderSessionDetail(selectedAllSessionItem);
+    // Build preview session from current session data
+    const resolvedSessionForm = sessionContentSnapshot?.sessionForm || sessionFormData;
+    const resolvedAiContent = sessionContentSnapshot?.aiContent ?? (aiContentGenerated ? { keywords: aiKeywords } : null);
+    const resolvedFiles = sessionContentSnapshot?.files ?? mapFilesToMetadata(selectedFiles);
+    const resolvedQuiz = currentQuizData?.quiz || null;
+    const resolvedCreationMode = sessionContentSnapshot?.creationMode ?? selectedCreationMode;
+    
+    // Get certification for this session if any
+    const sessionCertId = sessionCertifications['preview'] || null;
+    const sessionCert = sessionCertId ? savedCertifications.find(c => c.id === sessionCertId) : null;
+    
+    // Build content items for preview (excluding assessment - it's shown separately)
+    const contentItems = [];
+    
+    // Add AI Content
+    if (resolvedAiContent && (resolvedAiContent.keywords || resolvedAiContent.content || resolvedAiContent.title)) {
+      contentItems.push({
+        id: 'ai-content',
+        type: 'ai',
+        title: resolvedAiContent.title || 'AI Generated Content',
+        description: resolvedAiContent.description || (resolvedAiContent.keywords ? `Keywords: ${resolvedAiContent.keywords}` : 'AI generated learning material'),
+        content: resolvedAiContent.content,
+        keyPoints: resolvedAiContent.keyPoints,
+        learningObjectives: resolvedAiContent.learningObjectives
+      });
     }
+    
+    // Add uploaded files
+    if (resolvedFiles && resolvedFiles.length > 0) {
+      resolvedFiles.forEach((file, index) => {
+        const fileName = typeof file === 'string' ? file : (file.name || `File ${index + 1}`);
+        const fileType = typeof file === 'string' ? null : (file.type || null);
+        const isPDF = fileName.toLowerCase().endsWith('.pdf') || 
+                     fileType === 'application/pdf' ||
+                     (file.dataUrl && file.dataUrl.startsWith('data:application/pdf')) ||
+                     (file.url && file.url.includes('.pdf')) ||
+                     (file.downloadUrl && file.downloadUrl.includes('.pdf'));
+        
+        contentItems.push({
+          id: `file-${index}`,
+          type: isPDF ? 'pdf' : (fileType || 'file'),
+          title: fileName,
+          description: typeof file === 'object' && file.size ? formatFileSize(file.size) : (fileType || 'Uploaded resource'),
+          file: file,
+          dataUrl: typeof file === 'object' ? (file.dataUrl || file.url || file.downloadUrl) : null,
+          isPDF: isPDF
+        });
+      });
+    }
+    
+    // Add creation mode content
+    if (resolvedCreationMode) {
+      const creationLabels = {
+        powerpoint: 'PowerPoint Presentation',
+        presentation: 'Presentation',
+        word: 'Word Document',
+        document: 'Document',
+        video: 'Training Video',
+      };
+      contentItems.push({
+        id: 'creation-mode',
+        type: resolvedCreationMode === 'video' ? 'video' : 'presentation',
+        title: creationLabels[resolvedCreationMode] || 'Created Content',
+        description: `Generated via ${creationLabels[resolvedCreationMode] || resolvedCreationMode} mode`
+      });
+    }
+    
+    // Note: Assessment is NOT added to contentItems - it's shown in a separate section below
 
-    const allSessions = getAllSessionsForManage();
-
-    const filteredSessions = allSessions.filter(session => {
-      const title = session.title || session.assessmentInfo?.quizTitle || '';
-      return title.toLowerCase().includes(manageSessionsSearchTerm.toLowerCase());
-    });
-
+    // Render detailed preview
     return (
-      <Box p={3} sx={{ minHeight: '100vh', backgroundColor: '#ffffff' }}>
-        {/* Header */}
-        <Box mb={4}>
-          <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-            <Box>
-              <Typography variant="h4" fontWeight="bold" gutterBottom>
-                Manage Sessions
-              </Typography>
-              <Typography variant="body1" color="text.secondary">
-                View and manage all your draft and saved sessions
-              </Typography>
-            </Box>
-          </Box>
+      <Box sx={{ backgroundColor: '#f8f9fa', minHeight: '100vh', p: 3 }}>
+        <Typography variant="h4" fontWeight="bold" mb={4} sx={{ color: '#1f2937' }}>
+          Preview Session
+        </Typography>
 
-          {/* Search and View Toggle */}
-          <Box display="flex" justifyContent="space-between" alignItems="center" gap={2}>
-            <TextField
-              placeholder="Search sessions..."
-              value={manageSessionsSearchTerm}
-              onChange={(e) => setManageSessionsSearchTerm(e.target.value)}
-              size="small"
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon />
-                  </InputAdornment>
-                ),
-              }}
-              sx={{ width: 400 }}
-            />
-            <Box display="flex" gap={1}>
-              <IconButton
-                onClick={() => setManageSessionsViewMode('grid')}
-                sx={{
-                  backgroundColor: manageSessionsViewMode === 'grid' ? '#3b82f6' : 'transparent',
-                  color: manageSessionsViewMode === 'grid' ? 'white' : '#666',
-                  border: '1px solid #e5e7eb',
-                  '&:hover': {
-                    backgroundColor: manageSessionsViewMode === 'grid' ? '#2563eb' : '#f3f4f6'
-                  }
-                }}
-              >
-                <GridViewIcon />
-              </IconButton>
-              <IconButton
-                onClick={() => setManageSessionsViewMode('list')}
-                sx={{
-                  backgroundColor: manageSessionsViewMode === 'list' ? '#3b82f6' : 'transparent',
-                  color: manageSessionsViewMode === 'list' ? 'white' : '#666',
-                  border: '1px solid #e5e7eb',
-                  '&:hover': {
-                    backgroundColor: manageSessionsViewMode === 'list' ? '#2563eb' : '#f3f4f6'
-                  }
-                }}
-              >
-                <ListViewIcon />
-              </IconButton>
-            </Box>
-          </Box>
-        </Box>
-
-        {/* Sessions List */}
-        {filteredSessions.length === 0 ? (
-          <Box textAlign="center" py={8}>
-            <Typography variant="h6" color="text.secondary">
-              No sessions found
-            </Typography>
-            <Typography variant="body2" color="text.secondary" mt={1}>
-              {manageSessionsSearchTerm ? 'Try adjusting your search' : 'Create a new session to get started'}
-            </Typography>
-          </Box>
-        ) : manageSessionsViewMode === 'list' ? (
-          <Box>
-            {filteredSessions.map((session) => {
-              const sessionTitle = session.title || session.assessmentInfo?.quizTitle || 'Untitled Session';
-              const questionCount = session.quiz?.questions?.length || session.questions?.length || 0;
-              
-              return (
-                <Card key={session.id} sx={{ mb: 2, p: 2, '&:hover': { boxShadow: 2 } }}>
-                  <Box display="flex" alignItems="center" gap={3}>
-                    {/* Thumbnail */}
-                    <Box
-                      sx={{
-                        width: 80,
-                        height: 80,
-                        borderRadius: 2,
-                        backgroundColor: '#f3f4f6',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: 40
-                      }}
-                    >
-                      {session.type === 'draft' ? '📝' : '📚'}
-                    </Box>
-
-                    {/* Session Info */}
-                    <Box flex={1}>
-                      <Box display="flex" alignItems="center" gap={1} mb={0.5}>
-                        <Typography variant="h6" fontWeight="bold">
-                          {sessionTitle}
-                        </Typography>
-                        {hasCertification(session.id) && (
-                          <AwardIcon sx={{ color: '#f59e0b', fontSize: 24 }} title="Certification Attached" />
-                        )}
-                        <Chip
-                          label={session.status}
-                          size="small"
-                          sx={{
-                            backgroundColor: session.status === 'Draft' ? '#f59e0b' : '#3b82f6',
-                            color: 'white',
-                            fontWeight: 'medium',
-                            fontSize: '0.7rem'
-                          }}
-                        />
-                      </Box>
-                      <Typography variant="body2" color="text.secondary" mb={0.5}>
-                        {questionCount} {questionCount === 1 ? 'question' : 'questions'} | {session.type === 'draft' ? 'Draft' : 'Saved Assessment'}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {session.createdAt || session.savedAt ? new Date(session.createdAt || session.savedAt).toLocaleString() : 'No date'}
-                      </Typography>
-                    </Box>
-
-                    {/* Action Buttons */}
-                    <Box display="flex" gap={1}>
-                      <IconButton
-                        size="small"
-                        onClick={() => setSelectedAllSessionItem(session)}
-                        sx={{ border: '1px solid #e5e7eb' }}
-                        title="Preview"
-                      >
-                        <VisibilityIcon />
-                      </IconButton>
-                      <IconButton
-                        size="small"
-                        onClick={() => {
-                          const sessionWithFolder = { ...session, folderType: session.type === 'draft' ? 'drafts' : 'assessments' };
-                          setSelectedAllSessionItem(sessionWithFolder);
-                          setEditingSession(JSON.parse(JSON.stringify(sessionWithFolder)));
-                          setViewMode('edit');
-                        }}
-                        sx={{ border: '1px solid #e5e7eb' }}
-                        title="Edit"
-                      >
-                        <EditIcon />
-                      </IconButton>
-                      <IconButton
-                        size="small"
-                        onClick={() => handleOpenCertifications(session)}
-                        sx={{ 
-                          border: '1px solid #e5e7eb', 
-                          color: hasCertification(session.id) ? '#10b981' : '#8b5cf6',
-                          backgroundColor: hasCertification(session.id) ? 'rgba(16, 185, 129, 0.1)' : 'transparent'
-                        }}
-                        title={hasCertification(session.id) ? "Certification Attached" : "Certification"}
-                      >
-                        <CertificateIcon />
-                      </IconButton>
-                      <IconButton
-                        size="small"
-                        onClick={() => {
-                          if (session.type === 'draft') {
-                            if (window.confirm('Are you sure you want to delete this draft session?')) {
-                              handleDeleteDraftSession(session.id);
-                            }
-                          } else {
-                            if (window.confirm('Are you sure you want to delete this assessment?')) {
-                              handleDeleteAssessment(session.id);
-                            }
-                          }
-                        }}
-                        sx={{ border: '1px solid #e5e7eb', color: '#ef4444' }}
-                        title="Delete"
-                      >
-                        <DeleteIcon />
-                      </IconButton>
-                      <Button
-                        variant="contained"
-                        size="small"
-                        onClick={() => handleProceedToPublish(session)}
-                        sx={{
-                          backgroundColor: '#8b5cf6',
-                          '&:hover': { backgroundColor: '#7c3aed' }
-                        }}
-                      >
-                        Proceed to Publish
-                      </Button>
-                    </Box>
-                  </Box>
-                </Card>
-              );
-            })}
-          </Box>
-        ) : (
+        {/* Session Information */}
+        <Card sx={{ mb: 3, p: 3 }}>
+          <Typography variant="h6" fontWeight="bold" mb={2} sx={{ color: '#114417DB' }}>
+            Session Information
+          </Typography>
           <Grid container spacing={3}>
-            {filteredSessions.map((session) => {
-              const sessionTitle = session.title || session.assessmentInfo?.quizTitle || 'Untitled Session';
-              const questionCount = session.quiz?.questions?.length || session.questions?.length || 0;
-              
-              return (
-                <Grid item xs={12} sm={6} md={4} key={session.id}>
-                  <Card sx={{ p: 2, height: '100%', display: 'flex', flexDirection: 'column' }}>
-                    <Box
-                      sx={{
-                        width: '100%',
-                        height: 160,
-                        borderRadius: 2,
-                        backgroundColor: '#f3f4f6',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: 64,
-                        mb: 2
-                      }}
-                    >
-                      {session.type === 'draft' ? '📝' : '📚'}
-                    </Box>
-                    <Box flex={1}>
-                      <Box display="flex" alignItems="center" gap={1} mb={1} flexWrap="wrap">
-                        <Typography variant="h6" fontWeight="bold" sx={{ flex: 1 }}>
-                          {sessionTitle}
-                        </Typography>
-                        {hasCertification(session.id) && (
-                          <AwardIcon sx={{ color: '#f59e0b', fontSize: 24 }} title="Certification Attached" />
-                        )}
-                      </Box>
-                      <Chip
-                        label={session.status}
-                        size="small"
-                        sx={{
-                          backgroundColor: session.status === 'Draft' ? '#f59e0b' : '#3b82f6',
-                          color: 'white',
-                          fontWeight: 'medium',
-                          fontSize: '0.7rem',
-                          mb: 1
-                        }}
-                      />
-                      <Typography variant="body2" color="text.secondary" mb={1}>
-                        {questionCount} {questionCount === 1 ? 'question' : 'questions'}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {session.createdAt || session.savedAt ? new Date(session.createdAt || session.savedAt).toLocaleString() : 'No date'}
-                      </Typography>
-                    </Box>
-                    <Box display="flex" gap={1} flexWrap="wrap">
-                      <IconButton
-                        size="small"
-                        onClick={() => setSelectedAllSessionItem(session)}
-                        title="Preview"
-                      >
-                        <VisibilityIcon />
-                      </IconButton>
-                      <IconButton
-                        size="small"
-                        onClick={() => {
-                          const sessionWithFolder = { ...session, folderType: session.type === 'draft' ? 'drafts' : 'assessments' };
-                          setSelectedAllSessionItem(sessionWithFolder);
-                          setEditingSession(JSON.parse(JSON.stringify(sessionWithFolder)));
-                          setViewMode('edit');
-                        }}
-                        title="Edit"
-                      >
-                        <EditIcon />
-                      </IconButton>
-                      <IconButton
-                        size="small"
-                        onClick={() => handleOpenCertifications(session)}
-                        title={hasCertification(session.id) ? "Certification Attached" : "Certification"}
-                        sx={{ 
-                          color: hasCertification(session.id) ? '#10b981' : '#8b5cf6',
-                          backgroundColor: hasCertification(session.id) ? 'rgba(16, 185, 129, 0.1)' : 'transparent'
-                        }}
-                      >
-                        <CertificateIcon />
-                      </IconButton>
-                      <IconButton
-                        size="small"
-                        onClick={() => {
-                          if (session.type === 'draft') {
-                            if (window.confirm('Are you sure you want to delete this draft session?')) {
-                              handleDeleteDraftSession(session.id);
-                            }
-                          } else {
-                            if (window.confirm('Are you sure you want to delete this assessment?')) {
-                              handleDeleteAssessment(session.id);
-                            }
-                          }
-                        }}
-                        sx={{ color: '#ef4444' }}
-                        title="Delete"
-                      >
-                        <DeleteIcon />
-                      </IconButton>
-                      <Button
-                        variant="contained"
-                        size="small"
-                        fullWidth
-                        onClick={() => handleProceedToPublish(session)}
-                        sx={{
-                          backgroundColor: '#8b5cf6',
-                          '&:hover': { backgroundColor: '#7c3aed' },
-                          mt: 1
-                        }}
-                      >
-                        Proceed to Publish
-                      </Button>
-                    </Box>
-                  </Card>
-                </Grid>
-              );
-            })}
-          </Grid>
-        )}
-
-        {/* Saved Certifications Dialog */}
-        <Dialog
-          open={showSavedCertifications}
-          onClose={() => {
-            setShowSavedCertifications(false);
-            setSelectedSessionForCertification(null);
-          }}
-          maxWidth="md"
-          fullWidth
-        >
-          <DialogTitle>
-            <Box display="flex" alignItems="center" justifyContent="space-between">
-              <Box display="flex" alignItems="center" gap={1}>
-                <CertificateIcon sx={{ color: '#8b5cf6' }} />
-                <Typography variant="h6" fontWeight="bold">
-                  Select Certification
-                </Typography>
-              </Box>
-              <IconButton
-                onClick={() => {
-                  setShowSavedCertifications(false);
-                  setSelectedSessionForCertification(null);
-                }}
-                size="small"
-              >
-                <CloseIcon />
-              </IconButton>
-            </Box>
-            {selectedSessionForCertification && (
-              <Typography variant="body2" color="text.secondary" mt={1}>
-                For session: {selectedSessionForCertification.title || selectedSessionForCertification.assessmentInfo?.quizTitle || 'Untitled Session'}
+            <Grid item xs={12} md={6}>
+              <Typography variant="body2" color="text.secondary" gutterBottom>
+                Title
               </Typography>
-            )}
-          </DialogTitle>
-          <DialogContent>
-            {savedCertifications.length === 0 ? (
-              <Box textAlign="center" py={6}>
-                <CertificateIcon sx={{ fontSize: 64, color: '#d1d5db', mb: 2 }} />
-                <Typography variant="h6" color="text.secondary" mb={1}>
-                  No Saved Certifications
+              <Typography variant="h6" fontWeight="medium">
+                {resolvedSessionForm.title || 'Untitled Session'}
+              </Typography>
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <Typography variant="body2" color="text.secondary" gutterBottom>
+                Session Type
+              </Typography>
+              <Chip 
+                label={resolvedSessionForm.type || 'Not specified'} 
+                sx={{ backgroundColor: '#114417DB', color: 'white' }}
+              />
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <Typography variant="body2" color="text.secondary" gutterBottom>
+                Participants
+              </Typography>
+              <Typography variant="body1" fontWeight="medium">
+                {resolvedSessionForm.audience === 'all' ? 'All Employees' :
+                 resolvedSessionForm.audience === 'managers' ? 'Managers Only' :
+                 resolvedSessionForm.audience === 'developers' ? 'Developers' :
+                 resolvedSessionForm.audience === 'hr' ? 'HR Team' :
+                 resolvedSessionForm.audience || 'Not specified'}
+              </Typography>
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <Typography variant="body2" color="text.secondary" gutterBottom>
+                Instructor
+              </Typography>
+              <Typography variant="body1" fontWeight="medium">
+                HR Team
+              </Typography>
+            </Grid>
+            {resolvedSessionForm.description && (
+              <Grid item xs={12}>
+                <Typography variant="body2" color="text.secondary" gutterBottom>
+                  Description
                 </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Create a certification configuration from the Certification section to see it here.
+                <Typography variant="body1">
+                  {resolvedSessionForm.description}
                 </Typography>
-              </Box>
-            ) : (
-              <Grid container spacing={2} sx={{ mt: 1 }}>
-                {savedCertifications.map((certification) => (
-                  <Grid item xs={12} sm={6} key={certification.id}>
-                    <Card
-                      sx={{
-                        p: 2,
-                        border: '1px solid #e5e7eb',
-                        borderRadius: 2,
-                        cursor: 'pointer',
-                        transition: 'all 0.3s ease',
-                        '&:hover': {
-                          borderColor: '#8b5cf6',
-                          boxShadow: '0 4px 12px rgba(139, 92, 246, 0.2)',
-                          transform: 'translateY(-2px)'
-                        }
-                      }}
-                      onClick={() => handleSelectCertification(certification)}
-                    >
-                      <Box display="flex" alignItems="flex-start" gap={2}>
-                        <Box
-                          sx={{
-                            backgroundColor: '#f3f4f6',
-                            borderRadius: 2,
-                            p: 1.5,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center'
-                          }}
-                        >
-                          <CertificateIcon sx={{ fontSize: 32, color: '#8b5cf6' }} />
-                        </Box>
-                        <Box flex={1}>
-                          <Typography variant="h6" fontWeight="bold" mb={0.5}>
-                            {certification.name}
-                          </Typography>
-                          <Typography variant="body2" color="text.secondary" mb={1}>
-                            Template: {certification.template?.name || 'N/A'}
-                          </Typography>
-                          <Box display="flex" gap={1} flexWrap="wrap">
-                            <Chip
-                              label={certification.fields?.title || 'CERTIFICATE'}
-                              size="small"
-                              sx={{ fontSize: '0.7rem' }}
-                            />
-                            <Chip
-                              label={new Date(certification.createdAt).toLocaleDateString()}
-                              size="small"
-                              variant="outlined"
-                              sx={{ fontSize: '0.7rem' }}
-                            />
-                          </Box>
-                        </Box>
-                      </Box>
-                    </Card>
-                  </Grid>
-                ))}
               </Grid>
             )}
-          </DialogContent>
-          <DialogActions>
-            <Button
-              onClick={() => {
-                setShowSavedCertifications(false);
-                setSelectedSessionForCertification(null);
-              }}
-            >
-              Cancel
-            </Button>
-          </DialogActions>
-        </Dialog>
+          </Grid>
+        </Card>
 
-        {/* Certification Confirmation Dialog */}
-        <Dialog
-          open={showCertificationConfirm}
-          onClose={handleCancelCertification}
-          maxWidth="sm"
-          fullWidth
-        >
-          <DialogTitle>
-            <Box display="flex" alignItems="center" gap={1}>
-              <CertificateIcon sx={{ color: '#8b5cf6' }} />
-              <Typography variant="h6" fontWeight="bold">
-                Confirm Certification Assignment
+        {/* Content Section */}
+        <Card sx={{ mb: 3, p: 3 }}>
+          <Typography variant="h6" fontWeight="bold" mb={2} sx={{ color: '#114417DB' }}>
+            Session Content
+          </Typography>
+          {contentItems.length === 0 ? (
+            <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+              No content has been added yet. Content will appear here once added.
+            </Typography>
+          ) : (
+            <Box>
+              {contentItems.map((item, index) => {
+                const getContentIcon = () => {
+                  switch (item.type) {
+                    case 'video': return <VideoLibraryIcon sx={{ color: '#3b82f6' }} />;
+                    case 'presentation': return <DescriptionIcon sx={{ color: '#10b981' }} />;
+                    case 'document': return <DescriptionIcon sx={{ color: '#6366f1' }} />;
+                    case 'pdf': return <DescriptionIcon sx={{ color: '#ef4444' }} />;
+                    case 'file': return <DescriptionIcon sx={{ color: '#3b82f6' }} />;
+                    case 'ai': return <SchoolIcon sx={{ color: '#8b5cf6' }} />;
+                    default: return <DescriptionIcon sx={{ color: '#94a3b8' }} />;
+                  }
+                };
+
+                const getContentUrl = () => {
+                  if (item.dataUrl) return item.dataUrl;
+                  if (typeof item.file === 'object') {
+                    return item.file.dataUrl || item.file.url || item.file.downloadUrl || null;
+                  }
+                  return null;
+                };
+
+                const contentUrl = getContentUrl();
+                const isPDF = item.isPDF || item.type === 'pdf';
+
+                return (
+                  <Card key={item.id || index} sx={{ mb: 2, border: '1px solid #e5e7eb' }}>
+                    {/* Content Header */}
+                    <Box display="flex" alignItems="flex-start" gap={2} p={2}>
+                      <Box sx={{ 
+                        backgroundColor: item.type === 'ai' ? '#f3e8ff' : '#e0f2fe',
+                        borderRadius: 1,
+                        p: 1,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}>
+                        {getContentIcon()}
+                      </Box>
+                      <Box flex={1}>
+                        <Typography variant="h6" fontWeight="bold" mb={0.5}>
+                          {item.title}
+                        </Typography>
+                        {item.description && (
+                          <Typography variant="body2" color="text.secondary" mb={1}>
+                            {item.description}
+                          </Typography>
+                        )}
+                        {item.type === 'file' && item.file && !isPDF && (
+                          <Chip 
+                            label={typeof item.file === 'object' ? (item.file.type || 'File') : 'File'} 
+                            size="small" 
+                            sx={{ mr: 1 }}
+                          />
+                        )}
+                        {item.type === 'ai' && item.keyPoints && item.keyPoints.length > 0 && (
+                          <Box mt={1}>
+                            <Typography variant="body2" fontWeight="medium" mb={0.5}>
+                              Key Points:
+                            </Typography>
+                            <List dense>
+                              {item.keyPoints.map((point, idx) => (
+                                <ListItem key={idx} sx={{ py: 0.25 }}>
+                                  <ListItemIcon sx={{ minWidth: 20 }}>
+                                    <CheckCircleIcon sx={{ fontSize: 16, color: '#114417DB' }} />
+                                  </ListItemIcon>
+                                  <ListItemText 
+                                    primary={point}
+                                    primaryTypographyProps={{ variant: 'body2' }}
+                                  />
+                                </ListItem>
+                              ))}
+                            </List>
+                          </Box>
+                        )}
+                      </Box>
+                    </Box>
+                    
+                    {/* PDF Viewer for PDF files */}
+                    {isPDF && contentUrl && (
+                      <Box
+                        sx={{
+                          height: '70vh',
+                          minHeight: 500,
+                          backgroundColor: '#f8fafc',
+                          borderTop: '1px solid #e5e7eb',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          overflow: 'hidden'
+                        }}
+                      >
+                        <embed
+                          src={`${contentUrl}#page=1&toolbar=1&navpanes=1&scrollbar=1`}
+                          type="application/pdf"
+                          style={{ width: '100%', height: '100%' }}
+                          title={item.title || 'PDF Document'}
+                        />
+                      </Box>
+                    )}
+                  </Card>
+                );
+              })}
+            </Box>
+          )}
+        </Card>
+
+        {/* Assessment Section */}
+        {resolvedQuiz && resolvedQuiz.questions && resolvedQuiz.questions.length > 0 && (
+          <Card sx={{ mb: 3, p: 3 }}>
+            <Box display="flex" alignItems="center" gap={1} mb={2}>
+              <QuizIcon sx={{ color: '#ef4444', fontSize: 28 }} />
+              <Typography variant="h6" fontWeight="bold" sx={{ color: '#114417DB' }}>
+                Assessment Details
               </Typography>
             </Box>
-          </DialogTitle>
-          <DialogContent>
-            {certificationToConfirm && selectedSessionForCertification && (
-              <Box>
-                <Typography variant="body1" mb={2}>
-                  Are you sure you want to attach the following certification to this session?
+            <Grid container spacing={2} mb={2}>
+              <Grid item xs={12} md={4}>
+                <Typography variant="body2" color="text.secondary">
+                  Assessment Title
                 </Typography>
-                
-                <Card sx={{ p: 2, mb: 2, backgroundColor: '#f9fafb', border: '1px solid #e5e7eb' }}>
-                  <Typography variant="subtitle2" color="text.secondary" mb={0.5}>
-                    Certification:
-                  </Typography>
-                  <Typography variant="h6" fontWeight="bold" mb={1}>
-                    {certificationToConfirm.name}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary" mb={0.5}>
-                    Template: {certificationToConfirm.template?.name || 'N/A'}
-                  </Typography>
+                <Typography variant="body1" fontWeight="medium">
+                  {resolvedQuiz.title || resolvedQuiz.assessmentInfo?.quizTitle || 'Checkpoint Assessment'}
+                </Typography>
+              </Grid>
+              <Grid item xs={12} md={4}>
+                <Typography variant="body2" color="text.secondary">
+                  Total Questions
+                </Typography>
+                <Typography variant="body1" fontWeight="medium">
+                  {resolvedQuiz.questions.length}
+                </Typography>
+              </Grid>
+              {resolvedQuiz.assessmentInfo?.passingScore && (
+                <Grid item xs={12} md={4}>
                   <Typography variant="body2" color="text.secondary">
-                    Certificate Title: {certificationToConfirm.fields?.title || 'CERTIFICATE'}
+                    Passing Score
                   </Typography>
+                  <Typography variant="body1" fontWeight="medium">
+                    {resolvedQuiz.assessmentInfo.passingScore}%
+                  </Typography>
+                </Grid>
+              )}
+              {resolvedQuiz.assessmentInfo?.maxAttempts && (
+                <Grid item xs={12} md={4}>
+                  <Typography variant="body2" color="text.secondary">
+                    Max Attempts
+                  </Typography>
+                  <Typography variant="body1" fontWeight="medium">
+                    {resolvedQuiz.assessmentInfo.maxAttempts}
+                  </Typography>
+                </Grid>
+              )}
+            </Grid>
+            <Divider sx={{ my: 2 }} />
+            <Typography variant="subtitle2" fontWeight="bold" mb={1}>
+              Questions Preview
+            </Typography>
+            <Box>
+              {resolvedQuiz.questions.slice(0, 3).map((question, idx) => (
+                <Card key={idx} sx={{ mb: 1, p: 2, backgroundColor: '#f9fafb' }}>
+                  <Typography variant="body2" fontWeight="medium" mb={1}>
+                    {idx + 1}. {question.text || question.question || 'Question'}
+                  </Typography>
+                  {question.options && question.options.length > 0 && (
+                    <List dense>
+                      {question.options.map((option, optIdx) => (
+                        <ListItem key={optIdx} sx={{ py: 0.25 }}>
+                          <Typography variant="body2" color="text.secondary">
+                            {String.fromCharCode(65 + optIdx)}. {option}
+                          </Typography>
+                        </ListItem>
+                      ))}
+                    </List>
+                  )}
                 </Card>
+              ))}
+              {resolvedQuiz.questions.length > 3 && (
+                <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic', mt: 1 }}>
+                  ... and {resolvedQuiz.questions.length - 3} more question{resolvedQuiz.questions.length - 3 === 1 ? '' : 's'}
+                </Typography>
+              )}
+            </Box>
+          </Card>
+        )}
 
-                <Card sx={{ p: 2, backgroundColor: '#eff6ff', border: '1px solid #bfdbfe' }}>
-                  <Typography variant="subtitle2" color="text.secondary" mb={0.5}>
-                    Session:
-                  </Typography>
-                  <Typography variant="h6" fontWeight="bold">
-                    {selectedSessionForCertification.title || selectedSessionForCertification.assessmentInfo?.quizTitle || 'Untitled Session'}
-                  </Typography>
-                </Card>
-              </Box>
-            )}
-          </DialogContent>
-          <DialogActions>
-            <Button
-              onClick={handleCancelCertification}
-              sx={{
-                color: '#6b7280',
-                '&:hover': { backgroundColor: '#f3f4f6' }
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="contained"
-              onClick={handleConfirmCertification}
-              sx={{
-                backgroundColor: '#10b981',
-                '&:hover': { backgroundColor: '#059669' }
-              }}
-            >
-              Confirm
-            </Button>
-          </DialogActions>
-        </Dialog>
+        {/* Certification Section */}
+        {sessionCert && (
+          <Card sx={{ mb: 3, p: 3 }}>
+            <Box display="flex" alignItems="center" gap={1} mb={2}>
+              <CertificateIcon sx={{ color: '#f59e0b', fontSize: 28 }} />
+              <Typography variant="h6" fontWeight="bold" sx={{ color: '#114417DB' }}>
+                Certification
+              </Typography>
+            </Box>
+            <Grid container spacing={2}>
+              <Grid item xs={12} md={6}>
+                <Typography variant="body2" color="text.secondary">
+                  Certificate Name
+                </Typography>
+                <Typography variant="body1" fontWeight="medium">
+                  {sessionCert.name || 'Certificate'}
+                </Typography>
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <Typography variant="body2" color="text.secondary">
+                  Template
+                </Typography>
+                <Typography variant="body1" fontWeight="medium">
+                  {sessionCert.template?.name || 'Standard Template'}
+                </Typography>
+              </Grid>
+              {sessionCert.fields && (
+                <>
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="body2" color="text.secondary">
+                      Title
+                    </Typography>
+                    <Typography variant="body1" fontWeight="medium">
+                      {sessionCert.fields.title || 'CERTIFICATE'}
+                    </Typography>
+                  </Grid>
+                  {sessionCert.fields.subtitle && (
+                    <Grid item xs={12} md={6}>
+                      <Typography variant="body2" color="text.secondary">
+                        Subtitle
+                      </Typography>
+                      <Typography variant="body1" fontWeight="medium">
+                        {sessionCert.fields.subtitle}
+                      </Typography>
+                    </Grid>
+                  )}
+                </>
+              )}
+            </Grid>
+          </Card>
+        )}
+
+        {!sessionCert && (
+          <Card sx={{ mb: 3, p: 3 }}>
+            <Box display="flex" alignItems="center" gap={1} mb={1}>
+              <CertificateIcon sx={{ color: '#d1d5db', fontSize: 28 }} />
+              <Typography variant="h6" fontWeight="bold" sx={{ color: '#6b7280' }}>
+                Certification
+              </Typography>
+            </Box>
+            <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+              No certification has been attached to this session.
+            </Typography>
+          </Card>
+        )}
+
+        {/* Default 5 Action Buttons */}
+        <Box display="flex" gap={2} mt={4} justifyContent="center" sx={{ pb: 3 }}>
+          <Button
+            variant="outlined"
+            startIcon={<SaveIcon />}
+            onClick={handleSaveSession}
+            sx={{
+              borderColor: '#114417DB',
+              color: '#114417DB',
+              '&:hover': {
+                borderColor: '#0a2f0e',
+                backgroundColor: 'rgba(17, 68, 23, 0.08)'
+              },
+              textTransform: 'none',
+              fontWeight: 600,
+              minWidth: 150
+            }}
+          >
+            Save as Draft
+          </Button>
+          <Button
+            variant="outlined"
+            onClick={handleSkipToNextStep}
+            sx={{
+              borderColor: '#6b7280',
+              color: '#6b7280',
+              '&:hover': {
+                borderColor: '#4b5563',
+                backgroundColor: '#f3f4f6'
+              },
+              textTransform: 'none',
+              fontWeight: 600,
+              minWidth: 150
+            }}
+          >
+            Skip
+          </Button>
+          <Button
+            variant="outlined"
+            onClick={() => setActiveTab('course-library')}
+            sx={{
+              borderColor: '#ef4444',
+              color: '#ef4444',
+              '&:hover': {
+                borderColor: '#dc2626',
+                backgroundColor: '#fef2f2'
+              },
+              textTransform: 'none',
+              fontWeight: 600,
+              minWidth: 150
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="outlined"
+            startIcon={<ArrowBackIcon />}
+            onClick={handlePreviousStep}
+            sx={{
+              borderColor: '#6b7280',
+              color: '#6b7280',
+              '&:hover': {
+                borderColor: '#4b5563',
+                backgroundColor: '#f3f4f6'
+              },
+              textTransform: 'none',
+              fontWeight: 600,
+              minWidth: 150
+            }}
+          >
+            Previous
+          </Button>
+          <Button
+            variant="contained"
+            endIcon={<ArrowForwardIcon />}
+            onClick={handleNextStep}
+            sx={{
+              backgroundColor: '#114417DB',
+              '&:hover': { backgroundColor: '#0a2f0e' },
+              textTransform: 'none',
+              fontWeight: 600,
+              minWidth: 150
+            }}
+          >
+            Next
+          </Button>
+        </Box>
       </Box>
     );
   };
@@ -8197,7 +9278,7 @@ useEffect(() => {
           <Button 
             variant="contained" 
             onClick={handleProfileSave}
-            sx={{ backgroundColor: '#10b981', '&:hover': { backgroundColor: '#059669' } }}
+            sx={{ backgroundColor: '#114417DB', '&:hover': { backgroundColor: '#0a2f0e' } }}
           >
             Save Changes
           </Button>
@@ -8495,7 +9576,7 @@ useEffect(() => {
                             } : {}
                           }}
                         >
-                          <FileIcon sx={{ fontSize: 32, color: file.fileObject ? '#10b981' : '#94a3b8' }} />
+                          <FileIcon sx={{ fontSize: 32, color: file.fileObject ? '#114417DB' : '#94a3b8' }} />
                           <Box flex={1} sx={{ minWidth: 0 }}>
                             <Typography 
                               variant="body2" 
@@ -8557,9 +9638,9 @@ useEffect(() => {
               )}
 
               {/* Create Interactive Quiz Section */}
-              <Box mt={3} p={3} sx={{ backgroundColor: session.quiz ? '#d1fae5' : '#fef3c7', borderRadius: 2, border: `2px dashed ${session.quiz ? '#10b981' : '#f59e0b'}` }}>
+              <Box mt={3} p={3} sx={{ backgroundColor: session.quiz ? 'rgba(17, 68, 23, 0.04)' : '#fef3c7', borderRadius: 2, border: `2px dashed ${session.quiz ? '#114417DB' : '#f59e0b'}` }}>
                 <Box display="flex" alignItems="center" gap={2} mb={2}>
-                  <QuizIcon sx={{ fontSize: 40, color: session.quiz ? '#10b981' : '#f59e0b' }} />
+                  <QuizIcon sx={{ fontSize: 40, color: session.quiz ? '#114417DB' : '#f59e0b' }} />
                   <Box flex={1}>
                     <Typography variant="h6" fontWeight="bold" gutterBottom>
                       Interactive Quiz
@@ -8581,8 +9662,8 @@ useEffect(() => {
                     handleCreateQuiz();
                   }}
                   sx={{
-                    backgroundColor: session.quiz ? '#10b981' : '#f59e0b',
-                    '&:hover': { backgroundColor: session.quiz ? '#059669' : '#d97706' },
+                    backgroundColor: session.quiz ? '#114417DB' : '#f59e0b',
+                    '&:hover': { backgroundColor: session.quiz ? '#0a2f0e' : '#d97706' },
                     width: '100%',
                     mb: session.quiz ? 2 : 0
                   }}
@@ -8594,7 +9675,7 @@ useEffect(() => {
                 {session.quiz && (
                   <Box mt={3} p={3} sx={{ backgroundColor: 'white', borderRadius: 2, border: '1px solid #e5e7eb' }}>
                     <Typography variant="subtitle1" fontWeight="bold" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <QuizIcon sx={{ color: '#10b981' }} />
+                      <QuizIcon sx={{ color: '#114417DB' }} />
                       Quiz Preview
                     </Typography>
                     
@@ -8613,7 +9694,7 @@ useEffect(() => {
                       </Typography>
                       
                       {session.quiz.questions.map((question, index) => (
-                        <Box key={question.id} mb={2} p={2} sx={{ backgroundColor: '#f9fafb', borderRadius: 1, borderLeft: '3px solid #10b981' }}>
+                        <Box key={question.id} mb={2} p={2} sx={{ backgroundColor: '#f9fafb', borderRadius: 1, borderLeft: '3px solid #114417DB' }}>
                           <Typography variant="body2" fontWeight="medium" gutterBottom>
                             {index + 1}. {question.text}
                             {question.required && <Chip label="Required" size="small" color="error" sx={{ ml: 1, height: 18 }} />}
@@ -8679,7 +9760,7 @@ useEffect(() => {
 
   const handleAddEmployee = () => {
     if (!newEmployee.firstName || !newEmployee.lastName || !newEmployee.email || !newEmployee.employeeId) {
-      alert('Please fill in all required fields');
+      showToast('Please fill in all required fields', 'warning');
       return;
     }
     
@@ -8705,7 +9786,7 @@ useEffect(() => {
       skills: ''
     });
     setShowAddEmployee(false);
-    alert('Employee added successfully!');
+    showToast('Employee added successfully!', 'success');
   };
 
   const handleEditEmployee = (employee) => {
@@ -8738,7 +9819,7 @@ useEffect(() => {
       password: '',
       skills: ''
     });
-    alert('Employee updated successfully!');
+    showToast('Employee updated successfully!', 'success');
   };
 
   const handleDeleteEmployee = (employeeId) => {
@@ -8756,7 +9837,7 @@ useEffect(() => {
         );
       }
       
-      alert('Employee deleted successfully!');
+      showToast('Employee deleted successfully!', 'success');
     }
   };
 
@@ -9091,7 +10172,7 @@ useEffect(() => {
               <Button
                 variant="contained"
                 onClick={handleAddEmployee}
-                sx={{ backgroundColor: '#10b981', '&:hover': { backgroundColor: '#059669' } }}
+                sx={{ backgroundColor: '#114417DB', '&:hover': { backgroundColor: '#0a2f0e' } }}
               >
                 Add Employee
               </Button>
@@ -9269,7 +10350,7 @@ useEffect(() => {
           <Button 
             onClick={showEditEmployee ? handleUpdateEmployee : handleAddEmployee}
             variant="contained"
-            sx={{ backgroundColor: '#10b981', '&:hover': { backgroundColor: '#059669' } }}
+            sx={{ backgroundColor: '#114417DB', '&:hover': { backgroundColor: '#0a2f0e' } }}
           >
             {showEditEmployee ? 'Update Employee' : 'Add Employee'}
           </Button>
@@ -9514,7 +10595,7 @@ useEffect(() => {
                         label={course.status}
                         size="small"
                         sx={{
-                          backgroundColor: course.status === 'Published' ? '#10b981' : 
+                          backgroundColor: course.status === 'Published' ? '#114417DB' : 
                                            course.status === 'Draft' ? '#f59e0b' : '#3b82f6',
                           color: 'white',
                           fontWeight: 'medium',
@@ -9596,7 +10677,7 @@ useEffect(() => {
                         label={course.status}
                         size="small"
                         sx={{
-                          backgroundColor: course.status === 'Published' ? '#10b981' : 
+                          backgroundColor: course.status === 'Published' ? '#114417DB' : 
                                            course.status === 'Draft' ? '#f59e0b' : '#3b82f6',
                           color: 'white',
                           fontWeight: 'medium',
@@ -9842,7 +10923,7 @@ useEffect(() => {
                   </Grid>
                   <Grid item xs={12} sm={4}>
                     <Box textAlign="center">
-                      <Typography variant="h4" fontWeight="bold" color="#10b981">
+                      <Typography variant="h4" fontWeight="bold" color="#114417DB">
                         {analyticsData.completionRate}%
                       </Typography>
                       <Typography variant="body2" color="text.secondary">
@@ -10032,8 +11113,8 @@ useEffect(() => {
               variant="contained"
               onClick={handleRunReport}
               sx={{
-                backgroundColor: '#10b981',
-                '&:hover': { backgroundColor: '#059669' }
+                backgroundColor: '#114417DB',
+                '&:hover': { backgroundColor: '#0a2f0e' }
               }}
             >
               Run
@@ -10116,7 +11197,7 @@ useEffect(() => {
                                   label={value}
                                   size="small"
                                   sx={{
-                                    backgroundColor: value === 'Active' ? '#10b981' : '#ef4444',
+                                    backgroundColor: value === 'Active' ? '#114417DB' : '#ef4444',
                                     color: 'white'
                                   }}
                                 />
@@ -10213,7 +11294,7 @@ useEffect(() => {
                 sx={{
                   mb: 0.5,
                   backgroundColor: selectedReportCategory === category.id ? '#d1fae5' : 'transparent',
-                  borderLeft: selectedReportCategory === category.id ? '4px solid #10b981' : '4px solid transparent',
+                  borderLeft: selectedReportCategory === category.id ? '4px solid #114417DB' : '4px solid transparent',
                   '&:hover': {
                     backgroundColor: selectedReportCategory === category.id ? '#d1fae5' : '#f0fdf4'
                   }
@@ -10223,13 +11304,13 @@ useEffect(() => {
                   onClick={() => setSelectedReportCategory(category.id)}
                   sx={{ py: 1.5, px: 2 }}
                 >
-                  <ListItemIcon sx={{ minWidth: 36, color: selectedReportCategory === category.id ? '#10b981' : 'inherit' }}>
+                  <ListItemIcon sx={{ minWidth: 36, color: selectedReportCategory === category.id ? '#114417DB' : 'inherit' }}>
                     {category.icon}
                   </ListItemIcon>
                   <ListItemText 
                     primary={category.label} 
                     primaryTypographyProps={{
-                      color: selectedReportCategory === category.id ? '#10b981' : 'inherit',
+                      color: selectedReportCategory === category.id ? '#114417DB' : 'inherit',
                       fontWeight: selectedReportCategory === category.id ? 600 : 400
                     }}
                   />
@@ -10498,6 +11579,22 @@ useEffect(() => {
 
   return (
     <DashboardContainer>
+      {/* Toast Notification */}
+      <Snackbar
+        open={toast.open}
+        autoHideDuration={6000}
+        onClose={closeToast}
+        anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
+        <Alert 
+          onClose={closeToast} 
+          severity={toast.severity}
+          sx={{ width: '100%' }}
+          variant="filled"
+        >
+          {toast.message}
+        </Alert>
+      </Snackbar>
       {/* Sidebar */}
       <Sidebar>
         {/* Logo and Text Side by Side */}
@@ -10678,53 +11775,78 @@ useEffect(() => {
 
       <MainContent>
         {/* Header */}
-        <HeaderBar position="fixed" sx={{ top: 0, left: '280px', right: 0, zIndex: 1100 }}>
-          <Toolbar sx={{ minHeight: '64px !important', height: '64px', paddingTop: 0, paddingBottom: 0 }}>
+        <HeaderBar position="fixed" sx={{ top: 0, left: '280px', right: 0, zIndex: 1100, width: 'calc(100% - 280px)' }}>
+          <Toolbar sx={{ 
+            minHeight: '64px !important', 
+            height: '64px', 
+            paddingTop: 0, 
+            paddingBottom: 0,
+            paddingLeft: '16px !important',
+            paddingRight: '16px !important',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            width: '100%'
+          }}>
             <Typography 
               variant="h6" 
               component="div" 
               sx={{ 
-                flexGrow: 1,
                 height: '64px',
                 display: 'flex',
                 alignItems: 'center',
                 fontSize: '1rem',
-                lineHeight: '64px',
-                fontFamily: '"Poppins", sans-serif'
+                fontFamily: '"Poppins", sans-serif',
+                color: '#374151',
+                flex: '0 0 auto'
               }}
             >
               Welcome back, Admin
             </Typography>
-            <IconButton 
-              color="inherit" 
-              onClick={handleNotificationClick}
-              sx={{ mr: 1 }}
-            >
-              <NotificationsIcon sx={{ fontSize: 32 }} />
-              {unreadNotificationsCount > 0 && (
-                <Chip 
-                  label={unreadNotificationsCount} 
-                  size="small" 
-                  color="error" 
-                  sx={{ 
-                    position: 'absolute', 
-                    top: 10, 
-                    right: 10, 
-                    height: 20, 
-                    minWidth: 20, 
-                    borderRadius: '10px', 
-                    fontSize: '0.75rem',
-                    '& .MuiChip-label': { px: '6px' } 
-                  }} 
-                />
-              )}
-            </IconButton>
-            <IconButton
-              color="inherit"
-              onClick={handleProfileClick}
-            >
-              <AccountIcon sx={{ fontSize: 36 }} />
-            </IconButton>
+            <Box sx={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: 0.5,
+              flex: '0 0 auto',
+              marginLeft: 'auto'
+            }}>
+              {/* Notifications */}
+              <IconButton 
+                onClick={handleNotificationClick}
+                size="medium"
+                sx={{ 
+                  color: '#374151 !important',
+                  width: 40,
+                  height: 40,
+                  '&:hover': {
+                    backgroundColor: 'rgba(0, 0, 0, 0.04)',
+                  }
+                }}
+              >
+                <Badge badgeContent={unreadNotificationsCount} color="error">
+                  <NotificationsIcon sx={{ fontSize: 24, color: '#374151 !important' }} />
+                </Badge>
+              </IconButton>
+              
+              {/* Profile */}
+              <IconButton
+                onClick={handleProfileClick}
+                size="medium"
+                sx={{
+                  color: '#374151 !important',
+                  padding: '4px',
+                  width: 40,
+                  height: 40,
+                  '&:hover': {
+                    backgroundColor: 'rgba(0, 0, 0, 0.04)',
+                  }
+                }}
+              >
+                <Avatar sx={{ width: 32, height: 32, bgcolor: '#114417DB', color: 'white', fontSize: '0.875rem' }}>
+                  {profileData.firstName ? profileData.firstName[0] : 'A'}
+                </Avatar>
+              </IconButton>
+            </Box>
           </Toolbar>
         </HeaderBar>
 
@@ -10846,7 +11968,7 @@ useEffect(() => {
         <Dialog open={showSuccessPopup} onClose={() => setShowSuccessPopup(false)}>
           <DialogContent sx={{ textAlign: 'center', p: 4 }}>
             <Box display="flex" justifyContent="center" mb={2}>
-              <CheckCircleIcon sx={{ fontSize: 60, color: '#10b981' }} />
+              <CheckCircleIcon sx={{ fontSize: 60, color: '#114417DB' }} />
             </Box>
             <Typography variant="h5" fontWeight="bold" gutterBottom>
               New session saved successfully!
@@ -10857,7 +11979,7 @@ useEffect(() => {
             <Button 
               variant="contained" 
               onClick={() => setShowSuccessPopup(false)}
-              sx={{ backgroundColor: '#10b981', '&:hover': { backgroundColor: '#059669' } }}
+              sx={{ backgroundColor: '#114417DB', '&:hover': { backgroundColor: '#0a2f0e' } }}
             >
               OK
             </Button>
@@ -10990,7 +12112,7 @@ useEffect(() => {
         <Dialog open={showScheduleSuccess} onClose={() => setShowScheduleSuccess(false)}>
           <DialogContent sx={{ textAlign: 'center', p: 4 }}>
             <Box display="flex" justifyContent="center" mb={2}>
-              <CheckCircleIcon sx={{ fontSize: 60, color: '#10b981' }} />
+              <CheckCircleIcon sx={{ fontSize: 60, color: '#114417DB' }} />
             </Box>
             <Typography variant="h5" fontWeight="bold" gutterBottom>
               Session scheduled successfully!
@@ -11001,7 +12123,7 @@ useEffect(() => {
             <Button 
               variant="contained" 
               onClick={() => setShowScheduleSuccess(false)}
-              sx={{ backgroundColor: '#10b981', '&:hover': { backgroundColor: '#059669' } }}
+              sx={{ backgroundColor: '#114417DB', '&:hover': { backgroundColor: '#0a2f0e' } }}
             >
               OK
             </Button>
@@ -11116,7 +12238,7 @@ useEffect(() => {
                       variant="outlined"
                       fullWidth
                       size="large"
-                      onClick={() => alert('Please manually open your preferred video editing application.')}
+                      onClick={() => showToast('Please manually open your preferred video editing application.', 'info')}
                       sx={{ py: 2 }}
                     >
                       Other Video Editor

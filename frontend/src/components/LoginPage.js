@@ -303,7 +303,7 @@ const LoginPage = () => {
                   </Typography>
                 </Box>
               </Box>
-              <Typography variant="subtitle1" color="text.secondary" gutterBottom>
+              <Typography variant="subtitle1" color="text.secondary" sx={{ mb: 1 }}>
                 Where Learning Grows, Compliance Flows
               </Typography>
             </Box>
@@ -320,7 +320,7 @@ const LoginPage = () => {
                 )}
 
                 {/* Login Form */}
-                <Box sx={{ p: 4 }}>
+                <Box sx={{ p: 4, pt: 2 }}>
                   <Box 
                     component="form" 
                     noValidate 
@@ -336,6 +336,7 @@ const LoginPage = () => {
                       value={loginForm.email}
                       onChange={handleInputChange('email')}
                       margin="normal"
+                      sx={{ mt: 0 }}
                       autoComplete="email"
                       placeholder="Enter your email address"
                       InputProps={{

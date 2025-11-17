@@ -159,8 +159,8 @@ const CertificateOfCompletion = ({ session, onNext, onBack }) => {
           variant="contained"
           onClick={onNext}
           sx={{ 
-            backgroundColor: '#10b981', 
-            '&:hover': { backgroundColor: '#059669' },
+            backgroundColor: '#114417DB', 
+            '&:hover': { backgroundColor: '#0a2f0e' },
             px: 4
           }}
         >

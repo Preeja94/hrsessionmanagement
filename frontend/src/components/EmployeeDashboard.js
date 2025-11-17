@@ -519,7 +519,7 @@ const EmployeeDashboard = () => {
     { 
       label: 'Completion Rate', 
       value: `${completionRateValue}%`, 
-      color: '#10b981', 
+      color: '#114417DB', 
       icon: <TrendingUpIcon /> 
     }
   ];
@@ -570,7 +570,7 @@ const EmployeeDashboard = () => {
         action: isCompleted ? 'Completed session' : isLocked ? 'Session locked' : 'Upcoming session',
         session: session.title || 'Untitled session',
         time: formatRelativeTime(referenceDate),
-                  icon: isCompleted ? <CheckCircleIcon sx={{ color: '#10b981' }} /> : isLocked ? <LockIcon sx={{ color: '#ef4444' }} /> : <ScheduleIcon sx={{ color: '#114417DB' }} />,
+                  icon: isCompleted ? <CheckCircleIcon sx={{ color: '#114417DB' }} /> : isLocked ? <LockIcon sx={{ color: '#ef4444' }} /> : <ScheduleIcon sx={{ color: '#114417DB' }} />,
         sortDate: referenceDate ? referenceDate.getTime() : Date.now()
       };
     });

@@ -471,7 +471,7 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
           <Grid container spacing={3} mb={4}>
             <Grid item xs={6}>
               <Box textAlign="center">
-                <Typography variant="h4" fontWeight="bold" color="#10b981">
+                <Typography variant="h4" fontWeight="bold" color="#114417DB">
                   {correctAnswersCount}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
@@ -498,8 +498,8 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
               startIcon={<CheckCircleIcon />}
               onClick={() => onComplete(score)}
               sx={{ 
-                backgroundColor: '#10b981', 
-                '&:hover': { backgroundColor: '#059669' },
+                backgroundColor: '#114417DB', 
+                '&:hover': { backgroundColor: '#0a2f0e' },
                 px: 4,
                 py: 1.5
               }}
