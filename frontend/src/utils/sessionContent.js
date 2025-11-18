@@ -134,14 +134,19 @@ export const buildSessionContentItems = (session) => {
     session.resumeState?.aiContent;
 
   if (aiGenerated) {
+    const aiContent = aiGenerated.content || session.resumeState?.aiContent?.content || '';
+    const aiTitle = aiGenerated.title || 'AI Generated Content';
     items.push({
       id: `ai-${counter++}`,
       type: 'ai',
-      title: 'AI Generated Content',
+      title: aiTitle || 'AI Generated Content',
       description: aiKeywords ? `Keywords: ${aiKeywords}` : 'AI generated learning material',
       meta: aiGenerated.generatedAt ? `Generated ${new Date(aiGenerated.generatedAt).toLocaleDateString()}` : undefined,
       downloadable: false,
       completed: Boolean(session.completed),
+      aiContent: aiContent, // Store full content for PDF generation
+      aiTitle: aiTitle,
+      aiKeywords: aiKeywords
     });
   }
 

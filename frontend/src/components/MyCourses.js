@@ -39,6 +39,11 @@ const MyCourses = ({ sessions = [], onSessionComplete, onSessionStart, onSession
     [sortedSessions]
   );
 
+  const expiredSessions = useMemo(
+    () => sortedSessions.filter(session => session.isLocked || (session.dueDateTime && new Date(session.dueDateTime) < new Date())),
+    [sortedSessions]
+  );
+
   const completedSessionsList = useMemo(
     () => sortedSessions.filter(session => session.completed),
     [sortedSessions]
@@ -54,11 +59,13 @@ const MyCourses = ({ sessions = [], onSessionComplete, onSessionStart, onSession
   const getStatusColor = (status) => {
     switch (status) {
       case 'completed':
-        return '#10b981';
+        return '#114417DB';
       case 'locked':
         return '#ef4444';
       case 'scheduled':
+        return '#3b82f6';
       case 'published':
+        return '#114417DB';
       case 'in-progress':
         return '#f59e0b';
       default:
@@ -91,7 +98,9 @@ const MyCourses = ({ sessions = [], onSessionComplete, onSessionStart, onSession
     if (onSessionStart) {
       onSessionStart(session.id);
     }
+    // Directly start the session without intermediate screen
     if (onSessionClick) {
+      // Pass the session directly to start it
       onSessionClick(session);
     }
   };
@@ -121,9 +130,11 @@ const MyCourses = ({ sessions = [], onSessionComplete, onSessionStart, onSession
           />
         </Box>
 
-        <Typography variant="body2" color="text.secondary" mb={2}>
-          {session.description || 'No description provided.'}
-        </Typography>
+        {session.description && (
+          <Typography variant="body2" color="text.secondary" mb={2}>
+            {session.description}
+          </Typography>
+        )}
 
         {/* Show file count if files are available */}
         {session.files && Array.isArray(session.files) && session.files.length > 0 && (
@@ -138,16 +149,13 @@ const MyCourses = ({ sessions = [], onSessionComplete, onSessionStart, onSession
         )}
 
         <Box display="flex" alignItems="center" mb={2}>
-          <Avatar sx={{ width: 32, height: 32, mr: 2 }}>
-            <PersonIcon />
-          </Avatar>
           <Box>
             <Typography variant="body2" fontWeight="medium">
-              Created by {session.instructor || 'HR Team'}
+              Start Date: {formatDate(session.scheduledDateTime || session.publishedAt || session.createdAt, 'Not available')}
             </Typography>
-            {session.scheduledDateTime && (
+            {session.dueDateTime && (
               <Typography variant="caption" color="text.secondary" display="block">
-                Scheduled for {formatDate(session.scheduledDateTime)}
+                Due by {formatDate(session.dueDateTime)}
               </Typography>
             )}
           </Box>
@@ -205,12 +213,14 @@ const MyCourses = ({ sessions = [], onSessionComplete, onSessionStart, onSession
           startIcon={<PlayIcon />}
           onClick={() => handleContinue(session)}
           sx={{ 
-            backgroundColor: '#10b981', 
-            '&:hover': { backgroundColor: '#059669' },
+            backgroundColor: '#114417DB', 
+            '&:hover': { backgroundColor: '#0a2f0e' },
             width: '100%'
           }}
         >
-          Continue Session
+          {session.status === 'in-progress' || session.lastAccessed || (session.progress && session.progress > 0)
+            ? 'Continue Session'
+            : 'Start Session'}
         </Button>
       </CardContent>
     </Card>
@@ -230,17 +240,16 @@ const MyCourses = ({ sessions = [], onSessionComplete, onSessionStart, onSession
           />
         </Box>
 
-        <Typography variant="body2" color="text.secondary" mb={2}>
-          {session.description || 'No description provided.'}
-        </Typography>
+        {session.description && (
+          <Typography variant="body2" color="text.secondary" mb={2}>
+            {session.description}
+          </Typography>
+        )}
 
         <Box display="flex" alignItems="center" mb={2}>
-          <Avatar sx={{ width: 32, height: 32, mr: 2 }}>
-            <PersonIcon />
-          </Avatar>
           <Box>
             <Typography variant="body2" fontWeight="medium">
-              Created by {session.instructor || 'HR Team'}
+              Start Date: {formatDate(session.scheduledDateTime || session.publishedAt || session.createdAt, 'Not available')}
             </Typography>
             <Typography variant="caption" color="text.secondary" display="block">
               Completed on {formatDate(session.completedAt || session.dueDateTime || session.scheduledDateTime, 'Completion date unavailable')}
@@ -313,6 +322,69 @@ const MyCourses = ({ sessions = [], onSessionComplete, onSessionStart, onSession
     </Card>
   );
 
+  const renderExpiredCard = (session) => {
+    const handleRequestAccess = () => {
+      if (window.confirm(`Request access to "${session.title}"?`)) {
+        alert('Request submitted! The admin team will review it shortly.');
+      }
+    };
+
+    return (
+      <Card sx={{ height: '100%', '&:hover': { boxShadow: 4 } }}>
+        <CardContent>
+          <Box display="flex" justifyContent="space-between" alignItems="start" mb={2}>
+            <Typography variant="h6" fontWeight="bold" gutterBottom>
+              {session.title}
+            </Typography>
+            <Chip
+              label="Expired/Locked"
+              sx={{ backgroundColor: '#ef4444', color: 'white' }}
+              size="small"
+              icon={<LockIcon sx={{ fontSize: 16 }} />}
+            />
+          </Box>
+
+          {session.description && (
+            <Typography variant="body2" color="text.secondary" mb={2}>
+              {session.description}
+            </Typography>
+          )}
+
+          <Box mb={2}>
+            <Typography variant="body2" fontWeight="medium" mb={0.5}>
+              Start Date: {formatDate(session.scheduledDateTime || session.publishedAt || session.createdAt, 'Not available')}
+            </Typography>
+            {session.dueDateTime && (
+              <Typography variant="caption" color="#b91c1c" display="flex" alignItems="center" gap={0.5}>
+                <ScheduleIcon sx={{ fontSize: 14 }} />
+                Due by {formatDate(session.dueDateTime)}
+              </Typography>
+            )}
+            {session.lockedAt && (
+              <Typography variant="caption" color="text.secondary" display="flex" alignItems="center" gap={0.5} mt={0.5}>
+                <LockIcon sx={{ fontSize: 14 }} />
+                Locked on {formatDate(session.lockedAt)}
+              </Typography>
+            )}
+          </Box>
+
+          <Button
+            variant="contained"
+            fullWidth
+            startIcon={<LockIcon />}
+            onClick={handleRequestAccess}
+            sx={{ 
+              backgroundColor: '#114417DB', 
+              '&:hover': { backgroundColor: '#0a2f0e' }
+            }}
+          >
+            Request Access
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  };
+
   const renderSessionsGrid = (list, emptyMessage, renderer) => (
     <Grid container spacing={3}>
       {list.length === 0 ? (
@@ -337,10 +409,12 @@ const MyCourses = ({ sessions = [], onSessionComplete, onSessionStart, onSession
             variant={activeTab === 'all' ? 'contained' : 'outlined'}
             onClick={() => setActiveTab('all')}
             sx={{
-              backgroundColor: activeTab === 'all' ? '#3b82f6' : 'transparent',
-              color: activeTab === 'all' ? 'white' : '#3b82f6',
+              backgroundColor: activeTab === 'all' ? '#114417DB' : 'transparent',
+              color: activeTab === 'all' ? 'white' : '#114417DB',
+              borderColor: '#114417DB',
               '&:hover': {
-                backgroundColor: activeTab === 'all' ? '#2563eb' : '#f3f4f6',
+                backgroundColor: activeTab === 'all' ? '#0a2f0e' : '#f3f4f6',
+                borderColor: '#114417DB',
               },
             }}
           >
@@ -350,23 +424,42 @@ const MyCourses = ({ sessions = [], onSessionComplete, onSessionStart, onSession
             variant={activeTab === 'in-progress' ? 'contained' : 'outlined'}
             onClick={() => setActiveTab('in-progress')}
             sx={{
-              backgroundColor: activeTab === 'in-progress' ? '#3b82f6' : 'transparent',
-              color: activeTab === 'in-progress' ? 'white' : '#3b82f6',
+              backgroundColor: activeTab === 'in-progress' ? '#114417DB' : 'transparent',
+              color: activeTab === 'in-progress' ? 'white' : '#114417DB',
+              borderColor: '#114417DB',
               '&:hover': {
-                backgroundColor: activeTab === 'in-progress' ? '#2563eb' : '#f3f4f6',
+                backgroundColor: activeTab === 'in-progress' ? '#0a2f0e' : '#f3f4f6',
+                borderColor: '#114417DB',
               },
             }}
           >
             In Progress
           </Button>
           <Button
+            variant={activeTab === 'expired' ? 'contained' : 'outlined'}
+            onClick={() => setActiveTab('expired')}
+            sx={{
+              backgroundColor: activeTab === 'expired' ? '#114417DB' : 'transparent',
+              color: activeTab === 'expired' ? 'white' : '#114417DB',
+              borderColor: '#114417DB',
+              '&:hover': {
+                backgroundColor: activeTab === 'expired' ? '#0a2f0e' : '#f3f4f6',
+                borderColor: '#114417DB',
+              },
+            }}
+          >
+            Expired
+          </Button>
+          <Button
             variant={activeTab === 'completed' ? 'contained' : 'outlined'}
             onClick={() => setActiveTab('completed')}
             sx={{
-              backgroundColor: activeTab === 'completed' ? '#3b82f6' : 'transparent',
-              color: activeTab === 'completed' ? 'white' : '#3b82f6',
+              backgroundColor: activeTab === 'completed' ? '#114417DB' : 'transparent',
+              color: activeTab === 'completed' ? 'white' : '#114417DB',
+              borderColor: '#114417DB',
               '&:hover': {
-                backgroundColor: activeTab === 'completed' ? '#2563eb' : '#f3f4f6',
+                backgroundColor: activeTab === 'completed' ? '#0a2f0e' : '#f3f4f6',
+                borderColor: '#114417DB',
               },
             }}
           >

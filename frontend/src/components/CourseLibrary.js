@@ -159,7 +159,7 @@ const CourseLibrary = ({ lockedSessions = [] }) => {
             fullWidth
             startIcon={<RequestIcon />}
             onClick={() => handleRequestAccess(session)}
-            sx={{ backgroundColor: '#10b981', '&:hover': { backgroundColor: '#059669' } }}
+            sx={{ backgroundColor: '#114417DB', '&:hover': { backgroundColor: '#0a2f0e' } }}
           >
             Request Access
           </Button>
@@ -179,13 +179,13 @@ const CourseLibrary = ({ lockedSessions = [] }) => {
           Session Library
         </Typography>
         <Typography variant="body1" color="text.secondary">
-          Locked sessions that require a new approval
+          All available courses
         </Typography>
       </Box>
 
       <Box mb={4}>
         <TextField
-          placeholder="Search locked sessions..."
+          placeholder="Search courses..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
           fullWidth
@@ -201,33 +201,13 @@ const CourseLibrary = ({ lockedSessions = [] }) => {
 
       <Box mb={4}>
         <Typography variant="h5" fontWeight="bold" gutterBottom>
-          Recently Added
+          All Sessions
         </Typography>
         <Typography variant="body2" color="text.secondary" mb={3}>
-          The latest locked sessions that need your HR approval.
-        </Typography>
-        {recentlyAdded.length === 0 ? (
-          renderEmptyState('No newly locked sessions at the moment. Great job staying on track!')
-        ) : (
-          <Grid container spacing={3}>
-            {recentlyAdded.map(session => (
-              <Grid item xs={12} md={6} lg={4} key={`${session.id}-recent`}>
-                {renderLockedCard(session)}
-              </Grid>
-            ))}
-          </Grid>
-        )}
-      </Box>
-
-      <Box mb={4}>
-        <Typography variant="h5" fontWeight="bold" gutterBottom>
-          All Locked Courses
-        </Typography>
-        <Typography variant="body2" color="text.secondary" mb={3}>
-          Request access to continue sessions that are currently locked.
+          Browse all available courses. Request access to locked sessions.
         </Typography>
         {sortedLockedSessions.length === 0 ? (
-          renderEmptyState('All your sessions are open. Keep up the great work!')
+          renderEmptyState('No courses available at the moment.')
         ) : (
           <Grid container spacing={3}>
             {sortedLockedSessions.map(session => (
@@ -266,7 +246,11 @@ const CourseLibrary = ({ lockedSessions = [] }) => {
           <Button onClick={() => setShowRequestDialog(false)} color="inherit">
             Cancel
           </Button>
-          <Button onClick={handleSubmitRequest} variant="contained">
+          <Button 
+            onClick={handleSubmitRequest} 
+            variant="contained"
+            sx={{ backgroundColor: '#114417DB', '&:hover': { backgroundColor: '#0a2f0e' } }}
+          >
             Submit Request
           </Button>
         </DialogActions>

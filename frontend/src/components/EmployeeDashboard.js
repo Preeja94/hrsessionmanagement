@@ -674,10 +674,11 @@ const EmployeeDashboard = () => {
   };
 
   const handleSessionClick = (session) => {
+    // Directly start the session without intermediate screen
     const details = getSessionDetails(session);
     if (!details) return;
     setSelectedSession(details);
-    setCurrentView('session-detail');
+    setCurrentView('session-content'); // Go directly to content view
   };
 
   const handleBackToCourses = () => {

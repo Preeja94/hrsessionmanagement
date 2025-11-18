@@ -50,7 +50,8 @@ import {
   TablePagination,
   Alert,
   CircularProgress,
-  Snackbar
+  Snackbar,
+  Popper
 } from '@mui/material';
 import {
   BarChart as BarChartIcon,
@@ -79,6 +80,7 @@ import {
   Quiz as QuizIcon,
   Close as CloseIcon,
   Warning as WarningIcon,
+  WarningAmber as WarningAmberIcon,
   Search as SearchIcon,
   Lock as LockIcon,
   Visibility as VisibilityIcon,
@@ -143,11 +145,15 @@ const Sidebar = styled(Box)(({ theme }) => ({
   top: 0,
   height: '100vh',
   overflowY: 'auto',
+  overflowX: 'visible',
   '&::-webkit-scrollbar': {
     display: 'none'
   },
   scrollbarWidth: 'none',
-  msOverflowStyle: 'none'
+  msOverflowStyle: 'none',
+  '& > *': {
+    overflow: 'visible'
+  }
 }));
 
 const MainContent = styled(Box)(({ theme }) => ({
@@ -191,7 +197,20 @@ const ActivityCard = styled(Card)(({ theme }) => ({
 
 const AdminDashboard = () => {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState('dashboard');
+  
+  // Load saved page state from localStorage on mount
+  const [activeTab, setActiveTab] = useState(() => {
+    try {
+      const savedState = localStorage.getItem('admin_page_state');
+      if (savedState) {
+        const state = JSON.parse(savedState);
+        return state.activeTab || 'dashboard';
+      }
+    } catch (error) {
+      console.error('Error loading page state:', error);
+    }
+    return 'dashboard';
+  });
   const [dateRangeFilter, setDateRangeFilter] = useState('all'); // 'all', '7days', '30days', 'custom'
   const [showCustomDateDialog, setShowCustomDateDialog] = useState(false);
   const [customStartDate, setCustomStartDate] = useState('');
@@ -233,6 +252,8 @@ const AdminDashboard = () => {
   const [currentQuizData, setCurrentQuizData] = useState(null); // For tracking quiz being edited
   const [showPasswordManager, setShowPasswordManager] = useState(false);
   const [showSavedSessionsFolder, setShowSavedSessionsFolder] = useState(false);
+  const [showCancelConfirmDialog, setShowCancelConfirmDialog] = useState(false);
+  const [cancelCallback, setCancelCallback] = useState(null);
   const [currentQuizSessionId, setCurrentQuizSessionId] = useState(null);
   const [passwordData, setPasswordData] = useState({
     currentPassword: '',
@@ -271,8 +292,21 @@ const AdminDashboard = () => {
     for (let index = 0; index < files.length; index += 1) {
       const file = files[index];
       let dataUrl = null;
+      
+      // Check if it's a video file
+      const fileType = file.type || '';
+      const fileName = (file.name || '').toLowerCase();
+      const isVideo = fileType.startsWith('video/') || 
+                     fileName.endsWith('.mp4') || 
+                     fileName.endsWith('.avi') || 
+                     fileName.endsWith('.mov') ||
+                     fileName.endsWith('.webm') ||
+                     fileName.endsWith('.mkv');
+      
       try {
-        if (file.size <= MAX_FILE_DATA_URL_SIZE) {
+        // Always read dataUrl for videos (regardless of size) so they can be played
+        // For other files, only read if smaller than MAX_FILE_DATA_URL_SIZE
+        if (isVideo || file.size <= MAX_FILE_DATA_URL_SIZE) {
           dataUrl = await readFileAsDataUrl(file);
         }
       } catch (error) {
@@ -297,6 +331,15 @@ const AdminDashboard = () => {
     return (files || []).map((file, idx) => {
       // Don't store data URLs in localStorage to prevent quota issues
       // Only store metadata - data URLs will be regenerated from file objects if needed
+      const fileType = file.type || '';
+      const fileName = (file.name || '').toLowerCase();
+      const isVideo = fileType.startsWith('video/') || 
+                     fileName.endsWith('.mp4') || 
+                     fileName.endsWith('.avi') || 
+                     fileName.endsWith('.mov') ||
+                     fileName.endsWith('.webm') ||
+                     fileName.endsWith('.mkv');
+      
       const fileEntry = {
         id: file.id || `${file.name}-${file.size}-${file.uploadedAt || idx}`,
         name: file.name,
@@ -304,11 +347,18 @@ const AdminDashboard = () => {
         type: file.type || 'application/octet-stream',
         uploadedAt: file.uploadedAt || new Date().toISOString(),
         lastModified: file.lastModified || Date.now(),
-        // Only store dataUrl if file is very small (< 500KB) to prevent quota issues
-        dataUrl: (file.dataUrl && file.size < 500 * 1024) ? file.dataUrl : null,
+        // Store dataUrl for videos (always) and small files (< 500KB) to prevent quota issues
+        // Videos need dataUrl to be playable, so we must store them
+        dataUrl: isVideo ? (file.dataUrl || null) : (file.dataUrl && file.size < 500 * 1024) ? file.dataUrl : null,
       };
       return fileEntry;
     });
+  };
+
+  const deserializeFilesFromStorage = (files) => {
+    // Convert stored file metadata back to file objects if needed
+    // For now, just return as-is since we're storing metadata
+    return files || [];
   };
   
   // Profile states
@@ -682,8 +732,11 @@ const AdminDashboard = () => {
   const [courseFilters, setCourseFilters] = useState({
     skill: 'all',
     category: 'all',
-    reviews: 'all'
+    status: 'all' // Changed from reviews to status
   });
+  const [selectedLibrarySession, setSelectedLibrarySession] = useState(null);
+  const [showSessionDetailsDialog, setShowSessionDetailsDialog] = useState(false);
+  const [sessionViewMode, setSessionViewMode] = useState(null); // 'view', 'edit', 'reschedule'
   
   // Analytics/Reports states
   const [analyticsTab, setAnalyticsTab] = useState('dashboard'); // 'dashboard' or 'reports'
@@ -698,6 +751,12 @@ const AdminDashboard = () => {
   const [reportPage, setReportPage] = useState(0);
   const [reportRowsPerPage, setReportRowsPerPage] = useState(10);
   const [reportSearchTerm, setReportSearchTerm] = useState('');
+  
+  // Employee Management states
+  const [showEmployeesSubmenu, setShowEmployeesSubmenu] = useState(false);
+  const [employeesSubTab, setEmployeesSubTab] = useState('manage'); // 'manage' or 'add'
+  const [employeesAnchorEl, setEmployeesAnchorEl] = useState(null);
+  const [settingsAnchorEl, setSettingsAnchorEl] = useState(null);
   
   // Publish Course Dialog states
   const [showPublishDialog, setShowPublishDialog] = useState(false);
@@ -1065,21 +1124,21 @@ useEffect(() => {
       })
     }));
     if (safeSetLocalStorage('admin_saved_sessions', serializableSessions)) {
-      console.log('Saved sessions to localStorage:', serializableSessions);
+    console.log('Saved sessions to localStorage:', serializableSessions);
     }
   }, [savedSessions]);
 
   // Save employees to localStorage whenever they change
   useEffect(() => {
     if (safeSetLocalStorage('admin_employees', employees)) {
-      console.log('Saved employees to localStorage:', employees);
+    console.log('Saved employees to localStorage:', employees);
     }
   }, [employees]);
 
   // Save notifications to localStorage whenever they change
   useEffect(() => {
     if (safeSetLocalStorage('admin_notifications', notifications)) {
-      console.log('Saved notifications to localStorage:', notifications);
+    console.log('Saved notifications to localStorage:', notifications);
     }
   }, [notifications]);
 
@@ -1211,10 +1270,13 @@ useEffect(() => {
 
   const [sessionFormData, setSessionFormData] = useState({
     title: '',
-    type: 'compliance',
-    audience: 'all',
+    type: '',
+    audience: '',
     description: ''
   });
+  
+  // Track skipped steps
+  const [skippedSteps, setSkippedSteps] = useState(new Set());
 
   // Function to get date range based on filter
   const getDateRange = (filter) => {
@@ -1333,6 +1395,65 @@ useEffect(() => {
       return updated;
     });
   };
+
+  // Auto-publish scheduled sessions when start time arrives
+  useEffect(() => {
+    const checkAndPublishSessions = () => {
+      const now = new Date();
+      
+      setPublishedSessions(prev => {
+        const sessionsToPublish = [];
+        const updated = prev.map(session => {
+          // Check if session is scheduled and start time has arrived
+          if (session.status === 'scheduled' && session.scheduledDateTime) {
+            const scheduledTime = new Date(session.scheduledDateTime);
+            
+            // Auto-publish if scheduled time has passed
+            if (scheduledTime <= now && !session.publishedAt) {
+              console.log(`Auto-publishing session: ${session.title} at ${now.toISOString()}`);
+              sessionsToPublish.push(session);
+              
+              // Update session to published status
+              return {
+                ...session,
+                status: 'published',
+                publishedAt: now.toISOString(),
+                isLocked: false
+              };
+            }
+          }
+          return session;
+        });
+        
+        // Only update if there were changes
+        const hasChanges = sessionsToPublish.length > 0;
+        if (hasChanges) {
+          safeSetLocalStorage('published_sessions', updated);
+          window.dispatchEvent(new Event('published-sessions-updated'));
+          
+          // Log activity for auto-published sessions
+          sessionsToPublish.forEach(session => {
+            addActivity(
+              `Session auto-published: ${session.title}`,
+              'System',
+              'published',
+              'session_published'
+            );
+          });
+        }
+        
+        return updated;
+      });
+    };
+
+    // Check immediately on mount
+    checkAndPublishSessions();
+
+    // Check every minute for auto-publishing
+    const intervalId = setInterval(checkAndPublishSessions, 60000); // 1 minute
+
+    return () => clearInterval(intervalId);
+  }, [publishedSessions]);
 
   // Get icon component based on icon type
   const getActivityIcon = (iconType, status) => {
@@ -1507,12 +1628,47 @@ useEffect(() => {
     { id: 'approvals', label: 'Approvals', icon: <CheckCircleIcon /> },
     { id: 'employees', label: 'Employee Management', icon: <GroupIcon /> },
     { id: 'analytics', label: 'Analytics', icon: <AnalyticsIcon /> },
-    { id: 'settings', label: 'Settings', icon: <SettingsIcon /> },
   ];
 
   // Manage Session tab state (replacing submenu with tabs)
-  const [manageSessionTab, setManageSessionTab] = useState('create'); // 'create', 'content-creator', 'live-trainings', 'assessment', 'certification', 'all-sessions'
-  const [manageSessionView, setManageSessionView] = useState('create'); // Keep for backward compatibility, synced with manageSessionTab
+  const [manageSessionTab, setManageSessionTab] = useState(() => {
+    try {
+      const savedState = localStorage.getItem('admin_page_state');
+      if (savedState) {
+        const state = JSON.parse(savedState);
+        return state.manageSessionTab || 'create';
+      }
+    } catch (error) {
+      console.error('Error loading page state:', error);
+    }
+    return 'create';
+  }); // 'create', 'content-creator', 'live-trainings', 'assessment', 'certification', 'preview', 'schedule'
+  const [manageSessionView, setManageSessionView] = useState(() => {
+    try {
+      const savedState = localStorage.getItem('admin_page_state');
+      if (savedState) {
+        const state = JSON.parse(savedState);
+        return state.manageSessionView || 'create';
+      }
+    } catch (error) {
+      console.error('Error loading page state:', error);
+    }
+    return 'create';
+  }); // Keep for backward compatibility, synced with manageSessionTab
+  
+  // Save page state to localStorage whenever it changes
+  useEffect(() => {
+    const pageState = {
+      activeTab,
+      manageSessionTab,
+      manageSessionView
+    };
+    try {
+      localStorage.setItem('admin_page_state', JSON.stringify(pageState));
+    } catch (error) {
+      console.error('Error saving page state:', error);
+    }
+  }, [activeTab, manageSessionTab, manageSessionView]);
   const [manageSessionsViewMode, setManageSessionsViewMode] = useState('list'); // 'list' or 'grid'
   const [manageSessionsSearchTerm, setManageSessionsSearchTerm] = useState('');
 
@@ -1568,17 +1724,11 @@ useEffect(() => {
     if (newTab !== 'assessment') {
       setShowQuizForm(false);
     }
-    // Clear selected session and publish dialog when switching to all-sessions
-    if (newTab === 'all-sessions') {
-      setSelectedAllSessionItem(null);
-      setShowPublishDialog(false);
-      setSessionToPublish(null);
-    }
   };
 
   // Helper function to get the next step in the flow
   const getNextStep = (currentStep) => {
-    const stepOrder = ['create', 'content-creator', 'assessment', 'certification', 'all-sessions', 'schedule'];
+    const stepOrder = ['create', 'content-creator', 'assessment', 'certification', 'preview', 'schedule'];
     const currentIndex = stepOrder.indexOf(currentStep);
     if (currentIndex >= 0 && currentIndex < stepOrder.length - 1) {
       return stepOrder[currentIndex + 1];
@@ -1588,7 +1738,7 @@ useEffect(() => {
 
   // Helper function to get the previous step in the flow
   const getPreviousStep = (currentStep) => {
-    const stepOrder = ['create', 'content-creator', 'assessment', 'certification', 'all-sessions', 'schedule'];
+    const stepOrder = ['create', 'content-creator', 'assessment', 'certification', 'preview', 'schedule'];
     const currentIndex = stepOrder.indexOf(currentStep);
     if (currentIndex > 0) {
       return stepOrder[currentIndex - 1];
@@ -1598,6 +1748,9 @@ useEffect(() => {
 
   // Handler for Previous button - moves to previous step
   const handlePreviousStep = () => {
+    // Auto-save progress before navigating
+    handleSaveAsDraft();
+    
     const previousStep = getPreviousStep(manageSessionTab);
     setManageSessionTab(previousStep);
     setManageSessionView(previousStep);
@@ -1610,14 +1763,42 @@ useEffect(() => {
       setShowContentCreator(true);
       setContentCreatorView('main');
       setShowQuizForm(false);
+      setManageSessionTab('content-creator');
+      setManageSessionView('content-creator');
     } else if (previousStep === 'assessment') {
       setShowContentCreator(false);
-      setShowQuizForm(false);
+      setShowQuizForm(true);
+      setManageSessionTab('assessment');
+      setManageSessionView('assessment');
     }
   };
 
   // Handler for Next button - moves to next step
   const handleNextStep = () => {
+    // Validate create step before proceeding
+    if (manageSessionTab === 'create') {
+      if (!sessionFormData.title || !sessionFormData.type || !sessionFormData.audience) {
+        showToast('Please fill in all required fields (Title, Session Type, and Participants)', 'error');
+        return;
+      }
+    }
+    
+    // If on assessment step, ensure quiz is saved before proceeding
+    if (manageSessionTab === 'assessment') {
+      // If InteractiveQuiz is visible, it will handle saving via onSave callback
+      // But we need to ensure currentQuizData is updated even if no questions exist
+      const hasQuestions = currentQuizData?.quiz?.questions?.length > 0 || currentQuizData?.questions?.length > 0;
+      if (!hasQuestions) {
+        // Mark assessment as skipped
+        setSkippedSteps(prev => new Set([...prev, 'assessment']));
+      }
+      // Save draft with current quiz data (even if empty)
+      handleSaveAsDraft();
+    } else {
+      // Auto-save progress before navigating (saves as one draft)
+      handleSaveAsDraft();
+    }
+    
     const nextStep = getNextStep(manageSessionTab);
     setManageSessionTab(nextStep);
     setManageSessionView(nextStep);
@@ -1632,11 +1813,85 @@ useEffect(() => {
     } else if (nextStep === 'certification') {
       setShowContentCreator(false);
       setShowQuizForm(false);
+    } else if (nextStep === 'preview') {
+      setShowContentCreator(false);
+      setShowQuizForm(false);
+    } else if (nextStep === 'schedule') {
+      setShowContentCreator(false);
+      setShowQuizForm(false);
+      
+      // Build current session from state
+      const resolvedSessionForm = sessionContentSnapshot?.sessionForm || sessionFormData;
+      const resolvedAiContent = sessionContentSnapshot?.aiContent ?? (aiContentGenerated ? { keywords: aiKeywords } : null);
+      const resolvedFiles = sessionContentSnapshot?.files ?? mapFilesToMetadata(selectedFiles);
+      const resolvedQuiz = currentQuizData?.quiz || null;
+      const resolvedCreationMode = sessionContentSnapshot?.creationMode ?? selectedCreationMode;
+      
+      // Get certification if any
+      const hasCertificate = selectedTemplate && fieldsSaved;
+      const sessionCert = hasCertificate ? {
+        id: 'preview-cert',
+        name: selectedTemplate.name || 'Certificate',
+        template: selectedTemplate,
+        fields: certificateFields
+      } : null;
+      
+      // Build session object for scheduling
+      const currentSession = {
+        id: Date.now(),
+        title: resolvedSessionForm.title || 'Untitled Session',
+        description: resolvedSessionForm.description || '',
+        type: resolvedSessionForm.type || 'compliance',
+        audience: resolvedSessionForm.audience || 'all',
+        files: resolvedFiles,
+        quiz: resolvedQuiz,
+        aiContent: resolvedAiContent,
+        creationMode: resolvedCreationMode,
+        certificate: sessionCert,
+        status: 'draft',
+        createdAt: new Date().toISOString()
+      };
+      
+      // Set as selected session for scheduling
+      setSelectedSessionForScheduling(currentSession);
+      
+      // Prepopulate department based on audience
+      // Map audience to department: 'all' -> 'all', others map to department if available
+      const audienceToDepartment = {
+        'all': 'all',
+        'managers': 'all', // Default to all if specific department not found
+        'developers': 'all',
+        'hr': 'all'
+      };
+      
+      // Try to find matching department from employees
+      const audience = resolvedSessionForm.audience || 'all';
+      let prepopulatedDepartment = audienceToDepartment[audience] || 'all';
+      
+      // If audience is not 'all', try to find a matching department
+      if (audience !== 'all' && employees.length > 0) {
+        const matchingDept = employees.find(emp => 
+          emp.department && emp.department.toLowerCase().includes(audience.toLowerCase())
+        );
+        if (matchingDept) {
+          prepopulatedDepartment = matchingDept.department;
+        }
+      }
+      
+      setSelectedDepartment(prepopulatedDepartment);
+      setShowCalendar(true);
     }
   };
 
-  // Handler for Skip button - moves to next step
+  // Handler for Skip button - moves to next step and marks current step as skipped
   const handleSkipToNextStep = () => {
+    // Mark current step as skipped
+    const stepOrder = ['create', 'content-creator', 'assessment', 'certification', 'preview', 'schedule'];
+    const currentStepIndex = stepOrder.indexOf(manageSessionTab);
+    if (currentStepIndex >= 0) {
+      setSkippedSteps(prev => new Set([...prev, manageSessionTab]));
+    }
+    
     const nextStep = getNextStep(manageSessionTab);
     setManageSessionTab(nextStep);
     setManageSessionView(nextStep);
@@ -1672,34 +1927,6 @@ useEffect(() => {
     }
     if (view === 'assessment') {
       setShowQuizForm(true);
-    }
-    if (view === 'all-sessions') {
-      // Load latest from localStorage
-      const drafts = localStorage.getItem('draft_sessions');
-      const published = localStorage.getItem('published_sessions');
-      const saved = localStorage.getItem('saved_assessments');
-      if (drafts) {
-        try {
-          setDraftSessions(JSON.parse(drafts));
-        } catch (e) {
-          console.error('Error parsing draft sessions:', e);
-        }
-      }
-      if (published) {
-        try {
-          setPublishedSessions(JSON.parse(published));
-        } catch (e) {
-          console.error('Error parsing published sessions:', e);
-        }
-      }
-      if (saved) {
-        try {
-          setSavedAssessments(JSON.parse(saved));
-        } catch (e) {
-          console.error('Error parsing saved assessments:', e);
-        }
-      }
-      console.log('All Sessions view activated, activeTab: manage-session, manageSessionView: all-sessions');
     }
   };
 
@@ -1917,6 +2144,20 @@ useEffect(() => {
   };
 
   const handleCreateSession = () => {
+    // Validate required fields
+    if (!sessionFormData.title || !sessionFormData.type || !sessionFormData.audience) {
+      showToast('Please fill in all required fields (Title, Session Type, and Participants)', 'error');
+      return;
+    }
+    
+    // Initialize draftId if not already set (this ensures we use the same draft throughout)
+    if (!sessionFormData.draftId) {
+      const newDraftId = Date.now();
+      setSessionFormData(prev => ({ ...prev, draftId: newDraftId }));
+      // Save initial draft
+      setTimeout(() => handleSaveAsDraft(), 100);
+    }
+    
     setShowContentCreator(true);
     // Update manageSessionTab to 'content-creator' to show progress in progress bar
     setManageSessionTab('content-creator');
@@ -2068,6 +2309,91 @@ Make the content professional, educational, and suitable for workplace training.
     }
   };
 
+  // Helper function to normalize questions from AI content to quiz format
+  const normalizeAIQuestions = (aiQuestions) => {
+    if (!Array.isArray(aiQuestions) || aiQuestions.length === 0) {
+      return [];
+    }
+
+    return aiQuestions.map((q, index) => {
+      // Handle different question formats
+      const questionText = q.text || q.question || q.questionText || `Question ${index + 1}`;
+      const questionType = q.type || 'multiple-choice';
+      
+      // Normalize options
+      let options = [];
+      if (Array.isArray(q.options)) {
+        options = q.options.map(opt => {
+          if (typeof opt === 'string') return opt;
+          if (typeof opt === 'object' && opt.text) return opt.text;
+          if (typeof opt === 'object' && opt.option) return opt.option;
+          return String(opt);
+        });
+      } else if (q.choices && Array.isArray(q.choices)) {
+        options = q.choices.map(choice => {
+          if (typeof choice === 'string') return choice;
+          if (typeof choice === 'object' && choice.text) return choice.text;
+          return String(choice);
+        });
+      } else if (q.answers && Array.isArray(q.answers)) {
+        options = q.answers.map(answer => {
+          if (typeof answer === 'string') return answer;
+          if (typeof answer === 'object' && answer.text) return answer.text;
+          return String(answer);
+        });
+      }
+
+      // Ensure at least one option
+      if (options.length === 0) {
+        options = ['Option 1', 'Option 2', 'Option 3', 'Option 4'];
+      }
+
+      // Normalize correct answer
+      let correctAnswer = undefined;
+      let correctAnswers = [];
+      
+      if (q.correctAnswer !== undefined) {
+        correctAnswer = Number(q.correctAnswer);
+        correctAnswers = [correctAnswer];
+      } else if (q.correct !== undefined) {
+        correctAnswer = Number(q.correct);
+        correctAnswers = [correctAnswer];
+      } else if (Array.isArray(q.correctAnswers) && q.correctAnswers.length > 0) {
+        correctAnswers = q.correctAnswers.map(c => Number(c)).filter(c => !isNaN(c));
+        correctAnswer = correctAnswers.length > 0 ? correctAnswers[0] : undefined;
+      } else if (q.correctIndex !== undefined) {
+        correctAnswer = Number(q.correctIndex);
+        correctAnswers = [correctAnswer];
+      } else if (typeof q.answer === 'string' && options.length > 0) {
+        // Try to find the correct answer by matching text
+        const answerIndex = options.findIndex(opt => 
+          opt.toLowerCase().trim() === q.answer.toLowerCase().trim()
+        );
+        if (answerIndex !== -1) {
+          correctAnswer = answerIndex;
+          correctAnswers = [answerIndex];
+        }
+      }
+
+      // Validate correct answer is within bounds
+      if (correctAnswer !== undefined && (correctAnswer < 0 || correctAnswer >= options.length)) {
+        correctAnswer = undefined;
+        correctAnswers = [];
+      }
+
+      return {
+        id: q.id || index + 1,
+        text: questionText,
+        type: questionType,
+        options: options,
+        required: Boolean(q.required),
+        hasImage: Boolean(q.hasImage),
+        correctAnswer: correctAnswer,
+        correctAnswers: correctAnswers
+      };
+    });
+  };
+
   // Parse and process ChatGPT JSON response
   const handleProcessChatGPTResponse = () => {
     if (!chatgptResponse.trim()) {
@@ -2107,6 +2433,10 @@ Make the content professional, educational, and suitable for workplace training.
       
       const contentString = convertContentToString(jsonData.content);
       
+      // Extract and normalize questions if they exist
+      const aiQuestions = jsonData.questions || jsonData.questionnaire || jsonData.quiz || [];
+      const normalizedQuestions = normalizeAIQuestions(aiQuestions);
+      
       // Update the session content snapshot with parsed data
       if (!sessionContentSnapshot) {
         setSessionContentSnapshot({
@@ -2119,7 +2449,8 @@ Make the content professional, educational, and suitable for workplace training.
             learningObjectives: jsonData.learningObjectives || [],
             provider: 'chatgpt',
             generatedAt: new Date().toISOString(),
-            rawResponse: jsonData
+            rawResponse: jsonData,
+            questions: normalizedQuestions // Store normalized questions
           },
           sessionForm: sessionFormData || {}
         });
@@ -2135,13 +2466,20 @@ Make the content professional, educational, and suitable for workplace training.
             learningObjectives: jsonData.learningObjectives || [],
             provider: 'chatgpt',
             generatedAt: new Date().toISOString(),
-            rawResponse: jsonData
+            rawResponse: jsonData,
+            questions: normalizedQuestions // Store normalized questions
           }
         }));
       }
       
       setParsedContent(jsonData);
-      showToast('Content parsed successfully! The content is now ready to use in your session.', 'success');
+      
+      // Show success message with question count if questions were found
+      if (normalizedQuestions.length > 0) {
+        showToast(`Content parsed successfully! Found ${normalizedQuestions.length} question(s) that will be populated in the checkpoint assessment.`, 'success');
+      } else {
+        showToast('Content parsed successfully! The content is now ready to use in your session.', 'success');
+      }
       
     } catch (error) {
       console.error('Error parsing JSON:', error);
@@ -2163,7 +2501,7 @@ Make the content professional, educational, and suitable for workplace training.
     // Store current session data for quiz
     const contentMetadata = mapFilesToMetadata(selectedFiles);
     const snapshot = {
-      aiContent: aiContentGenerated ? { keywords: aiKeywords } : null,
+      aiContent: sessionContentSnapshot?.aiContent || (aiContentGenerated ? { keywords: aiKeywords } : null),
       creationMode: selectedCreationMode,
       files: contentMetadata,
     };
@@ -2171,10 +2509,40 @@ Make the content professional, educational, and suitable for workplace training.
       ...snapshot,
       sessionForm: { ...sessionFormData },
     });
-    setCurrentQuizData({
+    
+    // Check if AI content has questions and populate them
+    const aiQuestions = sessionContentSnapshot?.aiContent?.questions || [];
+    let quizData = {
       ...snapshot,
       timestamp: new Date().toISOString()
-    });
+    };
+    
+    // If AI content has questions, populate them and clear old quiz data
+    if (aiQuestions.length > 0) {
+      console.log(`Found ${aiQuestions.length} questions from AI content. Populating checkpoint assessment.`);
+      
+      // Clear old quiz data and populate with AI questions
+      quizData = {
+        ...snapshot,
+        timestamp: new Date().toISOString(),
+        quiz: {
+          title: 'Checkpoint Assessment',
+          description: 'Assessment questions generated from AI content',
+          questions: aiQuestions
+        },
+        questions: aiQuestions // Also set at root level for compatibility
+      };
+      
+      showToast(`Populated ${aiQuestions.length} question(s) from AI content into checkpoint assessment.`, 'success');
+    } else {
+      // Clear old quiz data if no AI questions
+      quizData = {
+        ...snapshot,
+        timestamp: new Date().toISOString()
+      };
+    }
+    
+    setCurrentQuizData(quizData);
     console.log('Navigation set: activeTab=manage-session, manageSessionTab=assessment');
   };
 
@@ -2352,13 +2720,42 @@ Make the content professional, educational, and suitable for workplace training.
           };
         }
 
+        // Check if it's a video file
+        const fileType = file.type || '';
+        const fileName = (file.name || '').toLowerCase();
+        const isVideo = fileType.startsWith('video/') || 
+                       fileName.endsWith('.mp4') || 
+                       fileName.endsWith('.avi') || 
+                       fileName.endsWith('.mov') ||
+                       fileName.endsWith('.webm') ||
+                       fileName.endsWith('.mkv');
+        
+        // For videos, always preserve dataUrl if available
+        // If file is a File object and is a video, try to get dataUrl from fileObject
+        let dataUrl = file.dataUrl || null;
+        
+        // If no dataUrl but we have a File object (fileObject), try to get it
+        if (!dataUrl && isVideo && file.fileObject && file.fileObject instanceof File) {
+          // Note: This is synchronous - we can't await here, but fileObject might have been read already
+          // The dataUrl should already be set during file upload via createFileEntriesFromFiles
+        }
+        
+        // Also check if file has dataUrl in a different property
+        if (!dataUrl && isVideo) {
+          dataUrl = file.url || file.downloadUrl || file.link || null;
+        }
+
         return {
           id: file.id || `${file.name}-${file.size}-${file.uploadedAt || index}`,
           name: file.name || 'File',
           size: file.size || 0,
           type: file.type || 'application/octet-stream',
           uploadedAt: file.uploadedAt || new Date().toISOString(),
-          dataUrl: file.dataUrl || null,
+          dataUrl: dataUrl,
+          // Preserve other URL properties for fallback
+          url: file.url || null,
+          downloadUrl: file.downloadUrl || null,
+          link: file.link || null,
         };
       });
   };
@@ -2369,6 +2766,15 @@ Make the content professional, educational, and suitable for workplace training.
     const draftTitle = sessionFormData.title || 
                       (selectedFiles.length > 0 ? `Draft - ${selectedFiles[0].name}` : 'Untitled Session');
     
+    // Get or create draftId - always use the same ID for the same session
+    let existingDraftId = sessionFormData.draftId;
+    
+    // If no draftId exists, create one and set it
+    if (!existingDraftId) {
+      existingDraftId = Date.now();
+      setSessionFormData(prev => ({ ...prev, draftId: existingDraftId }));
+    }
+    
     // Create resume state object with current progress
     const resumeState = {
       contentCreatorView: contentCreatorView,
@@ -2377,15 +2783,19 @@ Make the content professional, educational, and suitable for workplace training.
       aiKeywords: aiKeywords,
       selectedCreationMode: selectedCreationMode,
       showContentPreview: showContentPreview,
-      sessionFormData: sessionFormData,
+      sessionFormData: { ...sessionFormData, draftId: existingDraftId },
       currentQuizData: currentQuizData,
       activeTab: activeTab,
-      manageSessionTab: manageSessionTab
+      manageSessionTab: manageSessionTab,
+      selectedTemplate: selectedTemplate,
+      certificateFields: certificateFields,
+      fieldsSaved: fieldsSaved
     };
 
-    // Check if updating existing draft or creating new one
-    const existingDraftId = sessionFormData.draftId || null;
-    const sessionId = existingDraftId || Date.now();
+    const sessionId = existingDraftId;
+    
+    // Get existing draft to preserve createdAt
+    const existingDraft = draftSessions.find(d => d.id === sessionId);
     
     const draftSession = {
       id: sessionId,
@@ -2395,17 +2805,24 @@ Make the content professional, educational, and suitable for workplace training.
       description: sessionFormData.description || '',
       files: serializeFilesForStorage(selectedFiles),
       status: 'draft',
-      createdAt: existingDraftId ? draftSessions.find(d => d.id === existingDraftId)?.createdAt || new Date().toISOString() : new Date().toISOString(),
+      createdAt: existingDraft?.createdAt || new Date().toISOString(),
       savedAt: new Date().toISOString(),
       resumeState: resumeState,
-      aiContent: aiContentGenerated ? { keywords: aiKeywords } : null,
+      aiContent: aiContentGenerated ? { keywords: aiKeywords, content: sessionContentSnapshot?.aiContent?.content } : sessionContentSnapshot?.aiContent || null,
       creationMode: selectedCreationMode,
-      quiz: currentQuizData || null
+      quiz: currentQuizData?.quiz || currentQuizData || null,
+      certificate: (selectedTemplate && fieldsSaved) ? {
+        id: 'preview-cert',
+        name: selectedTemplate.name || 'Certificate',
+        template: selectedTemplate,
+        fields: certificateFields
+      } : null,
+      draftId: existingDraftId // Store draftId for consistency
     };
 
-    // Update or add to draft sessions
+    // Update or add to draft sessions - always update the same draft, don't create new ones
     setDraftSessions(prev => {
-      const filtered = existingDraftId ? prev.filter(d => d.id !== existingDraftId) : prev;
+      const filtered = prev.filter(d => d.id !== sessionId);
       const updated = [draftSession, ...filtered];
       safeSetLocalStorage('draft_sessions', updated);
       return updated;
@@ -2421,19 +2838,21 @@ Make the content professional, educational, and suitable for workplace training.
 
     // Also update savedSessions for compatibility
     setSavedSessions(prev => {
-      const filtered = existingDraftId ? prev.filter(s => s.id !== existingDraftId) : prev;
+      const filtered = prev.filter(s => s.id !== sessionId);
       return [draftSession, ...filtered];
     });
 
-    // Log activity
-    addActivity(
-      existingDraftId ? `Draft updated: ${draftTitle}` : `Draft saved: ${draftTitle}`,
-      'Admin',
-      'draft',
-      'session_saved'
-    );
+    // Don't log activity every time to avoid noise - only log on initial creation
+    if (!existingDraft) {
+      addActivity(
+        `Draft saved: ${draftTitle}`,
+        'Admin',
+        'draft',
+        'session_saved'
+      );
+    }
 
-    showToast(existingDraftId ? 'Draft updated successfully!' : 'Draft saved successfully!', 'success');
+    // Don't show toast here - only show when cancelled
   };
 
   const handleSaveSession = () => {
@@ -2632,8 +3051,16 @@ Make the content professional, educational, and suitable for workplace training.
     const resolvedCreationMode = sessionContentSnapshot?.creationMode ?? currentQuizData?.creationMode ?? selectedCreationMode;
     const resolvedFiles = sessionContentSnapshot?.files ?? mapFilesToMetadata(currentQuizData?.files || selectedFiles);
 
+    // Build quiz object with all questions
     const quizWithContent = {
       ...quizData,
+      quiz: {
+        title: quizData.title || quizData.assessmentInfo?.quizTitle,
+        description: quizData.description,
+        questions: quizData.questions || [],
+        passingScore: quizData.assessmentInfo?.passingScore,
+        maxAttempts: quizData.assessmentInfo?.maxAttempts
+      },
       aiContent: resolvedAiContent,
       creationMode: resolvedCreationMode,
       files: resolvedFiles,
@@ -2647,32 +3074,15 @@ Make the content professional, educational, and suitable for workplace training.
       sessionForm: { ...resolvedSessionForm },
     });
 
-    const savedAssessment = {
-      id: Date.now(),
-      title: resolvedSessionForm.title || quizData.title || quizData.assessmentInfo?.quizTitle || 'Untitled Session',
-      description: resolvedSessionForm.description || quizData.description || '',
-      type: resolvedSessionForm.type || 'compliance',
-      audience: resolvedSessionForm.audience || 'all',
-      quiz: quizWithContent,
-      assessmentInfo: quizData.assessmentInfo || {},
-      questions: quizData.questions || [],
-      aiContent: resolvedAiContent,
-      creationMode: resolvedCreationMode,
-      files: resolvedFiles,
-      status: 'saved',
-      createdAt: new Date().toISOString(),
-      savedAt: new Date().toISOString()
-    };
+    // Save as draft immediately to ensure questions are saved
+    handleSaveAsDraft();
     
-    setSavedAssessments(prev => {
-      const updated = [savedAssessment, ...prev];
-      safeSetLocalStorage('saved_assessments', updated);
-      return updated;
-    });
+    // Note: We no longer create separate savedAssessments here
+    // The quiz data is stored in the draft session via handleSaveAsDraft
     
     // Log activity
     addActivity(
-      `Quiz/Assessment created: ${savedAssessment.title}`,
+      `Assessment saved: ${resolvedSessionForm.title || quizData.title || quizData.assessmentInfo?.quizTitle || 'Untitled Session'}`,
       'Admin',
       'quiz',
       'quiz_created'
@@ -2688,8 +3098,6 @@ Make the content professional, educational, and suitable for workplace training.
     setSelectedAllSessionItem(null);
     setShowPublishDialog(false);
     setSessionToPublish(null);
-    
-    showToast('Assessment saved successfully!', 'success');
   };
 
   const handleQuizSkip = () => {
@@ -2700,21 +3108,710 @@ Make the content professional, educational, and suitable for workplace training.
   };
 
   const handleQuizCancel = () => {
+    // Show confirmation dialog before canceling
+    setCancelCallback(() => () => {
     setShowQuizForm(false);
     // Reset manage session view state
     if (manageSessionView === 'assessment') {
       // If coming from Content Creator flow, go back to content creator
-      if (showContentCreator || currentQuizData) {
+        if (showContentCreator || currentQuizData || sessionContentSnapshot) {
         setManageSessionView('content-creator');
+          setManageSessionTab('content-creator');
         setShowContentCreator(true);
         setContentCreatorView('main');
       } else {
         // Otherwise, go back to dashboard
-      setActiveTab('course-library');
+          setActiveTab('course-library');
         setManageSessionView(null);
     }
     }
     setCurrentQuizData(null);
+      setShowCancelConfirmDialog(false);
+      setCancelCallback(null);
+    });
+    setShowCancelConfirmDialog(true);
+  };
+
+  const handleConfirmCancel = () => {
+    // Save draft before canceling
+    handleSaveAsDraft();
+    // Show toast only when cancelled
+    showToast('Draft saved successfully!', 'success');
+    if (cancelCallback) {
+      cancelCallback();
+    }
+  };
+
+  const handleDismissCancel = () => {
+    setShowCancelConfirmDialog(false);
+    setCancelCallback(null);
+  };
+
+  // Soft delete session
+  const handleSoftDeleteSession = (session) => {
+    if (!session || !session.id) return;
+    
+    // Mark as deleted (soft delete)
+    const updatedSession = {
+      ...session,
+      status: 'deleted',
+      deletedAt: new Date().toISOString()
+    };
+    
+    // Update in appropriate list and remove from dashboard
+    if (session.status === 'draft' || !session.status) {
+      setDraftSessions(prev => prev.filter(s => s.id !== session.id));
+    } else if (session.status === 'published' || session.status === 'scheduled') {
+      setPublishedSessions(prev => prev.filter(s => s.id !== session.id));
+    } else if (session.status === 'saved') {
+      setSavedAssessments(prev => prev.filter(s => s.id !== session.id));
+    }
+    
+    // Also remove from saved sessions
+    setSavedSessions(prev => prev.filter(s => s.id !== session.id));
+    
+    // Persist to localStorage
+    try {
+      const published = publishedSessions.filter(s => s.id !== session.id);
+      safeSetLocalStorage('published_sessions', published);
+      const drafts = draftSessions.filter(s => s.id !== session.id);
+      safeSetLocalStorage('draft_sessions', drafts);
+      const saved = savedSessions.filter(s => s.id !== session.id);
+      safeSetLocalStorage('admin_saved_sessions', saved);
+    } catch (error) {
+      console.error('Error updating localStorage after delete:', error);
+    }
+    
+    // Log activity
+    addActivity(
+      `Session deleted: ${session.title}`,
+      'Admin',
+      'deleted',
+      'session_deleted'
+    );
+    
+    showToast('Session deleted successfully', 'success');
+    setShowSessionDetailsDialog(false);
+    setSelectedLibrarySession(null);
+  };
+
+  // Save edited session
+  const handleSaveEditedSession = (session) => {
+    if (!session || !session.id) return;
+    
+    // Check if start date has passed
+    const startDateTime = session.scheduledDateTime 
+      ? new Date(session.scheduledDateTime)
+      : null;
+    const now = new Date();
+    
+    if (startDateTime && startDateTime <= now) {
+      showToast('Cannot edit session after start date/time', 'error');
+      return;
+    }
+    
+    // Navigate to edit mode in manage session
+    setActiveTab('manage-session');
+    setManageSessionTab('create');
+    setManageSessionView('create');
+    
+    // Load session data for editing
+    if (session.resumeState) {
+      // Restore from resume state
+      const resumeState = session.resumeState;
+      setSessionFormData(resumeState.sessionFormData || {});
+      setSelectedFiles(deserializeFilesFromStorage(resumeState.selectedFiles || []));
+      setAiContentGenerated(resumeState.aiContentGenerated || false);
+      setAiKeywords(resumeState.aiKeywords || '');
+      setSelectedCreationMode(resumeState.selectedCreationMode || null);
+      setCurrentQuizData(resumeState.currentQuizData || null);
+      setContentCreatorView(resumeState.contentCreatorView || 'main');
+      setManageSessionTab(resumeState.manageSessionTab || 'create');
+    } else {
+      // Load from session data
+      setSessionFormData({
+        title: session.title || '',
+        type: session.type || '',
+        audience: session.audience || '',
+        description: session.description || ''
+      });
+      setSelectedFiles(deserializeFilesFromStorage(session.files || []));
+      setCurrentQuizData(session.quiz || null);
+      setSelectedCreationMode(session.creationMode || null);
+    }
+    
+    setShowSessionDetailsDialog(false);
+    setSelectedLibrarySession(null);
+    setSessionViewMode(null);
+    showToast('Session loaded for editing', 'success');
+  };
+
+  // Reschedule session
+  const handleRescheduleSession = (session) => {
+    if (!session || !session.id) return;
+    
+    // Navigate to schedule step
+    setActiveTab('manage-session');
+    setManageSessionTab('schedule');
+    setManageSessionView('schedule');
+    
+    // Load session data
+    setSelectedSessionForScheduling(session);
+    setScheduleDate(session.scheduledDate || '');
+    setScheduleTime(session.scheduledTime || '');
+    setScheduleDueDate(session.dueDate || '');
+    setScheduleDueTime(session.dueTime || '');
+    setSelectedDepartment(session.audience === 'all' ? 'all' : '');
+    setShowCalendar(true);
+    
+    setShowSessionDetailsDialog(false);
+    setSelectedLibrarySession(null);
+    setSessionViewMode(null);
+    showToast('Session loaded for rescheduling', 'success');
+  };
+
+  // Render session view mode (read-only) - Show all stages
+  const renderSessionViewMode = (session) => {
+    if (!session) return null;
+    
+    const steps = [
+      { label: 'Create New Session', value: 'create', completed: !!(session.title && session.type && session.audience) },
+      { label: 'Content Creator', value: 'content-creator', completed: !!(session.files?.length > 0 || session.aiContent || session.creationMode) },
+      { label: 'Checkpoint Assessment', value: 'assessment', completed: !!(session.quiz || session.questions?.length > 0) },
+      { label: 'Certification', value: 'certification', completed: !!(session.certificate) },
+      { label: 'Preview Session', value: 'preview', completed: true },
+      { label: 'Schedule', value: 'schedule', completed: !!(session.scheduledDateTime || session.scheduledDate) }
+    ];
+    
+    return (
+      <Box>
+        <Typography variant="h6" fontWeight="bold" mb={3} sx={{ color: '#114417DB' }}>
+          Session Details (View Only)
+        </Typography>
+        
+        {/* Progress Steps */}
+        <Card sx={{ p: 3, mb: 3, backgroundColor: '#ffffff', border: '1px solid #e5e7eb' }}>
+          <Typography variant="subtitle1" fontWeight="bold" mb={2} sx={{ color: '#114417DB' }}>
+            Session Creation Stages
+          </Typography>
+          <Stepper orientation="vertical">
+            {steps.map((step, index) => (
+              <Step key={step.value} active={step.completed} completed={step.completed}>
+                <StepLabel
+                  StepIconComponent={(props) => (
+                    <Box
+                      sx={{
+                        width: 32,
+                        height: 32,
+                        borderRadius: '50%',
+                        backgroundColor: step.completed ? '#114417DB' : '#e5e7eb',
+                        color: step.completed ? 'white' : '#6b7280',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontWeight: 'bold',
+                        fontSize: '0.875rem'
+                      }}
+                    >
+                      {step.completed ? <CheckCircleIcon sx={{ fontSize: 20 }} /> : index + 1}
+                    </Box>
+                  )}
+                >
+                  <Typography variant="body1" fontWeight={step.completed ? 600 : 400}>
+                    {step.label}
+                  </Typography>
+                </StepLabel>
+              </Step>
+            ))}
+          </Stepper>
+        </Card>
+        
+        {/* Stage 1: Create New Session */}
+        <Card sx={{ p: 3, mb: 3, backgroundColor: '#ffffff', border: '1px solid #e5e7eb' }}>
+          <Box display="flex" alignItems="center" gap={1} mb={2}>
+            <CheckCircleIcon sx={{ color: '#114417DB' }} />
+            <Typography variant="subtitle1" fontWeight="bold" sx={{ color: '#114417DB' }}>
+              Stage 1: Create New Session
+            </Typography>
+          </Box>
+          <Grid container spacing={2}>
+            <Grid item xs={12} sm={6}>
+              <Typography variant="body2" color="text.secondary" gutterBottom>
+                Title
+              </Typography>
+              <Typography variant="body1" fontWeight="medium">
+                {session.title || 'Untitled Session'}
+              </Typography>
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <Typography variant="body2" color="text.secondary" gutterBottom>
+                Type
+              </Typography>
+              <Typography variant="body1" fontWeight="medium">
+                {session.type || 'Not specified'}
+              </Typography>
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <Typography variant="body2" color="text.secondary" gutterBottom>
+                Participants
+              </Typography>
+              <Typography variant="body1" fontWeight="medium">
+                {session.audience === 'all' ? 'All Employees' :
+                 session.audience === 'managers' ? 'Managers Only' :
+                 session.audience === 'developers' ? 'Developers' :
+                 session.audience === 'hr' ? 'HR Team' :
+                 session.audience || 'Not specified'}
+              </Typography>
+            </Grid>
+            {session.description && (
+              <Grid item xs={12}>
+                <Typography variant="body2" color="text.secondary" gutterBottom>
+                  Description
+                </Typography>
+                <Typography variant="body1">
+                  {session.description}
+                </Typography>
+              </Grid>
+            )}
+          </Grid>
+        </Card>
+
+        {/* Stage 2: Content Creator */}
+        {(session.files?.length > 0 || session.quiz || session.aiContent || session.creationMode) && (
+          <Card sx={{ p: 3, mb: 3, backgroundColor: '#ffffff', border: '1px solid #e5e7eb' }}>
+            <Box display="flex" alignItems="center" gap={1} mb={2}>
+              <CheckCircleIcon sx={{ color: '#114417DB' }} />
+              <Typography variant="subtitle1" fontWeight="bold" sx={{ color: '#114417DB' }}>
+                Stage 2: Content Creator
+              </Typography>
+            </Box>
+            {session.files && session.files.length > 0 && (
+              <Box mb={2}>
+                <Typography variant="body2" color="text.secondary" gutterBottom>
+                  Uploaded Files ({session.files.length})
+                </Typography>
+                <List dense>
+                  {session.files.map((file, index) => {
+                    const fileObj = typeof file === 'string' ? { name: file } : file;
+                    const fileSize = fileObj.size ? (fileObj.size / 1024).toFixed(2) + ' KB' : 'Unknown size';
+                    const fileType = fileObj.type || fileObj.name?.split('.').pop()?.toUpperCase() || 'Unknown';
+                    const uploadedDate = fileObj.uploadedAt ? new Date(fileObj.uploadedAt).toLocaleDateString() : 'Unknown date';
+                    
+                    return (
+                      <ListItem key={index}>
+                        <ListItemIcon>
+                          <FileIcon />
+                        </ListItemIcon>
+                        <ListItemText 
+                          primary={fileObj.name || `File ${index + 1}`}
+                          secondary={`Type: ${fileType} | Size: ${fileSize} | Uploaded: ${uploadedDate}`}
+                        />
+                      </ListItem>
+                    );
+                  })}
+                </List>
+              </Box>
+            )}
+            {session.aiContent && (
+              <Box mb={2}>
+                <Typography variant="body2" color="text.secondary" gutterBottom>
+                  AI Generated Content
+                </Typography>
+                <Grid container spacing={2}>
+                  <Grid item xs={12} sm={6}>
+                    <Typography variant="body2" color="text.secondary" gutterBottom>
+                      Keywords
+                    </Typography>
+                    <Typography variant="body1" fontWeight="medium">
+                      {session.aiContent.keywords || 'N/A'}
+                    </Typography>
+                  </Grid>
+                  {session.aiContent.title && (
+                    <Grid item xs={12} sm={6}>
+                      <Typography variant="body2" color="text.secondary" gutterBottom>
+                        Title
+                      </Typography>
+                      <Typography variant="body1" fontWeight="medium">
+                        {session.aiContent.title}
+                      </Typography>
+                    </Grid>
+                  )}
+                  {session.aiContent.keyPoints && session.aiContent.keyPoints.length > 0 && (
+                    <Grid item xs={12}>
+                      <Typography variant="body2" color="text.secondary" gutterBottom>
+                        Key Points
+                      </Typography>
+                      <List dense>
+                        {session.aiContent.keyPoints.map((point, idx) => (
+                          <ListItem key={idx}>
+                            <ListItemText primary={`• ${point}`} />
+                          </ListItem>
+                        ))}
+                      </List>
+                    </Grid>
+                  )}
+                  {session.aiContent.learningObjectives && session.aiContent.learningObjectives.length > 0 && (
+                    <Grid item xs={12}>
+                      <Typography variant="body2" color="text.secondary" gutterBottom>
+                        Learning Objectives
+                      </Typography>
+                      <List dense>
+                        {session.aiContent.learningObjectives.map((objective, idx) => (
+                          <ListItem key={idx}>
+                            <ListItemText primary={`• ${objective}`} />
+                          </ListItem>
+                        ))}
+                      </List>
+                    </Grid>
+                  )}
+                  {session.aiContent.content && (
+                    <Grid item xs={12}>
+                      <Typography variant="body2" color="text.secondary" gutterBottom>
+                        Content
+                      </Typography>
+                      <Box sx={{ p: 2, backgroundColor: '#f8f9fa', borderRadius: 1, maxHeight: 300, overflowY: 'auto' }}>
+                        <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                          {session.aiContent.content}
+                        </Typography>
+                      </Box>
+                    </Grid>
+                  )}
+                </Grid>
+              </Box>
+            )}
+            {session.creationMode && (
+              <Box>
+                <Typography variant="body2" color="text.secondary" gutterBottom>
+                  Creation Mode
+                </Typography>
+                <Typography variant="body1">
+                  {session.creationMode}
+                </Typography>
+              </Box>
+            )}
+          </Card>
+        )}
+
+        {/* Stage 3: Checkpoint Assessment */}
+        {(session.quiz || session.questions?.length > 0) ? (
+          <Card sx={{ p: 3, mb: 3, backgroundColor: '#ffffff', border: '1px solid #e5e7eb' }}>
+            <Box display="flex" alignItems="center" gap={1} mb={2}>
+              <CheckCircleIcon sx={{ color: '#114417DB' }} />
+              <Typography variant="subtitle1" fontWeight="bold" sx={{ color: '#114417DB' }}>
+                Stage 3: Checkpoint Assessment
+              </Typography>
+            </Box>
+            {session.quiz && (
+              <>
+                <Grid container spacing={2} mb={3}>
+                  {session.quiz.title && (
+                    <Grid item xs={12} sm={6}>
+                      <Typography variant="body2" color="text.secondary" gutterBottom>
+                        Assessment Title
+                      </Typography>
+                      <Typography variant="body1" fontWeight="medium">
+                        {session.quiz.title}
+                      </Typography>
+                    </Grid>
+                  )}
+                  <Grid item xs={12} sm={6}>
+                    <Typography variant="body2" color="text.secondary" gutterBottom>
+                      Total Questions
+                    </Typography>
+                    <Typography variant="body1" fontWeight="medium">
+                      {session.quiz.questions?.length || session.questions?.length || 0} questions
+                    </Typography>
+                  </Grid>
+                  {session.quiz.passingScore && (
+                    <Grid item xs={12} sm={6}>
+                      <Typography variant="body2" color="text.secondary" gutterBottom>
+                        Passing Score
+                      </Typography>
+                      <Typography variant="body1" fontWeight="medium">
+                        {session.quiz.passingScore}%
+                      </Typography>
+                    </Grid>
+                  )}
+                  {session.quiz.maxAttempts && (
+                    <Grid item xs={12} sm={6}>
+                      <Typography variant="body2" color="text.secondary" gutterBottom>
+                        Max Attempts
+                      </Typography>
+                      <Typography variant="body1" fontWeight="medium">
+                        {session.quiz.maxAttempts}
+                      </Typography>
+                    </Grid>
+                  )}
+                </Grid>
+                
+                {/* Show Questions Details */}
+                {(session.quiz.questions?.length > 0 || session.questions?.length > 0) && (
+                  <Box>
+                    <Typography variant="body2" fontWeight="bold" color="text.secondary" gutterBottom mb={2}>
+                      Questions:
+                    </Typography>
+                    {(session.quiz.questions || session.questions || []).map((question, qIndex) => (
+                      <Card key={qIndex} sx={{ p: 2, mb: 2, backgroundColor: '#f8f9fa' }}>
+                        <Typography variant="body1" fontWeight="medium" mb={1}>
+                          {qIndex + 1}. {question.question || question.text || 'Question'}
+                        </Typography>
+                        {question.options && question.options.length > 0 && (
+                          <Box ml={2} mt={1}>
+                            {question.options.map((option, oIndex) => (
+                              <Typography 
+                                key={oIndex} 
+                                variant="body2" 
+                                sx={{ 
+                                  color: question.correctAnswer === oIndex || question.correctAnswer === option ? '#114417DB' : 'text.primary',
+                                  fontWeight: question.correctAnswer === oIndex || question.correctAnswer === option ? 'bold' : 'normal'
+                                }}
+                              >
+                                {String.fromCharCode(65 + oIndex)}. {option}
+                                {(question.correctAnswer === oIndex || question.correctAnswer === option) && ' ✓'}
+                              </Typography>
+                            ))}
+                          </Box>
+                        )}
+                        {question.type && (
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                            Type: {question.type}
+                          </Typography>
+                        )}
+                      </Card>
+                    ))}
+                  </Box>
+                )}
+              </>
+            )}
+          </Card>
+        ) : (
+          <Card sx={{ p: 3, mb: 3, backgroundColor: '#fff3cd', border: '1px solid #ffc107' }}>
+            <Box display="flex" alignItems="center" gap={1} mb={2}>
+              <WarningAmberIcon sx={{ color: '#ffc107' }} />
+              <Typography variant="subtitle1" fontWeight="bold" sx={{ color: '#856404' }}>
+                Stage 3: Checkpoint Assessment (Skipped)
+              </Typography>
+            </Box>
+            <Typography variant="body2" color="text.secondary">
+              No assessment was created for this session.
+            </Typography>
+          </Card>
+        )}
+
+        {/* Stage 4: Certification */}
+        {session.certificate ? (
+          <Card sx={{ p: 3, mb: 3, backgroundColor: '#ffffff', border: '1px solid #e5e7eb' }}>
+            <Box display="flex" alignItems="center" gap={1} mb={2}>
+              <CheckCircleIcon sx={{ color: '#114417DB' }} />
+              <Typography variant="subtitle1" fontWeight="bold" sx={{ color: '#114417DB' }}>
+                Stage 4: Certification
+              </Typography>
+            </Box>
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={6}>
+                <Typography variant="body2" color="text.secondary" gutterBottom>
+                  Certificate Name
+                </Typography>
+                <Typography variant="body1" fontWeight="medium">
+                  {session.certificate.name || 'Certificate'}
+                </Typography>
+              </Grid>
+              {session.certificate.template && (
+                <Grid item xs={12} sm={6}>
+                  <Typography variant="body2" color="text.secondary" gutterBottom>
+                    Template
+                  </Typography>
+                  <Typography variant="body1" fontWeight="medium">
+                    {session.certificate.template.name || 'Template'}
+                  </Typography>
+                </Grid>
+              )}
+              {session.certificate.fields && Object.keys(session.certificate.fields).length > 0 && (
+                <Grid item xs={12}>
+                  <Typography variant="body2" color="text.secondary" gutterBottom>
+                    Certificate Fields
+                  </Typography>
+                  <Box sx={{ p: 2, backgroundColor: '#f8f9fa', borderRadius: 1 }}>
+                    {Object.entries(session.certificate.fields).map(([key, value]) => (
+                      <Box key={key} mb={1}>
+                        <Typography variant="body2" component="span" fontWeight="medium">
+                          {key}: 
+                        </Typography>
+                        <Typography variant="body2" component="span" sx={{ ml: 1 }}>
+                          {value || 'Not set'}
+                        </Typography>
+                      </Box>
+                    ))}
+                  </Box>
+                </Grid>
+              )}
+            </Grid>
+          </Card>
+        ) : (
+          <Card sx={{ p: 3, mb: 3, backgroundColor: '#fff3cd', border: '1px solid #ffc107' }}>
+            <Box display="flex" alignItems="center" gap={1} mb={2}>
+              <WarningAmberIcon sx={{ color: '#ffc107' }} />
+              <Typography variant="subtitle1" fontWeight="bold" sx={{ color: '#856404' }}>
+                Stage 4: Certification (Not Configured)
+              </Typography>
+            </Box>
+            <Typography variant="body2" color="text.secondary">
+              No certificate was configured for this session.
+            </Typography>
+          </Card>
+        )}
+
+        {/* Stage 5: Schedule */}
+        {(session.scheduledDateTime || session.scheduledDate) && (
+          <Card sx={{ p: 3, mb: 3, backgroundColor: '#ffffff', border: '1px solid #e5e7eb' }}>
+            <Box display="flex" alignItems="center" gap={1} mb={2}>
+              <CheckCircleIcon sx={{ color: '#114417DB' }} />
+              <Typography variant="subtitle1" fontWeight="bold" sx={{ color: '#114417DB' }}>
+                Stage 5: Schedule
+              </Typography>
+            </Box>
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={6}>
+                <Typography variant="body2" color="text.secondary" gutterBottom>
+                  Start Date & Time
+                </Typography>
+                <Typography variant="body1" fontWeight="medium">
+                  {session.scheduledDateTime 
+                    ? new Date(session.scheduledDateTime).toLocaleString()
+                    : session.scheduledDate && session.scheduledTime
+                    ? `${new Date(session.scheduledDate).toLocaleDateString()} ${session.scheduledTime}`
+                    : 'Not scheduled'}
+                </Typography>
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <Typography variant="body2" color="text.secondary" gutterBottom>
+                  End Date & Time
+                </Typography>
+                <Typography variant="body1" fontWeight="medium">
+                  {session.dueDateTime 
+                    ? new Date(session.dueDateTime).toLocaleString()
+                    : session.dueDate && session.dueTime
+                    ? `${new Date(session.dueDate).toLocaleDateString()} ${session.dueTime}`
+                    : 'Not set'}
+                </Typography>
+              </Grid>
+            </Grid>
+          </Card>
+        )}
+      </Box>
+    );
+  };
+
+  // Render session edit mode
+  const renderSessionEditMode = (session) => {
+    if (!session) return null;
+    
+    return (
+      <Box>
+        <Typography variant="h6" fontWeight="bold" mb={3} sx={{ color: '#114417DB' }}>
+          Edit Session
+        </Typography>
+        <Typography variant="body2" color="text.secondary" mb={3}>
+          You can edit all sections of the session before the start date and time.
+        </Typography>
+        <Button
+          variant="contained"
+          onClick={() => handleSaveEditedSession(session)}
+          sx={{
+            backgroundColor: '#114417DB',
+            '&:hover': { backgroundColor: '#0a2f0e' }
+          }}
+        >
+          Open in Edit Mode
+        </Button>
+      </Box>
+    );
+  };
+
+  // Render session reschedule mode
+  const renderSessionRescheduleMode = (session) => {
+    if (!session) return null;
+    
+    return (
+      <Box>
+        <Typography variant="h6" fontWeight="bold" mb={3} sx={{ color: '#114417DB' }}>
+          Reschedule Session
+        </Typography>
+        
+        <Card sx={{ p: 3, backgroundColor: '#ffffff', border: '1px solid #e5e7eb' }}>
+          <Grid container spacing={3}>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Start Date"
+                type="date"
+                value={scheduleDate || session.scheduledDate || ''}
+                onChange={(e) => setScheduleDate(e.target.value)}
+                InputLabelProps={{ shrink: true }}
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <TodayIcon />
+                    </InputAdornment>
+                  ),
+                }}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Start Time"
+                type="time"
+                value={scheduleTime || session.scheduledTime || ''}
+                onChange={(e) => setScheduleTime(e.target.value)}
+                InputLabelProps={{ shrink: true }}
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <AccessTimeIcon />
+                    </InputAdornment>
+                  ),
+                }}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Due Date"
+                type="date"
+                value={scheduleDueDate || session.dueDate || ''}
+                onChange={(e) => setScheduleDueDate(e.target.value)}
+                InputLabelProps={{ shrink: true }}
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <TodayIcon />
+                    </InputAdornment>
+                  ),
+                }}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Due Time"
+                type="time"
+                value={scheduleDueTime || session.dueTime || ''}
+                onChange={(e) => setScheduleDueTime(e.target.value)}
+                InputLabelProps={{ shrink: true }}
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <AccessTimeIcon />
+                    </InputAdornment>
+                  ),
+                }}
+              />
+            </Grid>
+          </Grid>
+        </Card>
+      </Box>
+    );
   };
 
   const handleDeleteSession = (sessionId) => {
@@ -3201,10 +4298,14 @@ Make the content professional, educational, and suitable for workplace training.
     setSelectedSession(null);
     setSelectedSessionForScheduling(null);
     
-    // Force a small delay to ensure localStorage is written before showing success
+    // Redirect to session library after scheduling
     setTimeout(() => {
       console.log('Published sessions in localStorage:', localStorage.getItem('published_sessions'));
-    }, 100);
+      setActiveTab('course-library');
+      setManageSessionTab('create');
+      setManageSessionView('create');
+      setShowScheduleSuccess(false);
+    }, 1500);
   };
 
   const renderDashboard = () => (
@@ -3247,29 +4348,29 @@ Make the content professional, educational, and suitable for workplace training.
               <MenuItem value="custom">Custom</MenuItem>
             </Select>
           </FormControl>
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={() => {
-              setActiveTab('manage-session');
-              setManageSessionTab('create');
-              handleManageSessionClick('create');
-            }}
-            sx={{
+        <Button
+          variant="contained"
+          startIcon={<AddIcon />}
+          onClick={() => {
+            setActiveTab('manage-session');
+            setManageSessionTab('create');
+            handleManageSessionClick('create');
+          }}
+          sx={{
               backgroundColor: '#114417DB',
-              color: 'white',
-              '&:hover': {
+            color: 'white',
+            '&:hover': {
                 backgroundColor: '#0a2f0e',
-              },
-              textTransform: 'none',
-              fontWeight: 600,
-              px: 3,
-              py: 1.5,
-              height: 'fit-content'
-            }}
-          >
-            Create New Session
-          </Button>
+            },
+            textTransform: 'none',
+            fontWeight: 600,
+            px: 3,
+            py: 1.5,
+            height: 'fit-content'
+          }}
+        >
+          Create New Session
+        </Button>
         </Box>
       </Box>
 
@@ -4086,9 +5187,9 @@ Make the content professional, educational, and suitable for workplace training.
     
     setSavedCertifications(prev => [...prev, newCertification]);
     
-    // Navigate to manage sessions
-    setActiveTab('manage-session');
-    setManageSessionTab('all-sessions');
+    // Navigate to preview
+    setManageSessionTab('preview');
+    setManageSessionView('preview');
     // In real app, this would save to backend
   };
 
@@ -4643,6 +5744,94 @@ Make the content professional, educational, and suitable for workplace training.
                 <Button onClick={() => setPreviewTemplate(null)}>Close</Button>
               </DialogActions>
             </Dialog>
+            
+            {/* Default 5 Action Buttons */}
+            <Box display="flex" gap={2} mt={4} justifyContent="center" flexWrap="wrap">
+              <Button
+                variant="outlined"
+                startIcon={<SaveIcon />}
+                onClick={handleSaveSession}
+                sx={{
+                  borderColor: '#114417DB',
+                  color: '#114417DB',
+                  '&:hover': {
+                    borderColor: '#0a2f0e',
+                    backgroundColor: 'rgba(17, 68, 23, 0.08)'
+                  },
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  minWidth: 150
+                }}
+              >
+                Save as Draft
+              </Button>
+              <Button
+                variant="outlined"
+                onClick={handleSkipToNextStep}
+                sx={{
+                  borderColor: '#6b7280',
+                  color: '#6b7280',
+                  '&:hover': {
+                    borderColor: '#4b5563',
+                    backgroundColor: '#f3f4f6'
+                  },
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  minWidth: 150
+                }}
+              >
+                Skip
+              </Button>
+              <Button
+                variant="outlined"
+                onClick={() => setActiveTab('course-library')}
+                sx={{
+                  borderColor: '#ef4444',
+                  color: '#ef4444',
+                  '&:hover': {
+                    borderColor: '#dc2626',
+                    backgroundColor: '#fef2f2'
+                  },
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  minWidth: 150
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="outlined"
+                startIcon={<ArrowBackIcon />}
+                onClick={handlePreviousStep}
+                sx={{
+                  borderColor: '#6b7280',
+                  color: '#6b7280',
+                  '&:hover': {
+                    borderColor: '#4b5563',
+                    backgroundColor: '#f3f4f6'
+                  },
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  minWidth: 150
+                }}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="contained"
+                endIcon={<ArrowForwardIcon />}
+                onClick={handleNextStep}
+                sx={{
+                  backgroundColor: '#114417DB',
+                  '&:hover': { backgroundColor: '#0a2f0e' },
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  minWidth: 150
+                }}
+              >
+                Next
+              </Button>
+            </Box>
           </Card>
         </Box>
 
@@ -4652,9 +5841,9 @@ Make the content professional, educational, and suitable for workplace training.
             <Box display="flex" alignItems="center" justifyContent="space-between" mb={3}>
               <Box display="flex" alignItems="center" gap={2}>
                 <EditIcon sx={{ fontSize: 32, color: '#114417DB' }} />
-                <Typography variant="h5" fontWeight="bold">
-                  Configure Fields
-                </Typography>
+              <Typography variant="h5" fontWeight="bold">
+                Configure Fields
+              </Typography>
               </Box>
               <Box display="flex" alignItems="center" gap={2}>
                 <IconButton
@@ -4706,9 +5895,9 @@ Make the content professional, educational, and suitable for workplace training.
               </Box>
             </Box>
             
-            <Box>
+              <Box>
               {/* Editable Fields */}
-              <Box mb={3}>
+                <Box mb={3}>
                     <Grid container spacing={2}>
                       <Grid item xs={12} md={6}>
                         <TextField
@@ -4809,172 +5998,172 @@ Make the content professional, educational, and suitable for workplace training.
                 <Box display="flex" justifyContent="space-between" alignItems="center">
                   <Typography variant="h6" fontWeight="bold">
                     Certificate Preview
-                  </Typography>
+                    </Typography>
                   <IconButton onClick={() => setShowCertificatePreview(false)} size="small">
                     <CloseIcon />
                   </IconButton>
                 </Box>
               </DialogTitle>
               <DialogContent dividers sx={{ overflowY: 'auto' }}>
-                <Card 
-                  sx={{ 
-                    p: 4, 
-                    backgroundColor: '#ffffff',
-                    border: '2px solid #e5e7eb',
-                    borderRadius: 2,
-                    maxWidth: '800px',
-                    margin: '0 auto',
-                    minHeight: '500px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    justifyContent: 'space-between'
-                  }}
-                >
-                  <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-                    {/* Top Section - Certificate Heading */}
-                    <Box sx={{ textAlign: 'center', mb: 2 }}>
-                      <Typography 
-                        variant="h4" 
-                        sx={{ 
-                          fontWeight: 'bold',
-                          fontStyle: 'italic',
-                          color: '#000000',
-                          mb: 1,
-                          letterSpacing: '2px'
-                        }}
-                      >
-                        {certificateFields.title}
-                      </Typography>
-                      <Typography 
-                        variant="h6" 
-                        sx={{ 
-                          color: '#000000',
-                          mb: 3
-                        }}
-                      >
-                        {certificateFields.subtitle}
-                      </Typography>
-                      
-                      {/* Decorative Line */}
-                      <Box 
-                        sx={{ 
-                          width: '60%', 
-                          height: '2px', 
-                          backgroundColor: '#fbbf24', 
-                          margin: '0 auto 2rem',
-                          opacity: 0.6
-                        }} 
-                      />
-                      
-                      {/* Presented to */}
-                      <Typography 
-                        variant="body1" 
-                        sx={{ 
-                          color: '#6b7280',
-                          mb: 2
-                        }}
-                      >
-                        {certificateFields.recipientLabel}
-                      </Typography>
-                      
-                      {/* User Name */}
-                      <Typography 
-                        variant="h4" 
-                        sx={{ 
-                          fontWeight: 'bold',
-                          color: '#000000',
-                          mb: 2
-                        }}
-                      >
-                        {certificateFields.userName}
-                      </Typography>
-                      
-                      {/* Description */}
-                      <Typography 
-                        variant="body2" 
-                        sx={{ 
-                          color: '#6b7280',
-                          fontStyle: 'italic',
-                          mb: 2
-                        }}
-                      >
-                        {certificateFields.descriptionText}
-                      </Typography>
-                    </Box>
-                    
-                    {/* Bottom Section - Date and Authorisation */}
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', mt: 'auto' }}>
-                      {/* Left - Date of Issue */}
-                      <Box>
-                        <Typography 
-                          variant="body2" 
-                          sx={{ 
-                            color: '#6b7280',
-                            mb: 1
-                          }}
-                        >
-                          Date of Issue
-                        </Typography>
-                        <Typography 
-                          variant="body1" 
-                          sx={{ 
-                            color: '#000000',
-                            fontWeight: 'medium'
-                          }}
-                        >
-                          {certificateFields.dateOfIssue}
-                        </Typography>
+                    <Card 
+                      sx={{ 
+                        p: 4, 
+                        backgroundColor: '#ffffff',
+                        border: '2px solid #e5e7eb',
+                        borderRadius: 2,
+                        maxWidth: '800px',
+                        margin: '0 auto',
+                        minHeight: '500px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'space-between'
+                      }}
+                    >
+                      <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                        {/* Top Section - Certificate Heading */}
+                        <Box sx={{ textAlign: 'center', mb: 2 }}>
+                          <Typography 
+                            variant="h4" 
+                            sx={{ 
+                              fontWeight: 'bold',
+                              fontStyle: 'italic',
+                              color: '#000000',
+                              mb: 1,
+                              letterSpacing: '2px'
+                            }}
+                          >
+                            {certificateFields.title}
+                          </Typography>
+                          <Typography 
+                            variant="h6" 
+                            sx={{ 
+                              color: '#000000',
+                              mb: 3
+                            }}
+                          >
+                            {certificateFields.subtitle}
+                          </Typography>
+                          
+                          {/* Decorative Line */}
+                          <Box 
+                            sx={{ 
+                              width: '60%', 
+                              height: '2px', 
+                              backgroundColor: '#fbbf24', 
+                              margin: '0 auto 2rem',
+                              opacity: 0.6
+                            }} 
+                          />
+                          
+                          {/* Presented to */}
+                          <Typography 
+                            variant="body1" 
+                            sx={{ 
+                              color: '#6b7280',
+                              mb: 2
+                            }}
+                          >
+                            {certificateFields.recipientLabel}
+                          </Typography>
+                          
+                          {/* User Name */}
+                          <Typography 
+                            variant="h4" 
+                            sx={{ 
+                              fontWeight: 'bold',
+                              color: '#000000',
+                              mb: 2
+                            }}
+                          >
+                            {certificateFields.userName}
+                          </Typography>
+                          
+                          {/* Description */}
+                          <Typography 
+                            variant="body2" 
+                            sx={{ 
+                              color: '#6b7280',
+                              fontStyle: 'italic',
+                              mb: 2
+                            }}
+                          >
+                            {certificateFields.descriptionText}
+                          </Typography>
+                        </Box>
+                        
+                        {/* Bottom Section - Date and Authorisation */}
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', mt: 'auto' }}>
+                          {/* Left - Date of Issue */}
+                          <Box>
+                            <Typography 
+                              variant="body2" 
+                              sx={{ 
+                                color: '#6b7280',
+                                mb: 1
+                              }}
+                            >
+                              Date of Issue
+                            </Typography>
+                            <Typography 
+                              variant="body1" 
+                              sx={{ 
+                                color: '#000000',
+                                fontWeight: 'medium'
+                              }}
+                            >
+                              {certificateFields.dateOfIssue}
+                            </Typography>
+                          </Box>
+                          
+                          {/* Right - Authorised by */}
+                          <Box sx={{ textAlign: 'right' }}>
+                            <Typography 
+                              variant="body2" 
+                              sx={{ 
+                                color: '#6b7280',
+                                mb: 1
+                              }}
+                            >
+                              Authorised by
+                            </Typography>
+                            <Typography 
+                              variant="body1" 
+                              sx={{ 
+                                color: '#000000',
+                                fontWeight: 'medium',
+                                mb: 1
+                              }}
+                            >
+                              {certificateFields.authorisedBy}
+                            </Typography>
+                            {/* Signature Line */}
+                            <Box 
+                              sx={{ 
+                                width: '120px', 
+                                height: '2px', 
+                                backgroundColor: '#000000', 
+                                marginLeft: 'auto',
+                                mt: 1
+                              }} 
+                            />
+                          </Box>
+                        </Box>
                       </Box>
-                      
-                      {/* Right - Authorised by */}
-                      <Box sx={{ textAlign: 'right' }}>
-                        <Typography 
-                          variant="body2" 
-                          sx={{ 
-                            color: '#6b7280',
-                            mb: 1
-                          }}
-                        >
-                          Authorised by
-                        </Typography>
-                        <Typography 
-                          variant="body1" 
-                          sx={{ 
-                            color: '#000000',
-                            fontWeight: 'medium',
-                            mb: 1
-                          }}
-                        >
-                          {certificateFields.authorisedBy}
-                        </Typography>
-                        {/* Signature Line */}
-                        <Box 
-                          sx={{ 
-                            width: '120px', 
-                            height: '2px', 
-                            backgroundColor: '#000000', 
-                            marginLeft: 'auto',
-                            mt: 1
-                          }} 
-                        />
-                      </Box>
-                    </Box>
-                  </Box>
-                </Card>
+                    </Card>
                 <Typography variant="caption" color="text.secondary" mt={2} display="block" textAlign="center">
-                  Note: The changes made to fields will be applied to all the templates.
-                </Typography>
+                      Note: The changes made to fields will be applied to all the templates.
+                    </Typography>
               </DialogContent>
             </Dialog>
 
             {/* All 5 Action Buttons - Only show when fields are not saved */}
             {!fieldsSaved && (
               <Box display="flex" gap={2} mt={4} justifyContent="center">
-                <Button
-                  variant="outlined"
+                    <Button
+                      variant="outlined"
                   startIcon={<SaveIcon />}
                   onClick={handleSaveSession}
-                  sx={{
+                      sx={{
                     borderColor: '#114417DB',
                     color: '#114417DB',
                     '&:hover': {
@@ -5018,10 +6207,10 @@ Make the content professional, educational, and suitable for workplace training.
                     textTransform: 'none',
                     fontWeight: 600,
                     minWidth: 150
-                  }}
-                >
-                  Cancel
-                </Button>
+                      }}
+                    >
+                      Cancel
+                    </Button>
                 <Button
                   variant="outlined"
                   startIcon={<ArrowBackIcon />}
@@ -5050,13 +6239,13 @@ Make the content professional, educational, and suitable for workplace training.
                   }}
                 >
                   Previous
-                </Button>
-                <Button
-                  variant="contained"
+                    </Button>
+                    <Button
+                      variant="contained"
                   endIcon={<ArrowForwardIcon />}
                   onClick={handleSaveFields}
                   disabled={fieldsSaved}
-                  sx={{
+                      sx={{
                     backgroundColor: '#114417DB',
                     '&:hover': { backgroundColor: '#0a2f0e' },
                     '&:disabled': {
@@ -5069,7 +6258,7 @@ Make the content professional, educational, and suitable for workplace training.
                   }}
                 >
                   Next
-                </Button>
+                    </Button>
               </Box>
             )}
           </Card>
@@ -5151,7 +6340,7 @@ Make the content professional, educational, and suitable for workplace training.
                   sx={{
                     borderColor: '#114417DB',
                     color: '#114417DB',
-                    '&:hover': {
+                    '&:hover': { 
                       borderColor: '#0a2f0e',
                       backgroundColor: 'rgba(17, 68, 23, 0.08)'
                     },
@@ -5179,35 +6368,35 @@ Make the content professional, educational, and suitable for workplace training.
                 >
                   Skip
                 </Button>
-                <Button
-                  variant="outlined"
+          <Button 
+            variant="outlined" 
                   onClick={() => setActiveTab('course-library')}
-                  sx={{
+            sx={{ 
                     borderColor: '#ef4444',
                     color: '#ef4444',
-                    '&:hover': {
+              '&:hover': { 
                       borderColor: '#dc2626',
                       backgroundColor: '#fef2f2'
-                    },
-                    textTransform: 'none',
+              },
+              textTransform: 'none',
                     fontWeight: 600,
                     minWidth: 150
-                  }}
-                >
+            }}
+          >
                   Cancel
-                </Button>
-                <Button
-                  variant="outlined"
+          </Button>
+          <Button
+            variant="outlined"
                   startIcon={<ArrowBackIcon />}
                   onClick={handleEditFields}
-                  sx={{
-                    borderColor: '#6b7280',
-                    color: '#6b7280',
-                    '&:hover': {
-                      borderColor: '#4b5563',
-                      backgroundColor: '#f3f4f6'
-                    },
-                    textTransform: 'none',
+            sx={{
+              borderColor: '#6b7280',
+              color: '#6b7280',
+              '&:hover': {
+                borderColor: '#4b5563',
+                backgroundColor: '#f3f4f6'
+              },
+              textTransform: 'none',
                     fontWeight: 600,
                     minWidth: 150
                   }}
@@ -5227,9 +6416,9 @@ Make the content professional, educational, and suitable for workplace training.
                   }}
                 >
                   Next
-                </Button>
-              </Box>
-            </Box>
+          </Button>
+        </Box>
+      </Box>
           </Card>
         )}
 
@@ -5247,16 +6436,38 @@ Make the content professional, educational, and suitable for workplace training.
               fullWidth
               margin="normal"
               required
-              error={!sessionFormData.title}
-              helperText={!sessionFormData.title ? 'Session title is required' : ''}
+              error={false}
+              helperText=""
             />
-                        <FormControl fullWidth margin="normal" required error={!sessionFormData.type}>
-                          <InputLabel>Session Type</InputLabel>
+                        <FormControl fullWidth margin="normal" required error={false}>
+                          <InputLabel id="session-type-label" shrink>Session Type</InputLabel>
                           <Select
+                            labelId="session-type-label"
                             value={sessionFormData.type}
                             onChange={(e) => handleSessionFormChange('type', e.target.value)}
                             label="Session Type"
+                            displayEmpty
+                            renderValue={(selected) => {
+                              if (!selected) {
+                                return <em style={{ fontStyle: 'normal', color: '#9ca3af' }}>Select</em>;
+                              }
+                              const labels = {
+                                'compliance': 'Compliance Training',
+                                'learning': 'Employee Learning and Development',
+                                'engagement': 'Employee Engagement & Well-being',
+                                'performance': 'Organizational Growth & Performance',
+                                'culture': 'Company & Culture-Oriented Sessions',
+                                'dei': 'Diversity, Equity & Inclusion (DEI)',
+                                'safety': 'Workplace Safety',
+                                'security': 'Security Awareness',
+                                'live-training': 'Live Training'
+                              };
+                              return labels[selected] || selected;
+                            }}
                           >
+                            <MenuItem value="">
+                              <em style={{ fontStyle: 'normal', color: '#9ca3af' }}>Select</em>
+                            </MenuItem>
                             <MenuItem value="compliance">Compliance Training</MenuItem>
                             <MenuItem value="learning">Employee Learning and Development</MenuItem>
                             <MenuItem value="engagement">Employee Engagement & Well-being</MenuItem>
@@ -5267,29 +6478,36 @@ Make the content professional, educational, and suitable for workplace training.
                             <MenuItem value="security">Security Awareness</MenuItem>
                             <MenuItem value="live-training">Live Training</MenuItem>
                           </Select>
-                          {!sessionFormData.type && (
-                            <Typography variant="caption" color="error" sx={{ mt: 0.5, ml: 1.75 }}>
-                              Session type is required
-                            </Typography>
-                          )}
                         </FormControl>
-            <FormControl fullWidth margin="normal" required error={!sessionFormData.audience}>
-              <InputLabel>Participants</InputLabel>
+            <FormControl fullWidth margin="normal" required error={false}>
+              <InputLabel id="participants-label" shrink>Participants</InputLabel>
               <Select
+                labelId="participants-label"
                 value={sessionFormData.audience}
                 onChange={(e) => handleSessionFormChange('audience', e.target.value)}
                 label="Participants"
+                displayEmpty
+                renderValue={(selected) => {
+                  if (!selected) {
+                    return <em style={{ fontStyle: 'normal', color: '#9ca3af' }}>Select</em>;
+                  }
+                  const labels = {
+                    'all': 'All Employees',
+                    'managers': 'Managers Only',
+                    'developers': 'Developers',
+                    'hr': 'HR Team'
+                  };
+                  return labels[selected] || selected;
+                }}
               >
+                <MenuItem value="">
+                  <em style={{ fontStyle: 'normal', color: '#9ca3af' }}>Select</em>
+                </MenuItem>
                 <MenuItem value="all">All Employees</MenuItem>
                 <MenuItem value="managers">Managers Only</MenuItem>
                 <MenuItem value="developers">Developers</MenuItem>
                 <MenuItem value="hr">HR Team</MenuItem>
               </Select>
-              {!sessionFormData.audience && (
-                <Typography variant="caption" color="error" sx={{ mt: 0.5, ml: 1.75 }}>
-                  Participants is required
-                </Typography>
-              )}
             </FormControl>
                         <TextField
                           label="Description"
@@ -5319,13 +6537,9 @@ Make the content professional, educational, and suitable for workplace training.
               >
                 Save as Draft
               </Button>
-              <Button
+              <Button 
                 variant="outlined"
-                onClick={() => {
-                  setManageSessionTab('content-creator');
-                  setManageSessionView('content-creator');
-                  setShowContentCreator(true);
-                }}
+                onClick={handleSkipToNextStep}
                 sx={{
                   borderColor: '#6b7280',
                   color: '#6b7280',
@@ -5339,44 +6553,44 @@ Make the content professional, educational, and suitable for workplace training.
                 }}
               >
                 Skip
-              </Button>
-              <Button 
-                variant="outlined" 
+          </Button>
+            <Button
+              variant="outlined"
                 onClick={() => setActiveTab('course-library')}
-                sx={{ 
+              sx={{
                   borderColor: '#ef4444', 
                   color: '#ef4444', 
-                  '&:hover': { 
+                '&:hover': {
                     borderColor: '#dc2626', 
                     backgroundColor: '#fef2f2' 
-                  },
-                  textTransform: 'none',
+                },
+                textTransform: 'none',
                   fontWeight: 600,
                   minWidth: 150
-                }}
-              >
+              }}
+            >
                 Cancel
-              </Button>
-              <Button 
-                variant="outlined" 
+            </Button>
+            <Button
+              variant="outlined"
                 startIcon={<ArrowBackIcon />}
-                onClick={() => {
+              onClick={() => {
                   // Go back - this is the first step, so disable or navigate to session library
                   setActiveTab('course-library');
-                }}
+              }}
                 disabled
-                sx={{ 
-                  borderColor: '#6b7280', 
-                  color: '#6b7280', 
-                  '&:hover': { 
-                    borderColor: '#4b5563', 
-                    backgroundColor: '#f3f4f6' 
-                  },
+              sx={{
+                borderColor: '#6b7280',
+                color: '#6b7280',
+                '&:hover': {
+                  borderColor: '#4b5563',
+                  backgroundColor: '#f3f4f6'
+                },
                   '&:disabled': {
                     borderColor: '#e5e7eb',
                     color: '#9ca3af'
-                  },
-                  textTransform: 'none',
+                },
+                textTransform: 'none',
                   fontWeight: 600,
                   minWidth: 150
                 }}
@@ -5386,7 +6600,7 @@ Make the content professional, educational, and suitable for workplace training.
               <Button 
                 variant="contained" 
                 endIcon={<ArrowForwardIcon />}
-                onClick={handleCreateSession}
+                onClick={handleNextStep}
                 sx={{ 
                   backgroundColor: '#114417DB', 
                   '&:hover': { 
@@ -5398,10 +6612,10 @@ Make the content professional, educational, and suitable for workplace training.
                 }}
               >
                 Next
-              </Button>
-            </Box>
+            </Button>
+          </Box>
           </Card>
-    </Box>
+        </Box>
   );
 
   // Main Content Creator Menu
@@ -5546,7 +6760,7 @@ Make the content professional, educational, and suitable for workplace training.
               <Box mt={3}>
                 <Typography variant="subtitle2" fontWeight="bold" gutterBottom color="text.secondary">
                   Generated Prompt:
-                </Typography>
+                  </Typography>
                 <Box
                   sx={{
                     p: 2,
@@ -5568,22 +6782,22 @@ Make the content professional, educational, and suitable for workplace training.
                       : JSON.stringify(sessionContentSnapshot.aiContent.content, null, 2)}
                   </Typography>
                 </Box>
-                
+
                 {/* Copy and Open ChatGPT Button */}
                 <Box sx={{ mt: 2, display: 'flex', justifyContent: 'flex-start' }}>
-                  <Button
+              <Button
                     variant="contained"
-                    size="large"
+                size="large"
                     startIcon={<FireIcon />}
                     onClick={handleCopyAndOpenChatGPT}
-                    sx={{ 
+                sx={{
                       backgroundColor: '#114417DB',
                       minWidth: 200,
                       '&:hover': { backgroundColor: '#0a2f0e' }
                     }}
                   >
                     COPY AND OPEN CHATGPT
-                  </Button>
+              </Button>
                 </Box>
               </Box>
             )}
@@ -5612,12 +6826,12 @@ Make the content professional, educational, and suitable for workplace training.
                   }}
                 />
                 <Box sx={{ mt: 2, display: 'flex', justifyContent: 'flex-start' }}>
-                  <Button
-                    variant="contained"
-                    size="large"
+              <Button
+                variant="contained"
+                size="large"
                     onClick={handleProcessChatGPTResponse}
                     disabled={!chatgptResponse.trim()}
-                    sx={{ 
+                sx={{
                       backgroundColor: '#114417DB',
                       minWidth: 200,
                       '&:hover': { backgroundColor: '#0a2f0e' },
@@ -5625,8 +6839,8 @@ Make the content professional, educational, and suitable for workplace training.
                     }}
                   >
                     PROCESS AND USE CONTENT
-                  </Button>
-                </Box>
+              </Button>
+            </Box>
 
                 {/* Show parsed content preview */}
                 {parsedContent && (
@@ -5647,9 +6861,9 @@ Make the content professional, educational, and suitable for workplace training.
                     <Typography variant="body2" color="text.secondary" sx={{ mt: 1, fontSize: '0.85rem' }}>
                       The content is now ready to use in your session. You can proceed to the next step.
                     </Typography>
-                  </Box>
-                )}
-              </Box>
+        </Box>
+      )}
+    </Box>
             )}
           </Card>
         </Box>
@@ -5694,7 +6908,7 @@ Make the content professional, educational, and suitable for workplace training.
                 style={{ display: 'none' }}
               />
             </Box>
-            <Button
+          <Button
               variant="outlined"
               fullWidth
               onClick={handleFileInputClick}
@@ -5702,7 +6916,7 @@ Make the content professional, educational, and suitable for workplace training.
               size="large"
             >
               Choose Files
-            </Button>
+          </Button>
             
             {selectedFiles.length > 0 && (
               <Box mt={3}>
@@ -5756,47 +6970,47 @@ Make the content professional, educational, and suitable for workplace training.
 
       {/* Bottom Buttons */}
       <Box display="flex" gap={2} mt={4} justifyContent="center">
-        <Button
-          variant="outlined"
-          startIcon={<SaveIcon />}
+            <Button
+              variant="outlined"
+              startIcon={<SaveIcon />}
           onClick={handleSaveSession}
-          sx={{
+              sx={{
             borderColor: '#114417DB',
             color: '#114417DB',
-            '&:hover': {
+                '&:hover': {
               borderColor: '#0a2f0e',
               backgroundColor: 'rgba(17, 68, 23, 0.08)'
-            },
-            textTransform: 'none',
+                },
+                textTransform: 'none',
             fontWeight: 600,
             minWidth: 150
-          }}
-        >
-          Save as Draft
-        </Button>
-        <Button
-          variant="outlined"
+              }}
+            >
+              Save as Draft
+            </Button>
+            <Button
+              variant="outlined"
           onClick={handleSkipToNextStep}
-          sx={{
-            borderColor: '#6b7280',
-            color: '#6b7280',
-            '&:hover': {
-              borderColor: '#4b5563',
-              backgroundColor: '#f3f4f6'
-            },
-            textTransform: 'none',
+              sx={{
+                borderColor: '#6b7280',
+                color: '#6b7280',
+                '&:hover': {
+                  borderColor: '#4b5563',
+                  backgroundColor: '#f3f4f6'
+                },
+                textTransform: 'none',
             fontWeight: 600,
             minWidth: 150
-          }}
-        >
-          Skip
-        </Button>
-        <Button
-          variant="outlined"
+              }}
+            >
+              Skip
+            </Button>
+              <Button
+                variant="outlined"
           onClick={() => setActiveTab('course-library')}
-          sx={{
-            borderColor: '#ef4444',
-            color: '#ef4444',
+                sx={{
+                  borderColor: '#ef4444',
+                  color: '#ef4444',
             '&:hover': {
               borderColor: '#dc2626',
               backgroundColor: '#fef2f2'
@@ -5804,10 +7018,10 @@ Make the content professional, educational, and suitable for workplace training.
             textTransform: 'none',
             fontWeight: 600,
             minWidth: 150
-          }}
-        >
-          Cancel
-        </Button>
+                }}
+              >
+                Cancel
+              </Button>
         <Button
           variant="outlined"
           startIcon={<ArrowBackIcon />}
@@ -5831,12 +7045,12 @@ Make the content professional, educational, and suitable for workplace training.
           }}
         >
           Previous
-        </Button>
-        <Button
-          variant="contained"
+              </Button>
+              <Button
+                variant="contained"
           endIcon={<ArrowForwardIcon />}
           onClick={handleProceedFromMainToQuiz}
-          sx={{
+                sx={{
             backgroundColor: '#114417DB',
             '&:hover': {
               backgroundColor: '#0a2f0e'
@@ -5847,15 +7061,15 @@ Make the content professional, educational, and suitable for workplace training.
           }}
         >
           Next
-        </Button>
-      </Box>
+              </Button>
+            </Box>
     </Box>
   );
 
   // AI Content Creator Page
   const renderAIContentCreator = () => {
     return (
-      <Box p={3}>
+    <Box p={3}>
       <Box mb={4}>
         <Box display="flex" justifyContent="flex-end" alignItems="center" mb={2}>
           <Box display="flex" gap={2}>
@@ -5913,7 +7127,7 @@ Make the content professional, educational, and suitable for workplace training.
             <TextField
               label="Enter keywords or topics"
               placeholder="e.g., mental health wellbeing, workplace stress, mindfulness techniques"
-              fullWidth
+              fullWidth 
               multiline
               rows={3}
               margin="normal"
@@ -5938,7 +7152,7 @@ Make the content professional, educational, and suitable for workplace training.
                 }}
               >
                 GENERATE PROMPT
-              </Button>
+            </Button>
             </Box>
             
             {/* Generated Prompt Display */}
@@ -5946,7 +7160,7 @@ Make the content professional, educational, and suitable for workplace training.
               <Box mt={3}>
                 <Typography variant="subtitle2" fontWeight="bold" gutterBottom color="text.secondary">
                   Generated Prompt:
-                </Typography>
+            </Typography>
                 <Box
                   sx={{
                     p: 2,
@@ -5966,12 +7180,12 @@ Make the content professional, educational, and suitable for workplace training.
                     {typeof sessionContentSnapshot.aiContent.content === 'string' 
                       ? sessionContentSnapshot.aiContent.content 
                       : JSON.stringify(sessionContentSnapshot.aiContent.content, null, 2)}
-                  </Typography>
+            </Typography>
                 </Box>
                 
                 {/* Copy and Open ChatGPT Button */}
                 <Box sx={{ mt: 2, display: 'flex', justifyContent: 'flex-start' }}>
-                  <Button
+            <Button 
                     variant="contained"
                     size="large"
                     startIcon={<FireIcon />}
@@ -5983,7 +7197,7 @@ Make the content professional, educational, and suitable for workplace training.
                     }}
                   >
                     COPY AND OPEN CHATGPT
-                  </Button>
+            </Button>
                 </Box>
               </Box>
             )}
@@ -5993,11 +7207,11 @@ Make the content professional, educational, and suitable for workplace training.
               <Box mt={4}>
                 <Typography variant="subtitle2" fontWeight="bold" gutterBottom color="text.secondary">
                   Paste ChatGPT JSON Response:
-                </Typography>
+            </Typography>
                 <TextField
                   label="Paste the JSON response from ChatGPT here"
                   placeholder='Paste the JSON response here, e.g., {"title": "...", "description": "...", "content": "...", "keyPoints": [...], "learningObjectives": [...]}'
-                  fullWidth
+              fullWidth 
                   multiline
                   rows={8}
                   margin="normal"
@@ -6025,12 +7239,12 @@ Make the content professional, educational, and suitable for workplace training.
                     }}
                   >
                     PROCESS AND USE CONTENT
-                  </Button>
+            </Button>
                 </Box>
 
                 {/* Show parsed content preview */}
                 {parsedContent && (
-                  <Box mt={3} p={2} sx={{ backgroundColor: '#d1fae5', borderRadius: 2 }}>
+        <Box mt={3} p={2} sx={{ backgroundColor: '#d1fae5', borderRadius: 2 }}>
                     <Typography variant="body1" color="success.main" fontWeight="medium" gutterBottom>
                       ✅ Content Processed Successfully!
                     </Typography>
@@ -6046,27 +7260,27 @@ Make the content professional, educational, and suitable for workplace training.
                     )}
                     <Typography variant="body2" color="text.secondary" sx={{ mt: 1, fontSize: '0.85rem' }}>
                       The content is now ready to use in your session. You can proceed to the next step.
-                    </Typography>
+          </Typography>
                   </Box>
                 )}
-              </Box>
-            )}
+        </Box>
+      )}
 
-            {/* Cancel and Proceed Buttons */}
-            <Box display="flex" gap={2} mt={4}>
-              <Button
-                variant="outlined"
-                fullWidth
-                size="large"
-                onClick={handleContentCreatorCancel}
-                sx={{
-                  borderColor: '#ef4444',
-                  color: '#ef4444',
-                  '&:hover': { borderColor: '#dc2626', backgroundColor: '#fef2f2' }
-                }}
-              >
-                Cancel
-              </Button>
+      {/* Cancel and Proceed Buttons */}
+      <Box display="flex" gap={2} mt={4}>
+        <Button
+          variant="outlined"
+          fullWidth
+          size="large"
+          onClick={handleContentCreatorCancel}
+          sx={{
+            borderColor: '#ef4444',
+            color: '#ef4444',
+            '&:hover': { borderColor: '#dc2626', backgroundColor: '#fef2f2' }
+          }}
+        >
+          Cancel
+        </Button>
               <Button
                 variant="outlined"
                 startIcon={<ArrowBackIcon />}
@@ -6085,15 +7299,15 @@ Make the content professional, educational, and suitable for workplace training.
                 }}
               >
                 Previous
-              </Button>
-              <Button
-                variant="contained"
+        </Button>
+        <Button
+          variant="contained"
                 endIcon={<ArrowForwardIcon />}
-                fullWidth
-                size="large"
-                onClick={handleContentCreatorProceed}
+          fullWidth
+          size="large"
+          onClick={handleContentCreatorProceed}
                 disabled={!aiContentGenerated}
-                sx={{
+          sx={{
                   backgroundColor: '#114417DB',
                   '&:hover': { backgroundColor: '#0a2f0e' },
                   '&:disabled': { backgroundColor: '#d1d5db', color: '#9ca3af' },
@@ -6102,13 +7316,13 @@ Make the content professional, educational, and suitable for workplace training.
                 }}
               >
                 Next
-              </Button>
-            </Box>
+        </Button>
+      </Box>
           </Card>
         </Grid>
       </Grid>
-      </Box>
-    );
+    </Box>
+  );
   };
 
 
@@ -6479,61 +7693,512 @@ Make the content professional, educational, and suitable for workplace training.
       return;
     }
     
-    // Update published session with scheduled date/time
+    // Check for skipped steps and prompt user to complete them
+    const stepOrder = ['create', 'content-creator', 'assessment', 'certification', 'preview', 'schedule'];
+    const skippedStepNames = {
+      'create': 'Create New Session',
+      'content-creator': 'Content Creator',
+      'assessment': 'Assessment',
+      'certification': 'Certification',
+      'preview': 'Preview',
+      'schedule': 'Schedule'
+    };
+    
+    const skippedStepsList = stepOrder.filter(step => skippedSteps.has(step));
+    if (skippedStepsList.length > 0) {
+      const skippedStepNamesList = skippedStepsList.map(step => skippedStepNames[step]).join(', ');
+      showToast(`Please complete the following skipped steps before publishing: ${skippedStepNamesList}`, 'error');
+      
+      // Navigate to the first skipped step
+      const firstSkippedStep = skippedStepsList[0];
+      setManageSessionTab(firstSkippedStep);
+      setManageSessionView(firstSkippedStep);
+      setActiveTab('manage-session');
+      setShowScheduleDialog(false);
+      return;
+    }
+    
+    // Get or use the draft ID to ensure we update the same session
+    const sessionId = selectedSessionForScheduling?.id || sessionFormData?.draftId || Date.now();
+    
+    // Build complete session with all data
+    const resolvedSessionForm = sessionContentSnapshot?.sessionForm || sessionFormData;
+    const resolvedAiContent = sessionContentSnapshot?.aiContent ?? (aiContentGenerated ? { keywords: aiKeywords } : null);
+    
+    // For files, prioritize selectedFiles (which should have dataUrl for videos)
+    // This ensures videos have dataUrl when published
+    let resolvedFiles;
+    if (selectedFiles && selectedFiles.length > 0) {
+      resolvedFiles = mapFilesToMetadata(selectedFiles);
+    } else {
+      resolvedFiles = sessionContentSnapshot?.files ?? mapFilesToMetadata(selectedFiles);
+    }
+    
+    const resolvedQuiz = currentQuizData?.quiz || currentQuizData || null;
+    const resolvedCreationMode = sessionContentSnapshot?.creationMode ?? selectedCreationMode;
+    
+    const hasCertificate = selectedTemplate && fieldsSaved;
+    const sessionCert = hasCertificate ? {
+      id: 'preview-cert',
+      name: selectedTemplate.name || 'Certificate',
+      template: selectedTemplate,
+      fields: certificateFields
+    } : null;
+    
+    // Create session with scheduled status (will auto-publish when start time arrives)
     const updatedSession = {
       ...selectedSessionForScheduling,
+      id: sessionId,
+      title: resolvedSessionForm.title || selectedSessionForScheduling?.title || 'Untitled Session',
+      description: resolvedSessionForm.description || selectedSessionForScheduling?.description || '',
+      type: resolvedSessionForm.type || selectedSessionForScheduling?.type || 'compliance',
+      audience: resolvedSessionForm.audience || selectedSessionForScheduling?.audience || 'all',
+      files: resolvedFiles,
+      quiz: resolvedQuiz,
+      aiContent: resolvedAiContent,
+      creationMode: resolvedCreationMode,
+      certificate: sessionCert || selectedSessionForScheduling?.certificate || null,
       scheduledDate: scheduleDate,
       scheduledTime: scheduleTime,
       scheduledDateTime: scheduledDateTime.toISOString(),
       dueDate: scheduleDueDate,
       dueTime: scheduleDueTime,
       dueDateTime: dueDateTime.toISOString(),
-      status: 'scheduled',
+      status: 'scheduled', // Changed from 'published' to 'scheduled'
       isLocked: false,
       approvalExpiresAt: null,
-      lastApprovalDate: null
+      lastApprovalDate: null,
+      createdAt: selectedSessionForScheduling?.createdAt || new Date().toISOString(),
+      savedAt: new Date().toISOString(),
+      publishedAt: null // Will be set when auto-published
     };
 
-    setPublishedSessions(prev => prev.map(s => s.id === updatedSession.id ? normalizePublishedSession(updatedSession) : s));
-
-    // Simulate Google Calendar integration - block calendar for all employees
-    const employeeEmails = employees.map(emp => emp.email || `${emp.employeeId}@company.com`);
+    // Remove from draft sessions
+    setDraftSessions(prev => prev.filter(s => s.id !== sessionId));
     
-    // Simulate sending calendar invites and notifications
-    employeeEmails.forEach(email => {
-      // In real app, this would call Google Calendar API
-      console.log(`Blocking calendar for ${email} at ${scheduledDateTime}`);
-      console.log(`Sending notification to ${email}: "A new session has been started. Click here to complete the session."`);
+    // Add/update in published sessions (will show as scheduled with countdown)
+    setPublishedSessions(prev => {
+      const filtered = prev.filter(s => s.id !== sessionId);
+      const updated = [normalizePublishedSession(updatedSession), ...filtered];
+      safeSetLocalStorage('published_sessions', updated);
+      // Dispatch event for employee dashboard
+      window.dispatchEvent(new Event('published-sessions-updated'));
+      return updated;
     });
 
     // Log activity
     addActivity(
-      `Session scheduled: ${selectedSessionForScheduling.title}`,
+      `Session saved and scheduled: ${updatedSession.title} (Publishing in ${getTimeUntilPublish(scheduledDateTime)})`,
       'Admin',
       'scheduled',
       'session_scheduled'
     );
 
-    setShowScheduleDialog(false);
+    // Mark all steps as complete
+    setSkippedSteps(new Set());
+
+    // Clear form state
     setSelectedSessionForScheduling(null);
     setScheduleDate('');
     setScheduleTime('');
     setScheduleDueDate('');
     setScheduleDueTime('');
     setShowCalendar(false);
+    setSelectedDepartment('');
+    setSessionFormData({ type: '', audience: '' });
+    setSelectedFiles([]);
+    setCurrentQuizData(null);
+    setAiContentGenerated(false);
+    setAiKeywords('');
+    setSelectedCreationMode(null);
+    setSelectedTemplate(null);
+    setCertificateFields({});
+    setFieldsSaved(false);
     
-    // Navigate back to dashboard
+    // Navigate back to session library
     setActiveTab('course-library');
     
-    showToast(`Session scheduled successfully! Calendar invites sent to ${employeeEmails.length} employees.`, 'success');
+    showToast('Session saved and scheduled successfully! It will auto-publish when the start time arrives.', 'success');
+  };
+  
+  // Helper function to calculate time until publish
+  const getTimeUntilPublish = (publishDate) => {
+    const now = new Date();
+    const diff = publishDate - now;
+    
+    if (diff <= 0) return 'now';
+    
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+    
+    if (days > 0) {
+      return `${days} day${days > 1 ? 's' : ''} and ${hours} hour${hours !== 1 ? 's' : ''}`;
+    } else if (hours > 0) {
+      return `${hours} hour${hours > 1 ? 's' : ''} and ${minutes} minute${minutes !== 1 ? 's' : ''}`;
+    } else {
+      return `${minutes} minute${minutes !== 1 ? 's' : ''}`;
+    }
   };
 
   const renderScheduleSessions = () => {
-    // Show schedule dialog if open (either for session selection or calendar view)
-    if (showScheduleDialog) {
-      return renderScheduleDialog();
+    // Build current session from state if not already set
+    if (!selectedSessionForScheduling) {
+      const resolvedSessionForm = sessionContentSnapshot?.sessionForm || sessionFormData;
+      const resolvedAiContent = sessionContentSnapshot?.aiContent ?? (aiContentGenerated ? { keywords: aiKeywords } : null);
+      const resolvedFiles = sessionContentSnapshot?.files ?? mapFilesToMetadata(selectedFiles);
+      const resolvedQuiz = currentQuizData?.quiz || null;
+      const resolvedCreationMode = sessionContentSnapshot?.creationMode ?? selectedCreationMode;
+      
+      const hasCertificate = selectedTemplate && fieldsSaved;
+      const sessionCert = hasCertificate ? {
+        id: 'preview-cert',
+        name: selectedTemplate.name || 'Certificate',
+        template: selectedTemplate,
+        fields: certificateFields
+      } : null;
+      
+      const currentSession = {
+        id: Date.now(),
+        title: resolvedSessionForm.title || 'Untitled Session',
+        description: resolvedSessionForm.description || '',
+        type: resolvedSessionForm.type || 'compliance',
+        audience: resolvedSessionForm.audience || 'all',
+        files: resolvedFiles,
+        quiz: resolvedQuiz,
+        aiContent: resolvedAiContent,
+        creationMode: resolvedCreationMode,
+        certificate: sessionCert,
+        status: 'draft',
+        createdAt: new Date().toISOString()
+      };
+      
+      setSelectedSessionForScheduling(currentSession);
+      
+      // Prepopulate department based on audience
+      const audience = resolvedSessionForm.audience || 'all';
+      let prepopulatedDepartment = 'all';
+      
+      if (audience !== 'all' && employees.length > 0) {
+        const matchingDept = employees.find(emp => 
+          emp.department && emp.department.toLowerCase().includes(audience.toLowerCase())
+        );
+        if (matchingDept) {
+          prepopulatedDepartment = matchingDept.department;
+        }
+      }
+      
+      if (!selectedDepartment) {
+        setSelectedDepartment(prepopulatedDepartment);
+      }
+      setShowCalendar(true);
     }
 
+    // Render schedule form inline (not as dialog)
+    if (!selectedSessionForScheduling) {
+      return (
+        <Box p={3} textAlign="center">
+          <Typography variant="body1" color="text.secondary">
+            Loading session data...
+          </Typography>
+        </Box>
+      );
+    }
+
+    const resolvedSessionForm = sessionContentSnapshot?.sessionForm || sessionFormData;
+    
+    const sessionTitle = selectedSessionForScheduling.title || resolvedSessionForm.title || 'Untitled Session';
+    
+    return (
+      <Box sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+        {showCalendar ? (
+          <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', p: 3 }}>
+            {/* Session Name - Non-editable */}
+            <Box mb={3}>
+              <TextField
+                fullWidth
+                label="Session Name"
+                value={sessionTitle}
+                InputProps={{
+                  readOnly: true,
+                }}
+                sx={{
+                  '& .MuiInputBase-input': {
+                    backgroundColor: '#f3f4f6',
+                    cursor: 'not-allowed'
+                  }
+                }}
+              />
+            </Box>
+
+            {/* Select Date and Time - Full Screen */}
+            <Box sx={{ flex: 1 }}>
+              <Card sx={{ p: 4, backgroundColor: '#ffffff' }}>
+                <Typography variant="h6" fontWeight="bold" mb={3} sx={{ color: '#114417DB' }}>
+                  Select Date and Time
+                </Typography>
+                
+                <Grid container spacing={3}>
+                  {/* Start Date and Time - Two Column Layout */}
+                  <Grid item xs={12} sm={6}>
+                    <TextField
+                      fullWidth
+                      label="Start Date"
+                      type="date"
+                      value={scheduleDate}
+                      onChange={(e) => setScheduleDate(e.target.value)}
+                      onClick={(e) => {
+                        if (e.target.type !== 'date') {
+                          e.target.showPicker?.();
+                        }
+                      }}
+                      InputLabelProps={{ shrink: true }}
+                      InputProps={{
+                        startAdornment: (
+                          <InputAdornment position="start">
+                            <TodayIcon />
+                          </InputAdornment>
+                        ),
+                        onClick: (e) => {
+                          if (e.target.type !== 'date') {
+                            const input = e.currentTarget.querySelector('input');
+                            if (input && input.type === 'date') {
+                              input.showPicker?.();
+                            }
+                          }
+                        },
+                        sx: { cursor: 'pointer' }
+                      }}
+                      sx={{ 
+                        '& .MuiInputBase-root': { cursor: 'pointer' },
+                        '& .MuiInputBase-input': { cursor: 'pointer' }
+                      }}
+                    />
+                  </Grid>
+              
+                  <Grid item xs={12} sm={6}>
+                    <TextField
+                      fullWidth
+                      label="Start Time"
+                      type="time"
+                      value={scheduleTime}
+                      onChange={(e) => setScheduleTime(e.target.value)}
+                      onClick={(e) => {
+                        if (e.target.type !== 'time') {
+                          e.target.showPicker?.();
+                        }
+                      }}
+                      InputLabelProps={{ shrink: true }}
+                      InputProps={{
+                        startAdornment: (
+                          <InputAdornment position="start">
+                            <AccessTimeIcon />
+                          </InputAdornment>
+                        ),
+                        onClick: (e) => {
+                          if (e.target.type !== 'time') {
+                            const input = e.currentTarget.querySelector('input');
+                            if (input && input.type === 'time') {
+                              input.showPicker?.();
+                            }
+                          }
+                        },
+                        sx: { cursor: 'pointer' }
+                      }}
+                      sx={{ 
+                        '& .MuiInputBase-root': { cursor: 'pointer' },
+                        '& .MuiInputBase-input': { cursor: 'pointer' }
+                      }}
+                    />
+                  </Grid>
+
+                  {/* Due Date and Time - Two Column Layout */}
+                  <Grid item xs={12} sm={6}>
+                    <TextField
+                      fullWidth
+                      label="Due Date"
+                      type="date"
+                      value={scheduleDueDate}
+                      onChange={(e) => setScheduleDueDate(e.target.value)}
+                      onClick={(e) => {
+                        if (e.target.type !== 'date') {
+                          e.target.showPicker?.();
+                        }
+                      }}
+                      InputLabelProps={{ shrink: true }}
+                      InputProps={{
+                        startAdornment: (
+                          <InputAdornment position="start">
+                            <TodayIcon />
+                          </InputAdornment>
+                        ),
+                        onClick: (e) => {
+                          if (e.target.type !== 'date') {
+                            const input = e.currentTarget.querySelector('input');
+                            if (input && input.type === 'date') {
+                              input.showPicker?.();
+                            }
+                          }
+                        },
+                        sx: { cursor: 'pointer' }
+                      }}
+                      sx={{ 
+                        '& .MuiInputBase-root': { cursor: 'pointer' },
+                        '& .MuiInputBase-input': { cursor: 'pointer' }
+                      }}
+                      helperText="Employees must complete the session before this date."
+                    />
+                  </Grid>
+
+                  <Grid item xs={12} sm={6}>
+                    <TextField
+                      fullWidth
+                      label="Due Time"
+                      type="time"
+                      value={scheduleDueTime}
+                      onChange={(e) => setScheduleDueTime(e.target.value)}
+                      onClick={(e) => {
+                        if (e.target.type !== 'time') {
+                          e.target.showPicker?.();
+                        }
+                      }}
+                      InputLabelProps={{ shrink: true }}
+                      InputProps={{
+                        startAdornment: (
+                          <InputAdornment position="start">
+                            <AccessTimeIcon />
+                          </InputAdornment>
+                        ),
+                        onClick: (e) => {
+                          if (e.target.type !== 'time') {
+                            const input = e.currentTarget.querySelector('input');
+                            if (input && input.type === 'time') {
+                              input.showPicker?.();
+                            }
+                          }
+                        },
+                        sx: { cursor: 'pointer' }
+                      }}
+                      sx={{ 
+                        '& .MuiInputBase-root': { cursor: 'pointer' },
+                        '& .MuiInputBase-input': { cursor: 'pointer' }
+                      }}
+                      helperText="After this time the session will lock automatically."
+                    />
+                  </Grid>
+
+              {/* Department Selection */}
+              <Grid item xs={12}>
+                <FormControl fullWidth>
+                  <InputLabel>Select Department</InputLabel>
+                  <Select
+                    value={selectedDepartment}
+                    onChange={(e) => handleDepartmentSelection(e.target.value)}
+                    label="Select Department"
+                  >
+                    {getDepartmentOptions().map(option => (
+                      <MenuItem key={option.value} value={option.value}>
+                        {option.label}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                {selectedDepartment && (
+                  <Box mt={2}>
+                    <Typography variant="body2" color="text.secondary">
+                      {selectedDepartment === 'all' 
+                        ? `All employees (${employees.length} total) will be invited`
+                        : `${employees.filter(emp => emp.department === selectedDepartment).length} employees from ${selectedDepartment} department will be invited`
+                      }
+                    </Typography>
+                  </Box>
+                )}
+              </Grid>
+            </Grid>
+
+            {scheduleDate && scheduleTime && (
+              <Box mt={3} p={2} sx={{ backgroundColor: '#f0f9ff', borderRadius: 2 }}>
+                <Typography variant="body2" fontWeight="medium" gutterBottom>
+                  Selected Schedule:
+                </Typography>
+                <Typography variant="h6" color="#3b82f6">
+                  {new Date(`${scheduleDate}T${scheduleTime}`).toLocaleString()}
+                </Typography>
+                {scheduleDueDate && scheduleDueTime && (
+                  <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                    Due by&nbsp;
+                    <strong>{new Date(`${scheduleDueDate}T${scheduleDueTime}`).toLocaleString()}</strong>
+                  </Typography>
+                )}
+              </Box>
+            )}
+              </Card>
+            </Box>
+
+            {/* Action Buttons - Bottom */}
+            <Box display="flex" justifyContent="center" gap={2} mt={4} pt={3} borderTop="1px solid #e5e7eb">
+              <Button
+                variant="outlined"
+                onClick={() => {
+                  handleSaveAsDraft();
+                  showToast('Draft saved successfully!', 'success');
+                }}
+                startIcon={<SaveIcon />}
+                sx={{ 
+                  color: '#114417DB', 
+                  borderColor: '#114417DB',
+                  minWidth: 150
+                }}
+              >
+                Save as Draft
+              </Button>
+              <Button
+                variant="outlined"
+                onClick={handleQuizCancel}
+                sx={{ 
+                  color: '#ef4444', 
+                  borderColor: '#ef4444',
+                  minWidth: 150
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="outlined"
+                onClick={handlePreviousStep}
+                startIcon={<ArrowBackIcon />}
+                sx={{ minWidth: 150 }}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="contained"
+                onClick={handleSendAndPublish}
+                disabled={!scheduleDate || !scheduleTime || !scheduleDueDate || !scheduleDueTime || !selectedDepartment}
+                startIcon={<SendIcon />}
+                sx={{
+                  backgroundColor: '#114417DB',
+                  '&:hover': { backgroundColor: '#0a2f0e' },
+                  minWidth: 150
+                }}
+              >
+                Save & Publish
+              </Button>
+            </Box>
+          </Box>
+        ) : (
+          <Box textAlign="center" py={8}>
+            <Typography variant="body1" color="text.secondary">
+              Please select date and time to schedule the session
+            </Typography>
+          </Box>
+        )}
+      </Box>
+    );
+  };
+
+  // Keep the old renderScheduleSessions for backward compatibility (session list view)
+  const renderScheduleSessionsList = () => {
     return (
       <Box p={3} sx={{ minHeight: '100vh', backgroundColor: '#ffffff' }}>
         {/* Header */}
@@ -6648,9 +8313,9 @@ Make the content professional, educational, and suitable for workplace training.
                                       size="small"
                                       sx={{
                                     backgroundColor: '#114417DB',
-                                    color: 'white',
-                                    fontWeight: 'medium',
-                                    fontSize: '0.7rem'
+                                        color: 'white',
+                                        fontWeight: 'medium',
+                                        fontSize: '0.7rem'
                                       }}
                                     />
                                   )}
@@ -6746,9 +8411,9 @@ Make the content professional, educational, and suitable for workplace training.
                                     size="small"
                                     sx={{
                                     backgroundColor: '#114417DB',
-                                    color: 'white',
-                                    fontWeight: 'medium',
-                                    fontSize: '0.7rem',
+                                      color: 'white',
+                                      fontWeight: 'medium',
+                                      fontSize: '0.7rem',
                                       mb: 1
                                     }}
                                   />
@@ -7884,10 +9549,10 @@ Make the content professional, educational, and suitable for workplace training.
                 sx={{
                 borderColor: '#114417DB',
                 color: '#114417DB',
-                '&:hover': {
+                  '&:hover': {
                   borderColor: '#0a2f0e',
                   backgroundColor: 'rgba(17, 68, 23, 0.08)'
-                }
+                  }
                 }}
               >
                 View Certificate Details
@@ -7901,10 +9566,10 @@ Make the content professional, educational, and suitable for workplace training.
                 sx={{
                 borderColor: '#114417DB',
                 color: '#114417DB',
-                '&:hover': {
+                  '&:hover': {
                   borderColor: '#0a2f0e',
                   backgroundColor: 'rgba(17, 68, 23, 0.08)'
-                }
+                  }
                 }}
               >
                 Edit Certificate
@@ -8527,8 +10192,14 @@ Make the content professional, educational, and suitable for workplace training.
     const resolvedCreationMode = sessionContentSnapshot?.creationMode ?? selectedCreationMode;
     
     // Get certification for this session if any
-    const sessionCertId = sessionCertifications['preview'] || null;
-    const sessionCert = sessionCertId ? savedCertifications.find(c => c.id === sessionCertId) : null;
+    // Check if a certificate template has been selected and configured
+    const hasCertificate = selectedTemplate && fieldsSaved;
+    const sessionCert = hasCertificate ? {
+      id: 'preview-cert',
+      name: selectedTemplate.name || 'Certificate',
+      template: selectedTemplate,
+      fields: certificateFields
+    } : null;
     
     // Build content items for preview (excluding assessment - it's shown separately)
     const contentItems = [];
@@ -8551,20 +10222,50 @@ Make the content professional, educational, and suitable for workplace training.
       resolvedFiles.forEach((file, index) => {
         const fileName = typeof file === 'string' ? file : (file.name || `File ${index + 1}`);
         const fileType = typeof file === 'string' ? null : (file.type || null);
-        const isPDF = fileName.toLowerCase().endsWith('.pdf') || 
+        const fileNameLower = fileName.toLowerCase();
+        
+        // Detect file types
+        const isPDF = fileNameLower.endsWith('.pdf') || 
                      fileType === 'application/pdf' ||
                      (file.dataUrl && file.dataUrl.startsWith('data:application/pdf')) ||
                      (file.url && file.url.includes('.pdf')) ||
                      (file.downloadUrl && file.downloadUrl.includes('.pdf'));
         
+        const isVideo = fileNameLower.endsWith('.mp4') || 
+                       fileNameLower.endsWith('.avi') || 
+                       fileNameLower.endsWith('.mov') ||
+                       fileNameLower.endsWith('.webm') ||
+                       fileNameLower.endsWith('.mkv') ||
+                       fileType?.startsWith('video/') ||
+                       (file.dataUrl && file.dataUrl.startsWith('data:video/')) ||
+                       (file.url && (file.url.includes('.mp4') || file.url.includes('.avi') || file.url.includes('.mov')));
+        
+        const isDocument = fileNameLower.endsWith('.doc') || 
+                          fileNameLower.endsWith('.docx') ||
+                          fileNameLower.endsWith('.ppt') ||
+                          fileNameLower.endsWith('.pptx') ||
+                          fileType?.includes('document') ||
+                          fileType?.includes('presentation');
+        
+        // Determine content type
+        let contentType = 'file';
+        if (isVideo) {
+          contentType = 'video';
+        } else if (isPDF) {
+          contentType = 'pdf';
+        } else if (isDocument) {
+          contentType = fileNameLower.includes('.ppt') ? 'presentation' : 'document';
+        }
+        
         contentItems.push({
           id: `file-${index}`,
-          type: isPDF ? 'pdf' : (fileType || 'file'),
+          type: contentType,
           title: fileName,
           description: typeof file === 'object' && file.size ? formatFileSize(file.size) : (fileType || 'Uploaded resource'),
           file: file,
           dataUrl: typeof file === 'object' ? (file.dataUrl || file.url || file.downloadUrl) : null,
-          isPDF: isPDF
+          isPDF: isPDF,
+          isVideo: isVideo
         });
       });
     }
@@ -8593,7 +10294,7 @@ Make the content professional, educational, and suitable for workplace training.
       <Box sx={{ backgroundColor: '#f8f9fa', minHeight: '100vh', p: 3 }}>
         <Typography variant="h4" fontWeight="bold" mb={4} sx={{ color: '#1f2937' }}>
           Preview Session
-        </Typography>
+              </Typography>
 
         {/* Session Information */}
         <Card sx={{ mb: 3, p: 3 }}>
@@ -8655,13 +10356,13 @@ Make the content professional, educational, and suitable for workplace training.
         <Card sx={{ mb: 3, p: 3 }}>
           <Typography variant="h6" fontWeight="bold" mb={2} sx={{ color: '#114417DB' }}>
             Session Content
-          </Typography>
+            </Typography>
           {contentItems.length === 0 ? (
             <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
               No content has been added yet. Content will appear here once added.
             </Typography>
           ) : (
-            <Box>
+          <Box>
               {contentItems.map((item, index) => {
                 const getContentIcon = () => {
                   switch (item.type) {
@@ -8685,85 +10386,213 @@ Make the content professional, educational, and suitable for workplace training.
 
                 const contentUrl = getContentUrl();
                 const isPDF = item.isPDF || item.type === 'pdf';
-
-                return (
+                const isVideo = item.isVideo || item.type === 'video' || 
+                               (item.title && (item.title.toLowerCase().endsWith('.mp4') || 
+                                               item.title.toLowerCase().endsWith('.avi') || 
+                                               item.title.toLowerCase().endsWith('.mov')));
+              
+              return (
                   <Card key={item.id || index} sx={{ mb: 2, border: '1px solid #e5e7eb' }}>
-                    {/* Content Header */}
-                    <Box display="flex" alignItems="flex-start" gap={2} p={2}>
-                      <Box sx={{ 
-                        backgroundColor: item.type === 'ai' ? '#f3e8ff' : '#e0f2fe',
-                        borderRadius: 1,
-                        p: 1,
+                    {/* For videos, show player directly instead of file name */}
+                    {contentUrl && (item.type === 'video' || isVideo) ? (
+                      <Box>
+                        {/* Video Title */}
+                        <Box display="flex" alignItems="center" gap={2} p={2} borderBottom="1px solid #e5e7eb">
+                          <Box sx={{ 
+                            backgroundColor: '#e0f2fe',
+                            borderRadius: 1,
+                            p: 1,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                          }}>
+                            {getContentIcon()}
+                          </Box>
+                          <Box flex={1}>
+                            <Typography variant="h6" fontWeight="bold" mb={0.5}>
+                              {item.title}
+                            </Typography>
+                            {item.description && (
+                              <Typography variant="body2" color="text.secondary">
+                                {item.description}
+                              </Typography>
+                            )}
+                          </Box>
+                        </Box>
+                        {/* Video Player */}
+                    <Box
+                      sx={{
+                            height: '70vh',
+                            minHeight: 400,
+                            backgroundColor: '#0f172a',
                         display: 'flex',
                         alignItems: 'center',
-                        justifyContent: 'center'
-                      }}>
-                        {getContentIcon()}
+                        justifyContent: 'center',
+                            overflow: 'hidden'
+                          }}
+                        >
+                          <video
+                            controls
+                            src={contentUrl}
+                            style={{ width: '100%', height: '100%' }}
+                          >
+                            Your browser does not support the video tag.
+                          </video>
+                    </Box>
                       </Box>
-                      <Box flex={1}>
-                        <Typography variant="h6" fontWeight="bold" mb={0.5}>
-                          {item.title}
+                    ) : (
+                      <>
+                        {/* Content Header */}
+                        <Box display="flex" alignItems="flex-start" gap={2} p={2}>
+                          <Box sx={{ 
+                            backgroundColor: item.type === 'ai' ? '#f3e8ff' : '#e0f2fe',
+                            borderRadius: 1,
+                            p: 1,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                          }}>
+                            {getContentIcon()}
+                          </Box>
+                    <Box flex={1}>
+                            <Typography variant="h6" fontWeight="bold" mb={0.5}>
+                              {item.title}
                         </Typography>
-                        {item.description && (
-                          <Typography variant="body2" color="text.secondary" mb={1}>
-                            {item.description}
-                          </Typography>
+                            {item.description && (
+                              <Typography variant="body2" color="text.secondary" mb={1}>
+                                {item.description}
+                              </Typography>
+                            )}
+                            {item.type === 'file' && item.file && !isPDF && (
+                        <Chip
+                                label={typeof item.file === 'object' ? (item.file.type || 'File') : 'File'} 
+                          size="small"
+                                sx={{ mr: 1 }}
+                              />
+                            )}
+                            {item.type === 'ai' && item.keyPoints && item.keyPoints.length > 0 && (
+                              <Box mt={1}>
+                                <Typography variant="body2" fontWeight="medium" mb={0.5}>
+                                  Key Points:
+                      </Typography>
+                                <List dense>
+                                  {item.keyPoints.map((point, idx) => (
+                                    <ListItem key={idx} sx={{ py: 0.25 }}>
+                                      <ListItemIcon sx={{ minWidth: 20 }}>
+                                        <CheckCircleIcon sx={{ fontSize: 16, color: '#114417DB' }} />
+                                      </ListItemIcon>
+                                      <ListItemText 
+                                        primary={point}
+                                        primaryTypographyProps={{ variant: 'body2' }}
+                                      />
+                                    </ListItem>
+                                  ))}
+                                </List>
+                              </Box>
+                            )}
+                          </Box>
+                    </Box>
+
+                        {/* Content Preview - PDFs, Documents, PowerPoint */}
+                        {contentUrl && (
+                          <>
+                        
+                        {/* PDF Preview */}
+                        {isPDF && (
+                          <Box
+                        sx={{ 
+                              height: '70vh',
+                              minHeight: 500,
+                              backgroundColor: '#f8fafc',
+                              borderTop: '1px solid #e5e7eb',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              overflow: 'hidden'
+                            }}
+                          >
+                            <embed
+                              src={`${contentUrl}#page=1&toolbar=1&navpanes=1&scrollbar=1`}
+                              type="application/pdf"
+                              style={{ width: '100%', height: '100%' }}
+                              title={item.title || 'PDF Document'}
+                            />
+                    </Box>
                         )}
-                        {item.type === 'file' && item.file && !isPDF && (
-                          <Chip 
-                            label={typeof item.file === 'object' ? (item.file.type || 'File') : 'File'} 
-                            size="small" 
-                            sx={{ mr: 1 }}
-                          />
+                        
+                        {/* Document/PowerPoint Preview (Word, PowerPoint, etc.) */}
+                        {!isPDF && !isVideo && (item.type === 'document' || item.type === 'presentation' || item.type === 'file') && (
+                    <Box
+                      sx={{
+                              height: '70vh',
+                              minHeight: 500,
+                              backgroundColor: '#f8fafc',
+                              borderTop: '1px solid #e5e7eb',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                              overflow: 'hidden'
+                            }}
+                          >
+                            <iframe
+                              title={item.title || 'Document Preview'}
+                              src={contentUrl}
+                              style={{ width: '100%', height: '100%', border: 'none' }}
+                              allowFullScreen
+                            />
+                    </Box>
                         )}
-                        {item.type === 'ai' && item.keyPoints && item.keyPoints.length > 0 && (
-                          <Box mt={1}>
-                            <Typography variant="body2" fontWeight="medium" mb={0.5}>
-                              Key Points:
-                            </Typography>
+                      </>
+                    )}
+                      </>
+                    )}
+                    
+                    {/* AI Content Preview */}
+                    {item.type === 'ai' && (
+                      <Box
+                        sx={{
+                          backgroundColor: '#f0f9ff',
+                          borderTop: '1px solid #e5e7eb',
+                          borderRadius: '0 0 4px 4px',
+                          p: 3,
+                          border: '1px solid #bae6fd',
+                        }}
+                      >
+                        {item.content && (
+                          <Typography variant="body1" color="text.primary" sx={{ whiteSpace: 'pre-wrap', mb: 2 }}>
+                            {item.content}
+                      </Typography>
+                        )}
+                        {item.learningObjectives && item.learningObjectives.length > 0 && (
+                          <Box mt={2}>
+                            <Typography variant="body2" fontWeight="bold" mb={1}>
+                              Learning Objectives:
+                      </Typography>
                             <List dense>
-                              {item.keyPoints.map((point, idx) => (
+                              {item.learningObjectives.map((objective, idx) => (
                                 <ListItem key={idx} sx={{ py: 0.25 }}>
                                   <ListItemIcon sx={{ minWidth: 20 }}>
                                     <CheckCircleIcon sx={{ fontSize: 16, color: '#114417DB' }} />
                                   </ListItemIcon>
                                   <ListItemText 
-                                    primary={point}
+                                    primary={objective}
                                     primaryTypographyProps={{ variant: 'body2' }}
                                   />
                                 </ListItem>
                               ))}
                             </List>
-                          </Box>
-                        )}
-                      </Box>
                     </Box>
-                    
-                    {/* PDF Viewer for PDF files */}
-                    {isPDF && contentUrl && (
-                      <Box
-                        sx={{
-                          height: '70vh',
-                          minHeight: 500,
-                          backgroundColor: '#f8fafc',
-                          borderTop: '1px solid #e5e7eb',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          overflow: 'hidden'
-                        }}
-                      >
-                        <embed
-                          src={`${contentUrl}#page=1&toolbar=1&navpanes=1&scrollbar=1`}
-                          type="application/pdf"
-                          style={{ width: '100%', height: '100%' }}
-                          title={item.title || 'PDF Document'}
-                        />
-                      </Box>
+                        )}
+                        {!item.content && !item.learningObjectives && (
+                          <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+                            AI generated learning material is attached to this session.
+                          </Typography>
+                        )}
+                    </Box>
                     )}
                   </Card>
-                );
-              })}
+              );
+            })}
             </Box>
           )}
         </Card>
@@ -8775,13 +10604,13 @@ Make the content professional, educational, and suitable for workplace training.
               <QuizIcon sx={{ color: '#ef4444', fontSize: 28 }} />
               <Typography variant="h6" fontWeight="bold" sx={{ color: '#114417DB' }}>
                 Assessment Details
-              </Typography>
-            </Box>
+                </Typography>
+              </Box>
             <Grid container spacing={2} mb={2}>
               <Grid item xs={12} md={4}>
                 <Typography variant="body2" color="text.secondary">
                   Assessment Title
-                </Typography>
+              </Typography>
                 <Typography variant="body1" fontWeight="medium">
                   {resolvedQuiz.title || resolvedQuiz.assessmentInfo?.quizTitle || 'Checkpoint Assessment'}
                 </Typography>
@@ -8792,17 +10621,17 @@ Make the content professional, educational, and suitable for workplace training.
                 </Typography>
                 <Typography variant="body1" fontWeight="medium">
                   {resolvedQuiz.questions.length}
-                </Typography>
+                          </Typography>
               </Grid>
               {resolvedQuiz.assessmentInfo?.passingScore && (
                 <Grid item xs={12} md={4}>
                   <Typography variant="body2" color="text.secondary">
                     Passing Score
-                  </Typography>
+                          </Typography>
                   <Typography variant="body1" fontWeight="medium">
                     {resolvedQuiz.assessmentInfo.passingScore}%
                   </Typography>
-                </Grid>
+                  </Grid>
               )}
               {resolvedQuiz.assessmentInfo?.maxAttempts && (
                 <Grid item xs={12} md={4}>
@@ -8812,19 +10641,19 @@ Make the content professional, educational, and suitable for workplace training.
                   <Typography variant="body1" fontWeight="medium">
                     {resolvedQuiz.assessmentInfo.maxAttempts}
                   </Typography>
-                </Grid>
-              )}
+              </Grid>
+            )}
             </Grid>
             <Divider sx={{ my: 2 }} />
             <Typography variant="subtitle2" fontWeight="bold" mb={1}>
               Questions Preview
-            </Typography>
-            <Box>
+              </Typography>
+              <Box>
               {resolvedQuiz.questions.slice(0, 3).map((question, idx) => (
                 <Card key={idx} sx={{ mb: 1, p: 2, backgroundColor: '#f9fafb' }}>
                   <Typography variant="body2" fontWeight="medium" mb={1}>
                     {idx + 1}. {question.text || question.question || 'Question'}
-                  </Typography>
+                </Typography>
                   {question.options && question.options.length > 0 && (
                     <List dense>
                       {question.options.map((option, optIdx) => (
@@ -8854,21 +10683,21 @@ Make the content professional, educational, and suitable for workplace training.
               <CertificateIcon sx={{ color: '#f59e0b', fontSize: 28 }} />
               <Typography variant="h6" fontWeight="bold" sx={{ color: '#114417DB' }}>
                 Certification
-              </Typography>
+                  </Typography>
             </Box>
             <Grid container spacing={2}>
               <Grid item xs={12} md={6}>
                 <Typography variant="body2" color="text.secondary">
                   Certificate Name
-                </Typography>
+                  </Typography>
                 <Typography variant="body1" fontWeight="medium">
                   {sessionCert.name || 'Certificate'}
-                </Typography>
+                  </Typography>
               </Grid>
               <Grid item xs={12} md={6}>
-                <Typography variant="body2" color="text.secondary">
+                  <Typography variant="body2" color="text.secondary">
                   Template
-                </Typography>
+                  </Typography>
                 <Typography variant="body1" fontWeight="medium">
                   {sessionCert.template?.name || 'Standard Template'}
                 </Typography>
@@ -8896,7 +10725,7 @@ Make the content professional, educational, and suitable for workplace training.
                 </>
               )}
             </Grid>
-          </Card>
+                </Card>
         )}
 
         {!sessionCert && (
@@ -8905,21 +10734,21 @@ Make the content professional, educational, and suitable for workplace training.
               <CertificateIcon sx={{ color: '#d1d5db', fontSize: 28 }} />
               <Typography variant="h6" fontWeight="bold" sx={{ color: '#6b7280' }}>
                 Certification
-              </Typography>
+                  </Typography>
             </Box>
             <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
               No certification has been attached to this session.
-            </Typography>
-          </Card>
-        )}
+                  </Typography>
+                </Card>
+            )}
 
         {/* Default 5 Action Buttons */}
         <Box display="flex" gap={2} mt={4} justifyContent="center" sx={{ pb: 3 }}>
-          <Button
+            <Button
             variant="outlined"
             startIcon={<SaveIcon />}
             onClick={handleSaveSession}
-            sx={{
+              sx={{
               borderColor: '#114417DB',
               color: '#114417DB',
               '&:hover': {
@@ -8938,7 +10767,7 @@ Make the content professional, educational, and suitable for workplace training.
             onClick={handleSkipToNextStep}
             sx={{
               borderColor: '#6b7280',
-              color: '#6b7280',
+                color: '#6b7280',
               '&:hover': {
                 borderColor: '#4b5563',
                 backgroundColor: '#f3f4f6'
@@ -8963,10 +10792,10 @@ Make the content professional, educational, and suitable for workplace training.
               textTransform: 'none',
               fontWeight: 600,
               minWidth: 150
-            }}
-          >
-            Cancel
-          </Button>
+              }}
+            >
+              Cancel
+            </Button>
           <Button
             variant="outlined"
             startIcon={<ArrowBackIcon />}
@@ -8984,12 +10813,12 @@ Make the content professional, educational, and suitable for workplace training.
             }}
           >
             Previous
-          </Button>
-          <Button
-            variant="contained"
+            </Button>
+            <Button
+              variant="contained"
             endIcon={<ArrowForwardIcon />}
             onClick={handleNextStep}
-            sx={{
+              sx={{
               backgroundColor: '#114417DB',
               '&:hover': { backgroundColor: '#0a2f0e' },
               textTransform: 'none',
@@ -8998,7 +10827,7 @@ Make the content professional, educational, and suitable for workplace training.
             }}
           >
             Next
-          </Button>
+            </Button>
         </Box>
       </Box>
     );
@@ -9857,6 +11686,83 @@ Make the content professional, educational, and suitable for workplace training.
 
   const renderSettings = () => (
     <Box p={3}>
+      {/* Manage Passwords */}
+      <Card sx={{ p: 3, mb: 4 }}>
+        <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+          <Typography variant="h5" fontWeight="bold">
+            Manage Passwords
+          </Typography>
+        </Box>
+        <Box sx={{ maxWidth: 600 }}>
+          <TextField
+            fullWidth
+            label="Current Password"
+            type={showCurrentPassword ? 'text' : 'password'}
+            value={passwordData.currentPassword}
+            onChange={(e) => setPasswordData(prev => ({ ...prev, currentPassword: e.target.value }))}
+            margin="normal"
+            InputProps={{
+              endAdornment: (
+                <IconButton
+                  onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                  edge="end"
+                >
+                  {showCurrentPassword ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                </IconButton>
+              )
+            }}
+          />
+          <TextField
+            fullWidth
+            label="New Password"
+            type={showNewPassword ? 'text' : 'password'}
+            value={passwordData.newPassword}
+            onChange={(e) => setPasswordData(prev => ({ ...prev, newPassword: e.target.value }))}
+            margin="normal"
+            InputProps={{
+              endAdornment: (
+                <IconButton
+                  onClick={() => setShowNewPassword(!showNewPassword)}
+                  edge="end"
+                >
+                  {showNewPassword ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                </IconButton>
+              )
+            }}
+          />
+          <TextField
+            fullWidth
+            label="Confirm New Password"
+            type={showConfirmPassword ? 'text' : 'password'}
+            value={passwordData.confirmPassword}
+            onChange={(e) => setPasswordData(prev => ({ ...prev, confirmPassword: e.target.value }))}
+            margin="normal"
+            InputProps={{
+              endAdornment: (
+                <IconButton
+                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  edge="end"
+                >
+                  {showConfirmPassword ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                </IconButton>
+              )
+            }}
+          />
+          <Box mt={3}>
+            <Button
+              variant="contained"
+              onClick={handleManagePasswords}
+              sx={{
+                backgroundColor: '#114417DB',
+                '&:hover': { backgroundColor: '#0a2f0e' }
+              }}
+            >
+              Update Password
+            </Button>
+          </Box>
+        </Box>
+      </Card>
+
       {/* System Settings - Clear All Sessions */}
       <Card sx={{ p: 3, mb: 4, border: '2px solid #ef4444' }}>
         <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
@@ -9900,9 +11806,13 @@ Make the content professional, educational, and suitable for workplace training.
           Clear All Sessions
         </Button>
       </Card>
+    </Box>
+  );
 
+  const renderEmployees = () => (
+    <Box p={3}>
       {/* Manage Employee Accounts Tab */}
-      {settingsSubTab === 'manage' && (
+      {employeesSubTab === 'manage' && (
         <Card sx={{ p: 3, mb: 4 }}>
           <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
             <Typography variant="h5" fontWeight="bold">
@@ -10051,7 +11961,7 @@ Make the content professional, educational, and suitable for workplace training.
       )}
 
       {/* Add Employee Tab */}
-      {settingsSubTab === 'add' && (
+      {employeesSubTab === 'add' && (
         <Card sx={{ p: 3, mb: 4 }}>
           <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
             <Typography variant="h5" fontWeight="bold">
@@ -10363,8 +12273,8 @@ Make the content professional, educational, and suitable for workplace training.
   const getAllCourses = () => {
     const courses = [];
     
-    // Add draft sessions
-    draftSessions.forEach(session => {
+    // Add draft sessions (exclude deleted)
+    draftSessions.filter(s => s.status !== 'deleted').forEach(session => {
       const questionCount = session.quiz?.questions?.length || session.questions?.length || 0;
       const duration = questionCount > 0 ? `${questionCount * 5}min` : 'N/A';
       
@@ -10377,7 +12287,7 @@ Make the content professional, educational, and suitable for workplace training.
         rating: 0.0,
         reviews: 0,
         thumbnail: session.type === 'Employee Wellbeing' ? '🧘' : session.type === 'Technical Training' ? '💻' : '📚',
-        status: 'Draft',
+        status: session.status || 'draft',
         category: session.type || 'General',
         createdAt: session.savedAt || session.createdAt,
         originalData: session,
@@ -10385,8 +12295,8 @@ Make the content professional, educational, and suitable for workplace training.
       });
     });
     
-    // Add published sessions
-    publishedSessions.forEach(session => {
+    // Add published sessions (exclude deleted)
+    publishedSessions.filter(s => s.status !== 'deleted').forEach(session => {
       const questionCount = session.quiz?.questions?.length || session.questions?.length || 0;
       const duration = questionCount > 0 ? `${questionCount * 5}min` : 'N/A';
       
@@ -10399,7 +12309,7 @@ Make the content professional, educational, and suitable for workplace training.
         rating: 0.0,
         reviews: 0,
         thumbnail: session.type === 'Employee Wellbeing' ? '🧘' : session.type === 'Technical Training' ? '💻' : '📚',
-        status: 'Published',
+        status: session.status || 'published',
         category: session.type || 'General',
         createdAt: session.publishedAt || session.createdAt,
         originalData: session,
@@ -10421,7 +12331,7 @@ Make the content professional, educational, and suitable for workplace training.
         rating: 0.0,
         reviews: 0,
         thumbnail: '📝',
-        status: 'Saved',
+        status: assessment.status || 'saved',
         category: assessment.type || 'Assessment',
         createdAt: assessment.savedAt || assessment.createdAt,
         originalData: assessment,
@@ -10441,11 +12351,9 @@ Make the content professional, educational, and suitable for workplace training.
       const matchesSearch = course.title.toLowerCase().includes(courseSearchTerm.toLowerCase());
       const matchesSkill = courseFilters.skill === 'all' || course.skill === courseFilters.skill;
       const matchesCategory = courseFilters.category === 'all' || course.category === courseFilters.category;
-      const matchesReviews = courseFilters.reviews === 'all' || 
-        (courseFilters.reviews === 'with' && course.reviews > 0) ||
-        (courseFilters.reviews === 'without' && course.reviews === 0);
+      const matchesStatus = courseFilters.status === 'all' || course.status.toLowerCase() === courseFilters.status.toLowerCase();
       
-      return matchesSearch && matchesSkill && matchesCategory && matchesReviews;
+      return matchesSearch && matchesSkill && matchesCategory && matchesStatus;
     });
 
     return (
@@ -10491,15 +12399,17 @@ Make the content professional, educational, and suitable for workplace training.
         </FormControl>
 
         <FormControl size="small" sx={{ minWidth: 120 }}>
-          <InputLabel>Reviews</InputLabel>
+          <InputLabel>Status</InputLabel>
           <Select
-            value={courseFilters.reviews}
-            label="Reviews"
-            onChange={(e) => setCourseFilters(prev => ({ ...prev, reviews: e.target.value }))}
+            value={courseFilters.status}
+            label="Status"
+            onChange={(e) => setCourseFilters(prev => ({ ...prev, status: e.target.value }))}
           >
-            <MenuItem value="all">All Reviews</MenuItem>
-            <MenuItem value="with">With Reviews</MenuItem>
-            <MenuItem value="without">Without Reviews</MenuItem>
+            <MenuItem value="all">All Status</MenuItem>
+            <MenuItem value="draft">Draft</MenuItem>
+            <MenuItem value="published">Published</MenuItem>
+            <MenuItem value="scheduled">Scheduled</MenuItem>
+            <MenuItem value="saved">Saved</MenuItem>
           </Select>
         </FormControl>
 
@@ -10559,12 +12469,18 @@ Make the content professional, educational, and suitable for workplace training.
             {filteredCourses.map((course) => (
               <Card
                 key={course.id}
+                onClick={() => {
+                  setSelectedLibrarySession(course.originalData);
+                  setShowSessionDetailsDialog(true);
+                }}
                 sx={{
                   mb: 2,
                   p: 2,
+                  cursor: 'pointer',
                   '&:hover': {
                     boxShadow: 2,
-                    transition: 'box-shadow 0.2s'
+                    transition: 'box-shadow 0.2s',
+                    backgroundColor: '#f9fafb'
                   }
                 }}
               >
@@ -10592,11 +12508,13 @@ Make the content professional, educational, and suitable for workplace training.
                         {course.title}
                       </Typography>
                       <Chip
-                        label={course.status}
+                        label={course.status.charAt(0).toUpperCase() + course.status.slice(1)}
                         size="small"
                         sx={{
-                          backgroundColor: course.status === 'Published' ? '#114417DB' : 
-                                           course.status === 'Draft' ? '#f59e0b' : '#3b82f6',
+                          backgroundColor: course.status === 'published' ? '#114417DB' : 
+                                           course.status === 'draft' ? '#f59e0b' : 
+                                           course.status === 'scheduled' ? '#3b82f6' :
+                                           course.status === 'saved' ? '#8b5cf6' : '#6b7280',
                           color: 'white',
                           fontWeight: 'medium',
                           fontSize: '0.7rem'
@@ -10606,6 +12524,16 @@ Make the content professional, educational, and suitable for workplace training.
                     <Typography variant="body2" color="text.secondary" mb={0.5}>
                       {course.modules} modules | {course.duration}
                     </Typography>
+                    {course.originalData?.scheduledDateTime && (
+                      <Typography variant="body2" color="text.secondary" mb={0.5}>
+                        <strong>Start:</strong> {new Date(course.originalData.scheduledDateTime).toLocaleString()}
+                      </Typography>
+                    )}
+                    {course.status === 'scheduled' && course.originalData?.scheduledDateTime && (
+                      <Typography variant="body2" sx={{ color: '#3b82f6', fontWeight: 'medium' }} mb={0.5}>
+                        Publishing in {getTimeUntilPublish(new Date(course.originalData.scheduledDateTime))}
+                      </Typography>
+                    )}
                     {course.originalData?.description && (
                       <Typography variant="body2" color="text.secondary" sx={{ 
                         display: '-webkit-box',
@@ -10645,13 +12573,19 @@ Make the content professional, educational, and suitable for workplace training.
             {filteredCourses.map((course) => (
               <Grid item xs={12} sm={6} md={4} lg={3} key={course.id}>
                 <Card
+                  onClick={() => {
+                    setSelectedLibrarySession(course.originalData);
+                    setShowSessionDetailsDialog(true);
+                  }}
                   sx={{
                     height: '100%',
                     display: 'flex',
                     flexDirection: 'column',
+                    cursor: 'pointer',
                     '&:hover': {
                       boxShadow: 4,
-                      transition: 'box-shadow 0.2s'
+                      transition: 'box-shadow 0.2s',
+                      backgroundColor: '#f9fafb'
                     }
                   }}
                 >
@@ -10674,11 +12608,13 @@ Make the content professional, educational, and suitable for workplace training.
                         {course.title}
                       </Typography>
                       <Chip
-                        label={course.status}
+                        label={course.status.charAt(0).toUpperCase() + course.status.slice(1)}
                         size="small"
                         sx={{
-                          backgroundColor: course.status === 'Published' ? '#114417DB' : 
-                                           course.status === 'Draft' ? '#f59e0b' : '#3b82f6',
+                          backgroundColor: course.status === 'published' ? '#114417DB' : 
+                                           course.status === 'draft' ? '#f59e0b' : 
+                                           course.status === 'scheduled' ? '#3b82f6' :
+                                           course.status === 'saved' ? '#8b5cf6' : '#6b7280',
                           color: 'white',
                           fontWeight: 'medium',
                           fontSize: '0.7rem'
@@ -10688,6 +12624,16 @@ Make the content professional, educational, and suitable for workplace training.
                     <Typography variant="body2" color="text.secondary" mb={1}>
                       {course.modules} modules | {course.duration}
                     </Typography>
+                    {course.originalData?.scheduledDateTime && (
+                      <Typography variant="body2" color="text.secondary" mb={1}>
+                        <strong>Start:</strong> {new Date(course.originalData.scheduledDateTime).toLocaleString()}
+                      </Typography>
+                    )}
+                    {course.status === 'scheduled' && course.originalData?.scheduledDateTime && (
+                      <Typography variant="body2" sx={{ color: '#3b82f6', fontWeight: 'medium' }} mb={1}>
+                        Publishing in {getTimeUntilPublish(new Date(course.originalData.scheduledDateTime))}
+                      </Typography>
+                    )}
                     {course.originalData?.description && (
                       <Typography variant="body2" color="text.secondary" mb={2} sx={{ 
                         display: '-webkit-box',
@@ -10731,6 +12677,264 @@ Make the content professional, educational, and suitable for workplace training.
           </Typography>
         </Box>
       )}
+
+      {/* Session Details Dialog */}
+      <Dialog
+        open={showSessionDetailsDialog}
+        onClose={() => {
+          setShowSessionDetailsDialog(false);
+          setSelectedLibrarySession(null);
+          setSessionViewMode(null);
+        }}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>
+          <Box display="flex" justifyContent="space-between" alignItems="center">
+            <Typography variant="h5" fontWeight="bold" sx={{ color: '#114417DB' }}>
+              {selectedLibrarySession?.title || 'Session Details'}
+            </Typography>
+            <IconButton onClick={() => {
+              setShowSessionDetailsDialog(false);
+              setSelectedLibrarySession(null);
+              setSessionViewMode(null);
+            }}>
+              <CloseIcon />
+            </IconButton>
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          {sessionViewMode === null ? (
+            <Box>
+              {/* Schedule Information */}
+              <Card sx={{ p: 3, mb: 3, backgroundColor: '#f8f9fa', border: '1px solid #e5e7eb' }}>
+                <Typography variant="h6" fontWeight="bold" mb={2} sx={{ color: '#114417DB' }}>
+                  Schedule Information
+                </Typography>
+                <Grid container spacing={2}>
+                  <Grid item xs={12} sm={6}>
+                    <Typography variant="body2" color="text.secondary" gutterBottom>
+                      Start Date & Time
+                    </Typography>
+                    <Typography variant="body1" fontWeight="medium">
+                      {selectedLibrarySession?.scheduledDateTime 
+                        ? new Date(selectedLibrarySession.scheduledDateTime).toLocaleString()
+                        : selectedLibrarySession?.scheduledDate && selectedLibrarySession?.scheduledTime
+                        ? `${new Date(selectedLibrarySession.scheduledDate).toLocaleDateString()} ${selectedLibrarySession.scheduledTime}`
+                        : 'Not scheduled'}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <Typography variant="body2" color="text.secondary" gutterBottom>
+                      End Date & Time
+                    </Typography>
+                    <Typography variant="body1" fontWeight="medium">
+                      {selectedLibrarySession?.dueDateTime 
+                        ? new Date(selectedLibrarySession.dueDateTime).toLocaleString()
+                        : selectedLibrarySession?.dueDate && selectedLibrarySession?.dueTime
+                        ? `${new Date(selectedLibrarySession.dueDate).toLocaleDateString()} ${selectedLibrarySession.dueTime}`
+                        : 'Not set'}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <Typography variant="body2" color="text.secondary" gutterBottom>
+                      Status
+                    </Typography>
+                    <Chip
+                      label={selectedLibrarySession?.status || 'Draft'}
+                      size="small"
+                      sx={{
+                        backgroundColor: selectedLibrarySession?.status === 'published' ? '#114417DB' : 
+                                         selectedLibrarySession?.status === 'scheduled' ? '#3b82f6' :
+                                         selectedLibrarySession?.status === 'draft' ? '#f59e0b' : '#6b7280',
+                        color: 'white',
+                        fontWeight: 'medium'
+                      }}
+                    />
+                  </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <Typography variant="body2" color="text.secondary" gutterBottom>
+                      Created At
+                    </Typography>
+                    <Typography variant="body1" fontWeight="medium">
+                      {selectedLibrarySession?.createdAt 
+                        ? new Date(selectedLibrarySession.createdAt).toLocaleString()
+                        : 'Not available'}
+                    </Typography>
+                  </Grid>
+                </Grid>
+              </Card>
+
+              {/* Action Buttons */}
+              <Box display="flex" justifyContent="center" gap={2} flexWrap="wrap">
+                <Button
+                  variant="contained"
+                  startIcon={<VisibilityIcon />}
+                  onClick={() => setSessionViewMode('view')}
+                  sx={{
+                    backgroundColor: '#114417DB',
+                    '&:hover': { backgroundColor: '#0a2f0e' },
+                    minWidth: 150
+                  }}
+                >
+                  View
+                </Button>
+                {selectedLibrarySession?.status !== 'published' && (
+                  <>
+                    <Button
+                      variant="outlined"
+                      startIcon={<EditIcon />}
+                      onClick={() => {
+                        const startDateTime = selectedLibrarySession?.scheduledDateTime 
+                          ? new Date(selectedLibrarySession.scheduledDateTime)
+                          : null;
+                        const now = new Date();
+                        
+                        if (startDateTime && startDateTime <= now) {
+                          showToast('Cannot edit session after start date/time', 'error');
+                          return;
+                        }
+                        setSessionViewMode('edit');
+                      }}
+                      sx={{
+                        color: '#114417DB',
+                        borderColor: '#114417DB',
+                        minWidth: 150
+                      }}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      startIcon={<DeleteIcon />}
+                      onClick={() => {
+                        if (window.confirm('Are you sure you want to delete this session? This will soft delete the session.')) {
+                          handleSoftDeleteSession(selectedLibrarySession);
+                        }
+                      }}
+                      sx={{
+                        color: '#ef4444',
+                        borderColor: '#ef4444',
+                        minWidth: 150
+                      }}
+                    >
+                      Delete
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      startIcon={<ScheduleIcon />}
+                      onClick={() => setSessionViewMode('reschedule')}
+                      sx={{
+                        color: '#3b82f6',
+                        borderColor: '#3b82f6',
+                        minWidth: 150
+                      }}
+                    >
+                      Reschedule
+                    </Button>
+                  </>
+                )}
+              </Box>
+            </Box>
+          ) : sessionViewMode === 'view' ? (
+            <Box>
+              {/* View Mode - Show all stages in read-only */}
+              {renderSessionViewMode(selectedLibrarySession)}
+            </Box>
+          ) : sessionViewMode === 'edit' ? (
+            <Box>
+              {/* Edit Mode - Allow editing before start date */}
+              {renderSessionEditMode(selectedLibrarySession)}
+            </Box>
+          ) : sessionViewMode === 'reschedule' ? (
+            <Box>
+              {/* Reschedule Mode - Edit schedule only */}
+              {renderSessionRescheduleMode(selectedLibrarySession)}
+            </Box>
+          ) : null}
+        </DialogContent>
+        {sessionViewMode && (
+          <DialogActions>
+            <Button
+              onClick={() => {
+                setSessionViewMode(null);
+              }}
+            >
+              Back
+            </Button>
+            {sessionViewMode === 'edit' && (
+              <Button
+                variant="contained"
+                onClick={() => {
+                  handleSaveEditedSession(selectedLibrarySession);
+                }}
+                sx={{
+                  backgroundColor: '#114417DB',
+                  '&:hover': { backgroundColor: '#0a2f0e' }
+                }}
+              >
+                Save Changes
+              </Button>
+            )}
+            {sessionViewMode === 'reschedule' && (
+              <Button
+                variant="contained"
+                onClick={() => {
+                  if (!scheduleDate || !scheduleTime || !scheduleDueDate || !scheduleDueTime) {
+                    showToast('Please fill in all schedule fields', 'error');
+                    return;
+                  }
+                  
+                  const scheduledDateTime = new Date(`${scheduleDate}T${scheduleTime}`);
+                  const dueDateTime = new Date(`${scheduleDueDate}T${scheduleDueTime}`);
+                  
+                  if (dueDateTime <= scheduledDateTime) {
+                    showToast('Due date must be after the session start time.', 'error');
+                    return;
+                  }
+                  
+                  // Update session with new schedule
+                  const updatedSession = {
+                    ...selectedLibrarySession,
+                    scheduledDate: scheduleDate,
+                    scheduledTime: scheduleTime,
+                    scheduledDateTime: scheduledDateTime.toISOString(),
+                    dueDate: scheduleDueDate,
+                    dueTime: scheduleDueTime,
+                    dueDateTime: dueDateTime.toISOString()
+                  };
+                  
+                  // Update in appropriate list
+                  if (selectedLibrarySession.status === 'draft' || !selectedLibrarySession.status) {
+                    setDraftSessions(prev => prev.map(s => s.id === selectedLibrarySession.id ? updatedSession : s));
+                  } else if (selectedLibrarySession.status === 'published' || selectedLibrarySession.status === 'scheduled') {
+                    setPublishedSessions(prev => prev.map(s => s.id === selectedLibrarySession.id ? normalizePublishedSession(updatedSession) : s));
+                  }
+                  
+                  // Log activity
+                  addActivity(
+                    `Session rescheduled: ${selectedLibrarySession.title}`,
+                    'Admin',
+                    'scheduled',
+                    'session_scheduled'
+                  );
+                  
+                  showToast('Session rescheduled successfully!', 'success');
+                  setShowSessionDetailsDialog(false);
+                  setSelectedLibrarySession(null);
+                  setSessionViewMode(null);
+                }}
+                sx={{
+                  backgroundColor: '#114417DB',
+                  '&:hover': { backgroundColor: '#0a2f0e' }
+                }}
+              >
+                Save Schedule
+              </Button>
+            )}
+          </DialogActions>
+        )}
+      </Dialog>
     </Box>
     );
   };
@@ -11411,7 +13615,7 @@ Make the content professional, educational, and suitable for workplace training.
       { label: 'Content Creator', value: 'content-creator' },
       { label: 'Checkpoint Assessment', value: 'assessment' },
       { label: 'Certification', value: 'certification' },
-      { label: 'Preview Session', value: 'all-sessions' },
+      { label: 'Preview Session', value: 'preview' },
       { label: 'Schedule', value: 'schedule' }
     ];
 
@@ -11446,30 +13650,54 @@ Make the content professional, educational, and suitable for workplace training.
     }));
 
     // Custom Step Icon Component
-    const StepIcon = ({ active, completed, stepNumber }) => (
+    const StepIcon = ({ active, completed, stepNumber, stepValue }) => {
+      const isSkipped = skippedSteps.has(stepValue);
+      
+      // If step is skipped, always show skipped state regardless of completed/active
+      if (isSkipped) {
+        return (
       <Box
         sx={{
-          width: 36,
-          height: 36,
+              width: 36,
+              height: 36,
           borderRadius: '50%',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: completed ? '#114417DB' : active ? '#114417DB' : '#e5e7eb',
-          color: (completed || active) ? 'white' : '#9ca3af',
+              backgroundColor: '#fbbf24',
+              color: 'white',
           fontWeight: 'bold',
-          fontSize: '0.9rem',
+              fontSize: '0.9rem',
           transition: 'all 0.3s ease',
-          cursor: 'pointer',
-          '&:hover': {
-            transform: 'scale(1.1)',
-            boxShadow: '0 4px 12px rgba(17, 68, 23, 0.3)',
-          }
-        }}
-      >
-        {completed ? <CheckCircleIcon sx={{ fontSize: 20 }} /> : stepNumber}
+              cursor: 'default',
+            }}
+          >
+            <WarningAmberIcon sx={{ fontSize: 20 }} />
+          </Box>
+        );
+      }
+      
+      return (
+        <Box
+          sx={{
+            width: 36,
+            height: 36,
+            borderRadius: '50%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: completed ? '#114417DB' : active ? '#114417DB' : '#e5e7eb',
+            color: (completed || active) ? 'white' : '#9ca3af',
+            fontWeight: 'bold',
+            fontSize: '0.9rem',
+            transition: 'all 0.3s ease',
+            cursor: 'default',
+          }}
+        >
+          {completed ? <CheckCircleIcon sx={{ fontSize: 20 }} /> : stepNumber}
       </Box>
     );
+    };
 
     return (
       <Box>
@@ -11487,11 +13715,10 @@ Make the content professional, educational, and suitable for workplace training.
             {steps.map((step, index) => (
               <Step 
                 key={step.value}
-                onClick={() => handleManageSessionTabChange(step.value)}
                 sx={{ 
-                  cursor: 'pointer',
+                  cursor: 'default',
                   '& .MuiStepLabel-root': {
-                    cursor: 'pointer'
+                    cursor: 'default'
                   }
                 }}
               >
@@ -11500,21 +13727,22 @@ Make the content professional, educational, and suitable for workplace training.
                     <StepIcon 
                       {...props} 
                       stepNumber={index + 1}
-                      active={currentStepIndex === index}
-                      completed={currentStepIndex > index}
+                      stepValue={step.value}
+                      active={currentStepIndex === index && !skippedSteps.has(step.value)}
+                      completed={currentStepIndex > index && !skippedSteps.has(step.value)}
                     />
                   )}
                   sx={{
                     '& .MuiStepLabel-label': {
                       fontWeight: currentStepIndex === index ? 600 : 400,
-                      color: currentStepIndex === index ? '#114417DB' : currentStepIndex > index ? '#114417DB' : '#6b7280',
+                      color: skippedSteps.has(step.value) ? '#fbbf24' : (currentStepIndex === index ? '#114417DB' : currentStepIndex > index ? '#114417DB' : '#6b7280'),
                       fontSize: '0.8rem',
                       mt: 0.5,
                       '&.Mui-active': {
                         color: '#114417DB',
                       },
                       '&.Mui-completed': {
-                        color: '#114417DB',
+                        color: skippedSteps.has(step.value) ? '#fbbf24' : '#114417DB',
                       }
                     }
                   }}
@@ -11538,7 +13766,7 @@ Make the content professional, educational, and suitable for workplace training.
           existingQuizData={currentQuizData}
         /> :
          manageSessionTab === 'certification' ? renderCertificationTemplates() :
-         manageSessionTab === 'all-sessions' ? renderAllSessions() :
+         manageSessionTab === 'preview' ? renderAllSessions() :
          manageSessionTab === 'schedule' ? renderScheduleSessions() :
          (showContentCreator ? renderContentCreator() : renderCreateSession())}
       </Box>
@@ -11650,35 +13878,36 @@ Make the content professional, educational, and suitable for workplace training.
           </Box>
         </Box>
         <Divider sx={{ mt: 0, mb: 2, backgroundColor: '#e5e7eb' }} />
-        <List>
+        <List sx={{ overflow: 'visible' }}>
           {navigationItems.map((item) => (
             <ListItem 
               key={item.id} 
               component="div"
               onClick={() => {
                 // Handle clicks - manage-session is now a tab-based view
-                if (item.id !== 'settings') {
+                if (item.id !== 'employees') {
                 handleTabChange(item.id);
                 } else {
-                  // For settings, clicking the parent just opens/closes submenu
-                  if (showSettingsSubmenu) {
-                  setShowSettingsSubmenu(false);
+                  // For employees, clicking the parent just opens/closes submenu
+                  if (showEmployeesSubmenu) {
+                    setShowEmployeesSubmenu(false);
                   } else {
                     handleTabChange(item.id);
                 }
                 }
               }}
-              onMouseEnter={() => {
-                if (item.id === 'settings') {
-                  setShowSettingsSubmenu(true);
+              onMouseEnter={(e) => {
+                if (item.id === 'employees') {
+                  setEmployeesAnchorEl(e.currentTarget);
+                  setShowEmployeesSubmenu(true);
                 }
               }}
               onMouseLeave={() => {
-                // Don't close if mouse is moving to submenu
-                if (item.id === 'settings') {
+                if (item.id === 'employees') {
                   setTimeout(() => {
-                    if (!document.querySelector('[data-submenu="settings"]:hover')) {
-                  setShowSettingsSubmenu(false);
+                    if (!document.querySelector('[data-submenu="employees"]:hover')) {
+                      setShowEmployeesSubmenu(false);
+                      setEmployeesAnchorEl(null);
                 }
                   }, 100);
                 }
@@ -11689,6 +13918,7 @@ Make the content professional, educational, and suitable for workplace training.
                 mb: 1,
                 position: 'relative',
                 cursor: 'pointer',
+                overflow: 'visible',
                 '&:hover': {
                   backgroundColor: activeTab === item.id ? '#114417DB' : '#f0fdf4',
                 },
@@ -11704,32 +13934,54 @@ Make the content professional, educational, and suitable for workplace training.
                   fontWeight: activeTab === item.id ? 600 : 400
                 }}
               />
-              
-              {/* Settings Submenu */}
-              {item.id === 'settings' && showSettingsSubmenu && (
-                <Box
+            </ListItem>
+          ))}
+        </List>
+        
+        {/* Employee Management Submenu - Using Popper to escape sidebar overflow */}
+        <Popper
+          open={showEmployeesSubmenu}
+          anchorEl={employeesAnchorEl}
+          placement="right-start"
+          modifiers={[
+            {
+              name: 'offset',
+              options: {
+                offset: [8, 0],
+              },
+            },
+          ]}
+          sx={{
+            zIndex: 9999,
+            '&[data-popper-placement*="right"]': {
+              marginLeft: '8px !important',
+            },
+          }}
+          onMouseEnter={() => setShowEmployeesSubmenu(true)}
+          onMouseLeave={() => {
+            setShowEmployeesSubmenu(false);
+            setEmployeesAnchorEl(null);
+          }}
+        >
+          <Box
+            data-submenu="employees"
                   sx={{
-                    position: 'absolute',
-                    left: '100%',
-                    top: 0,
-                    ml: 1,
                     minWidth: 250,
                     backgroundColor: 'white',
                     borderRadius: 2,
                     boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
-                    zIndex: 1000,
                     border: '1px solid #e5e7eb',
+              mt: 0.5,
                   }}
-                  onMouseEnter={() => setShowSettingsSubmenu(true)}
-                  onMouseLeave={() => setShowSettingsSubmenu(false)}
                 >
                   <List sx={{ p: 1 }}>
                     <ListItem
                       button
                       onClick={() => {
-                        handleTabChange('settings');
-                        setSettingsSubTab('manage');
-                        setShowSettingsSubmenu(false);
+                  handleTabChange('employees');
+                  setEmployeesSubTab('manage');
+                  setShowEmployeesSubmenu(false);
+                  setEmployeesAnchorEl(null);
                       }}
                       sx={{
                         borderRadius: 1,
@@ -11747,9 +13999,10 @@ Make the content professional, educational, and suitable for workplace training.
                     <ListItem
                       button
                       onClick={() => {
-                        handleTabChange('settings');
-                        setSettingsSubTab('add');
-                        setShowSettingsSubmenu(false);
+                  handleTabChange('employees');
+                  setEmployeesSubTab('add');
+                  setShowEmployeesSubmenu(false);
+                  setEmployeesAnchorEl(null);
                       }}
                       sx={{
                         borderRadius: 1,
@@ -11765,12 +14018,7 @@ Make the content professional, educational, and suitable for workplace training.
                     </ListItem>
                   </List>
                 </Box>
-              )}
-
-
-            </ListItem>
-          ))}
-        </List>
+        </Popper>
       </Sidebar>
 
       <MainContent>
@@ -11811,8 +14059,8 @@ Make the content professional, educational, and suitable for workplace training.
               marginLeft: 'auto'
             }}>
               {/* Notifications */}
-              <IconButton 
-                onClick={handleNotificationClick}
+            <IconButton 
+              onClick={handleNotificationClick}
                 size="medium"
                 sx={{ 
                   color: '#374151 !important',
@@ -11828,9 +14076,27 @@ Make the content professional, educational, and suitable for workplace training.
                 </Badge>
               </IconButton>
               
-              {/* Profile */}
+              {/* Settings */}
               <IconButton
-                onClick={handleProfileClick}
+                onClick={(e) => {
+                  setSettingsAnchorEl(e.currentTarget);
+                }}
+                size="medium"
+                  sx={{ 
+                  color: '#374151 !important',
+                  width: 40,
+                  height: 40,
+                  '&:hover': {
+                    backgroundColor: 'rgba(0, 0, 0, 0.04)',
+                  }
+                }}
+              >
+                <SettingsIcon sx={{ fontSize: 24, color: '#374151 !important' }} />
+            </IconButton>
+              
+              {/* Profile */}
+            <IconButton
+              onClick={handleProfileClick}
                 size="medium"
                 sx={{
                   color: '#374151 !important',
@@ -11845,7 +14111,7 @@ Make the content professional, educational, and suitable for workplace training.
                 <Avatar sx={{ width: 32, height: 32, bgcolor: '#114417DB', color: 'white', fontSize: '0.875rem' }}>
                   {profileData.firstName ? profileData.firstName[0] : 'A'}
                 </Avatar>
-              </IconButton>
+            </IconButton>
             </Box>
           </Toolbar>
         </HeaderBar>
@@ -11868,9 +14134,30 @@ Make the content professional, educational, and suitable for workplace training.
          activeTab === 'approvals' ? <Approvals /> :
          activeTab === 'course-library' ? renderCourseLibrary() :
          activeTab === 'analytics' ? renderAnalytics() :
+         activeTab === 'employees' ? renderEmployees() :
          activeTab === 'settings' ? renderSettings() :
          renderOtherTabs()}
         </Box>
+
+        {/* Settings Menu */}
+        <Menu
+          anchorEl={settingsAnchorEl}
+          open={Boolean(settingsAnchorEl)}
+          onClose={() => setSettingsAnchorEl(null)}
+          PaperProps={{
+            sx: { minWidth: 200 }
+          }}
+        >
+          <MenuItem onClick={() => {
+            setSettingsAnchorEl(null);
+            setActiveTab('settings');
+          }}>
+            <ListItemIcon>
+              <LockIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>Manage Passwords</ListItemText>
+          </MenuItem>
+        </Menu>
 
         {/* Profile Menu */}
         <Menu
@@ -11886,12 +14173,6 @@ Make the content professional, educational, and suitable for workplace training.
               <AccountIcon fontSize="small" />
             </ListItemIcon>
             <ListItemText>View Profile</ListItemText>
-          </MenuItem>
-          <MenuItem onClick={handleManagePasswords}>
-            <ListItemIcon>
-              <LockIcon fontSize="small" />
-            </ListItemIcon>
-            <ListItemText>Manage Passwords</ListItemText>
           </MenuItem>
           <Divider />
           <MenuItem onClick={handleLogout}>
@@ -12251,6 +14532,58 @@ Make the content professional, educational, and suitable for workplace training.
           <DialogActions>
             <Button onClick={() => setShowAppSelector(false)}>
               Cancel
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* Cancel Confirmation Dialog */}
+        <Dialog
+          open={showCancelConfirmDialog}
+          onClose={handleDismissCancel}
+          maxWidth="sm"
+          fullWidth
+        >
+          <DialogTitle>
+            <Box display="flex" alignItems="center" gap={1}>
+              <WarningIcon sx={{ color: '#f59e0b' }} />
+              <Typography variant="h6" fontWeight="bold">
+                Cancel Session Creation?
+              </Typography>
+            </Box>
+          </DialogTitle>
+          <DialogContent>
+            <Typography variant="body1" color="text.secondary">
+              You have unsaved changes. Would you like to save your progress as a draft before canceling?
+            </Typography>
+          </DialogContent>
+          <DialogActions sx={{ p: 2, gap: 1 }}>
+            <Button
+              onClick={handleDismissCancel}
+              variant="outlined"
+              sx={{ color: '#6b7280' }}
+            >
+              Continue Editing
+            </Button>
+            <Button
+              onClick={() => {
+                // Cancel without saving
+                if (cancelCallback) {
+                  const callback = cancelCallback;
+                  setCancelCallback(null);
+                  callback();
+                }
+              }}
+              variant="outlined"
+              sx={{ color: '#ef4444', borderColor: '#ef4444' }}
+            >
+              Cancel Without Saving
+            </Button>
+            <Button
+              onClick={handleConfirmCancel}
+              variant="contained"
+              sx={{ backgroundColor: '#114417DB', '&:hover': { backgroundColor: '#0a2f0e' } }}
+            >
+              Save Draft & Cancel
             </Button>
           </DialogActions>
         </Dialog>

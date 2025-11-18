@@ -197,12 +197,14 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
   };
 
   const handleDeleteQuestion = (index) => {
-    if (questions.length > 1) {
       const newQuestions = questions.filter((_, i) => i !== index);
       setQuestions(newQuestions);
+    if (newQuestions.length > 0) {
       if (selectedQuestion >= newQuestions.length) {
         setSelectedQuestion(newQuestions.length - 1);
       }
+    } else {
+      setSelectedQuestion(0);
     }
   };
 
@@ -253,9 +255,7 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
     // Remove the "Add option" placeholder if it exists, then add new option
     const filteredOptions = currentOptions.filter(opt => !opt.includes('Add option'));
     newQuestions[questionIndex].options = [...filteredOptions, `Option ${filteredOptions.length + 1}`];
-    if (newQuestions[questionIndex].type === 'multiple-choice' && newQuestions[questionIndex].correctAnswer === undefined) {
-      newQuestions[questionIndex].correctAnswer = 0;
-    }
+    // Don't auto-set correct answer - keep it optional
     setQuestions(newQuestions);
   };
 
@@ -291,8 +291,21 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
 
   const handleCorrectAnswerSelect = (questionIndex, optionIndex) => {
     const newQuestions = [...questions];
+    // If clicking the same option that's already selected, clear it (make optional)
+    if (newQuestions[questionIndex].correctAnswer === optionIndex) {
+      newQuestions[questionIndex].correctAnswer = undefined;
+      newQuestions[questionIndex].correctAnswers = [];
+    } else {
     newQuestions[questionIndex].correctAnswer = optionIndex;
     newQuestions[questionIndex].correctAnswers = [optionIndex];
+    }
+    setQuestions(newQuestions);
+  };
+  
+  const handleClearCorrectAnswer = (questionIndex) => {
+    const newQuestions = [...questions];
+    newQuestions[questionIndex].correctAnswer = undefined;
+    newQuestions[questionIndex].correctAnswers = [];
     setQuestions(newQuestions);
   };
 
@@ -324,7 +337,8 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
     }
 
     if (type === 'multiple-choice') {
-      newQuestions[selectedQuestion].correctAnswer = 0;
+      // Don't auto-set correct answer - make it optional
+      newQuestions[selectedQuestion].correctAnswer = undefined;
       newQuestions[selectedQuestion].correctAnswers = [];
     } else if (type === 'checkbox') {
       if (!Array.isArray(newQuestions[selectedQuestion].correctAnswers)) {
@@ -396,6 +410,13 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
   };
 
   const handleSaveQuiz = () => {
+    // Validate required fields if there are questions
+    if (questions.length > 0) {
+      if (!assessmentInfo.quizTitle || !assessmentInfo.passingScore || !assessmentInfo.maxAttempts) {
+        alert('Please fill in all required fields: Quiz Title, Passing Score, and Max Attempts');
+        return;
+      }
+    }
     const quizData = buildQuizData();
     onSave(quizData);
   };
@@ -485,6 +506,9 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
                 fullWidth
                 placeholder="Enter quiz title"
                 variant="outlined"
+                required={questions.length > 0}
+                error={questions.length > 0 && !assessmentInfo.quizTitle}
+                helperText={questions.length > 0 && !assessmentInfo.quizTitle ? 'Quiz title is required when questions are present' : ''}
               />
             </Grid>
               
@@ -498,6 +522,9 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
                 placeholder="Enter passing score (e.g., 70)"
                 variant="outlined"
                 inputProps={{ min: 0, max: 100 }}
+                required={questions.length > 0}
+                error={questions.length > 0 && !assessmentInfo.passingScore}
+                helperText={questions.length > 0 && !assessmentInfo.passingScore ? 'Passing score is required when questions are present' : ''}
               />
             </Grid>
               
@@ -511,6 +538,9 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
                 placeholder="Enter maximum attempts (e.g., 3)"
                 variant="outlined"
                 inputProps={{ min: 1 }}
+                required={questions.length > 0}
+                error={questions.length > 0 && !assessmentInfo.maxAttempts}
+                helperText={questions.length > 0 && !assessmentInfo.maxAttempts ? 'Max attempts is required when questions are present' : ''}
               />
             </Grid>
               
@@ -538,7 +568,7 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
         {/* Create Questions Section - Full Width */}
           <Card sx={{ width: '100%' }}>
             {/* Tabs */}
-            <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+            <Box sx={{ borderBottom: 1, borderColor: 'divider', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Tabs 
                 value={activeTab} 
                 onChange={(e, newValue) => setActiveTab(newValue)}
@@ -561,6 +591,23 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
                 <Tab label="Create Questions" />
                 <Tab label="Bulk Upload Quiz" />
               </Tabs>
+              {/* Preview Button - Top Right */}
+              {questions.length > 0 && (
+                <Button 
+                  variant="text" 
+                  startIcon={<VisibilityIcon />}
+                  onClick={() => setShowPreview(true)}
+                  sx={{ 
+                    color: '#114417DB',
+                    mr: 2,
+                    px: 3,
+                    py: 1,
+                    '&:hover': { backgroundColor: 'transparent', textDecoration: 'underline' }
+                  }}
+                >
+                  Preview
+                </Button>
+              )}
             </Box>
 
             {/* Tab Content */}
@@ -645,13 +692,20 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
 
               {/* Multiple Choice */}
               {question.type === 'multiple-choice' && (
+                <Box>
                 <RadioGroup
                   value={
                     question.correctAnswer !== undefined && question.correctAnswer !== null
                       ? String(question.correctAnswer)
                       : ''
                   }
-                  onChange={(_, value) => handleCorrectAnswerSelect(index, parseInt(value, 10))}
+                    onChange={(_, value) => {
+                      if (value === '') {
+                        handleClearCorrectAnswer(index);
+                      } else {
+                        handleCorrectAnswerSelect(index, parseInt(value, 10));
+                      }
+                    }}
                 >
                   {question.options.map((option, optIndex) => (
                     <Box
@@ -690,7 +744,8 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
                       </IconButton>
                     </Box>
                   ))}
-                  <Box display="flex" alignItems="center" ml={4} mt={1}>
+                  </RadioGroup>
+                  <Box display="flex" alignItems="center" ml={4} mt={1} gap={2}>
                     <Button
                       startIcon={<AddIcon />}
                       onClick={() => handleAddOption(index)}
@@ -704,8 +759,24 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
                     >
                       Add another option
                     </Button>
+                    {question.correctAnswer !== undefined && question.correctAnswer !== null && (
+                      <Button
+                        size="small"
+                        onClick={() => handleClearCorrectAnswer(index)}
+                        sx={{
+                          textTransform: 'none',
+                          color: '#6b7280',
+                          fontSize: '0.75rem',
+                          '&:hover': {
+                            backgroundColor: 'rgba(107, 114, 128, 0.08)'
+                          }
+                        }}
+                      >
+                        Clear correct answer
+                      </Button>
+                    )}
                   </Box>
-                </RadioGroup>
+                </Box>
               )}
 
               {/* Checkboxes */}
@@ -828,23 +899,6 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
             Add question
           </Button>
           <div ref={questionsEndRef} />
-
-                    {/* Preview Button */}
-                    <Box display="flex" justifyContent="center" mt={3}>
-                      <Button 
-                        variant="contained" 
-                        startIcon={<VisibilityIcon />}
-                        onClick={() => setShowPreview(true)}
-                        sx={{ 
-                          backgroundColor: '#114417DB',
-                          px: 4,
-                          py: 1.5,
-                          '&:hover': { backgroundColor: '#0a2f0e' }
-                        }}
-                      >
-                        Preview
-                      </Button>
-                    </Box>
                 </Box>
               )}
 
@@ -1217,7 +1271,16 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
           <Button
             variant="contained"
             endIcon={<ArrowForwardIcon />}
-            onClick={handleSaveQuiz}
+            onClick={() => {
+              // Validate required fields if there are questions
+              if (questions.length > 0) {
+                if (!assessmentInfo.quizTitle || !assessmentInfo.passingScore || !assessmentInfo.maxAttempts) {
+                  alert('Please fill in all required fields: Quiz Title, Passing Score, and Max Attempts');
+                  return;
+                }
+              }
+              handleSaveQuiz();
+            }}
             sx={{
               backgroundColor: '#114417DB',
               '&:hover': {

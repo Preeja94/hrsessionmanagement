@@ -24,11 +24,20 @@ import {
   Quiz as QuizIcon
 } from '@mui/icons-material';
 
-const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
+const KnowledgeAssessment = ({ session, onComplete, onBack, isViewOnly = false }) => {
   const [currentQuestion, setCurrentQuestion] = useState(0);
   const [answers, setAnswers] = useState({});
   const [quizStarted, setQuizStarted] = useState(false);
   const [showResults, setShowResults] = useState(false);
+  
+  // If view-only, show results immediately
+  React.useEffect(() => {
+    if (isViewOnly && session?.assessmentResults) {
+      setShowResults(true);
+      setQuizStarted(true);
+      setAnswers(session.assessmentResults.answers || {});
+    }
+  }, [isViewOnly, session]);
 
   const defaultQuestions = [
     {
@@ -284,32 +293,28 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
   if (!quizStarted) {
     return (
       <Box p={3}>
-        <Box mb={4}>
-          <Typography variant="h4" fontWeight="bold" gutterBottom>
-            {checkpointTitle}
-          </Typography>
-          <Typography variant="body1" color="text.secondary">
-            {checkpointDescription}
-          </Typography>
+        {/* Header with Back Button */}
+        <Box mb={3} display="flex" justifyContent="space-between" alignItems="flex-start">
           {onBack && (
             <Button
               startIcon={<ArrowBackIcon />}
               onClick={onBack}
-              sx={{ mt: 2 }}
+              sx={{ color: '#114417DB', '&:hover': { backgroundColor: '#f0fdf4' } }}
             >
               Back to My Sessions
             </Button>
           )}
+          <Box flex={1} />
         </Box>
 
-        <Card sx={{ p: 4, textAlign: 'center' }}>
+        <Card sx={{ p: 4, textAlign: 'center', backgroundColor: 'white', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
           <Box display="flex" justifyContent="center" mb={3}>
             <Box
               sx={{
                 width: 80,
                 height: 80,
                 borderRadius: '50%',
-                backgroundColor: '#3b82f6',
+                backgroundColor: '#114417DB',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -320,8 +325,8 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
             </Box>
           </Box>
           
-          <Typography variant="h5" fontWeight="bold" gutterBottom>
-            Ready for Your Checkpoint?
+          <Typography variant="h5" fontWeight="bold" gutterBottom sx={{ color: '#1f2937' }}>
+            Ready for Your Assessment?
           </Typography>
           <Typography variant="body1" color="text.secondary" mb={3}>
             This checkpoint assessment is tailored for the "{session?.title || 'current'}" session.
@@ -351,8 +356,8 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
             size="large"
             onClick={handleStartQuiz}
             sx={{ 
-              backgroundColor: '#3b82f6', 
-              '&:hover': { backgroundColor: '#2563eb' },
+              backgroundColor: '#114417DB', 
+              '&:hover': { backgroundColor: '#0a2f0e' },
               px: 4,
               py: 1.5
             }}
@@ -379,70 +384,71 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
     const meetsPassingScore = passingScoreNumeric !== null ? score >= passingScoreNumeric : true;
     const isPassing = meetsPassingScore;
 
+    // Check if certificate is configured
+    const hasCertificate = session?.certificate && (session.certificate.template || session.certificate.id);
+
     return (
       <Box p={3}>
-        <Box mb={4}>
-          <Typography variant="h4" fontWeight="bold" gutterBottom>
-            Checkpoint Assessment Results
-          </Typography>
+        {/* Header with Back Button */}
+        <Box mb={3} display="flex" justifyContent="space-between" alignItems="flex-start">
           {onBack && (
             <Button
               startIcon={<ArrowBackIcon />}
               onClick={onBack}
-              sx={{ mt: 2 }}
+              sx={{ color: '#114417DB', '&:hover': { backgroundColor: '#f0fdf4' } }}
             >
               Back to My Sessions
             </Button>
           )}
+          <Box flex={1} />
         </Box>
 
-        <Card sx={{ p: 4, textAlign: 'center', backgroundColor: '#f0f9ff' }}>
-          <Box display="flex" justifyContent="center" mb={3}>
+        {/* Question Divisions Bar - Show 100% complete */}
+        <Box mb={4}>
+          <Box display="flex" gap={1} alignItems="center">
+            {questions.map((q, index) => (
             <Box
+                key={q.id || index}
               sx={{
-                width: 100,
-                height: 100,
-                borderRadius: '50%',
-                backgroundColor: getScoreColor(score),
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: 'white'
-              }}
-            >
-              <Typography variant="h3" fontWeight="bold">
-                {score}%
+                  flex: 1,
+                  height: 8,
+                  borderRadius: 2,
+                  backgroundColor: '#114417DB',
+                  transition: 'all 0.3s ease',
+                  opacity: 1
+                }}
+              />
+            ))}
+          </Box>
+          <Box display="flex" justifyContent="space-between" alignItems="center" mt={1}>
+            <Typography variant="body2" color="text.secondary">
+              Assessment Complete
+            </Typography>
+            <Typography variant="body2" fontWeight="bold" sx={{ color: '#114417DB' }}>
+              100%
               </Typography>
             </Box>
           </Box>
           
+        <Card sx={{ p: 4, textAlign: 'center', backgroundColor: 'white', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
           {isPassing ? (
             <>
-              <Typography variant="h4" fontWeight="bold" gutterBottom sx={{ color: '#059669' }}>
+              <Typography variant="h4" fontWeight="bold" gutterBottom sx={{ color: '#114417DB' }}>
                 Congratulations!
               </Typography>
-              <Typography variant="h6" fontWeight="bold" gutterBottom>
+              <Typography variant="h6" fontWeight="bold" gutterBottom sx={{ color: '#1f2937' }}>
                 You scored {score}% on this assessment
               </Typography>
               <Typography variant="body1" color="text.secondary" mb={3}>
                 {getScoreMessage(score)}
               </Typography>
-              <Alert severity="success" sx={{ mb: 3, textAlign: 'left' }}>
-                You have successfully completed the session and met the passing criteria.
-                {criteriaValue && (
-                  <>
-                    <br />
-                    <strong>Criteria:</strong> {criteriaValue}
-                  </>
-                )}
-              </Alert>
             </>
           ) : (
             <>
               <Typography variant="h4" fontWeight="bold" gutterBottom sx={{ color: '#ef4444' }}>
                 Keep Going!
               </Typography>
-              <Typography variant="h6" fontWeight="bold" gutterBottom>
+              <Typography variant="h6" fontWeight="bold" gutterBottom sx={{ color: '#1f2937' }}>
                 You scored {score}% on this assessment
               </Typography>
               <Typography variant="body1" color="text.secondary" mb={3}>
@@ -471,7 +477,7 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
           <Grid container spacing={3} mb={4}>
             <Grid item xs={6}>
               <Box textAlign="center">
-                <Typography variant="h4" fontWeight="bold" color="#114417DB">
+                <Typography variant="h4" fontWeight="bold" sx={{ color: '#114417DB' }}>
                   {correctAnswersCount}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
@@ -481,7 +487,7 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
             </Grid>
             <Grid item xs={6}>
               <Box textAlign="center">
-                <Typography variant="h4" fontWeight="bold" color="#ef4444">
+                <Typography variant="h4" fontWeight="bold" sx={{ color: '#ef4444' }}>
                   {incorrectAnswers}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
@@ -492,20 +498,37 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
           </Grid>
 
           {isPassing ? (
+            hasCertificate ? (
             <Button
               variant="contained"
               size="large"
               startIcon={<CheckCircleIcon />}
               onClick={() => onComplete(score)}
               sx={{ 
-                backgroundColor: '#114417DB', 
-                '&:hover': { backgroundColor: '#0a2f0e' },
+                  backgroundColor: '#114417DB', 
+                  '&:hover': { backgroundColor: '#0a2f0e' },
                 px: 4,
                 py: 1.5
               }}
             >
               Get Certificate
             </Button>
+            ) : (
+              <Button
+                variant="contained"
+                size="large"
+                startIcon={<CheckCircleIcon />}
+                onClick={() => onComplete(score)}
+                sx={{ 
+                  backgroundColor: '#114417DB', 
+                  '&:hover': { backgroundColor: '#0a2f0e' },
+                  px: 4,
+                  py: 1.5
+                }}
+              >
+                Continue
+              </Button>
+            )
           ) : (
             <Button
               variant="contained"
@@ -513,8 +536,8 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
               startIcon={<ArrowBackIcon />}
               onClick={handleStartQuiz}
               sx={{ 
-                backgroundColor: '#3b82f6', 
-                '&:hover': { backgroundColor: '#2563eb' },
+                backgroundColor: '#114417DB', 
+                '&:hover': { backgroundColor: '#0a2f0e' },
                 px: 4,
                 py: 1.5
               }}
@@ -529,47 +552,64 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
 
   const currentQ = questions[currentQuestion];
 
+  // Calculate completed questions - only mark as complete when answered and moved past
+  // Only show 100% after final submit
+  const isFinalQuestion = currentQuestion === totalQuestions - 1;
+  const showFullProgress = false; // Never show 100% until after submit
+
   return (
     <Box p={3}>
-      {/* Header */}
-      <Box mb={4}>
-        <Typography variant="h4" fontWeight="bold" gutterBottom>
-          {checkpointTitle}
-        </Typography>
-        <Typography variant="body1" color="text.secondary">
-          Question {currentQuestion + 1} of {totalQuestions}
-        </Typography>
+      {/* Header with Back Button */}
+      <Box mb={3} display="flex" justifyContent="space-between" alignItems="flex-start">
         {onBack && (
           <Button
             startIcon={<ArrowBackIcon />}
             onClick={onBack}
-            sx={{ mt: 2 }}
+            sx={{ color: '#114417DB', '&:hover': { backgroundColor: '#f0fdf4' } }}
           >
             Back to My Sessions
           </Button>
         )}
+        <Box flex={1} />
       </Box>
 
-      {/* Progress */}
+      {/* Question Divisions Bar */}
       <Box mb={4}>
-        <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-          <Typography variant="body2" fontWeight="medium">
-            Progress
-          </Typography>
-          <Typography variant="body2" fontWeight="bold">
-            {Math.round(progress)}%
+        <Box display="flex" gap={1} alignItems="center">
+          {questions.map((q, index) => {
+            const isCompleted = index < currentQuestion; // Questions before current are completed
+            const isCurrent = index === currentQuestion;
+            const isAnswered = answers[q.id] !== undefined && answers[q.id] !== null;
+            
+            return (
+              <Box
+                key={q.id || index}
+                sx={{
+                  flex: 1,
+                  height: 8,
+                  borderRadius: 2,
+                  backgroundColor: isCompleted || (isCurrent && isAnswered)
+                    ? '#114417DB'
+                    : isCurrent
+                    ? '#114417DB'
+                    : '#e5e7eb',
+                  transition: 'all 0.3s ease',
+                  opacity: isCurrent ? 1 : isCompleted ? 0.8 : 0.5
+                }}
+              />
+            );
+          })}
+        </Box>
+        <Box display="flex" justifyContent="space-between" alignItems="center" mt={1}>
+          <Typography variant="body2" color="text.secondary">
+            Question {currentQuestion + 1} of {totalQuestions}
           </Typography>
         </Box>
-        <LinearProgress
-          variant="determinate"
-          value={progress}
-          sx={{ height: 8, borderRadius: 4 }}
-        />
       </Box>
 
       {/* Question */}
-      <Card sx={{ p: 4, mb: 4 }}>
-        <Typography variant="h6" fontWeight="bold" gutterBottom>
+      <Card sx={{ p: 4, mb: 4, backgroundColor: 'white', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+        <Typography variant="h6" fontWeight="bold" gutterBottom sx={{ color: '#1f2937' }}>
           {currentQ.question}
         </Typography>
 
@@ -582,7 +622,8 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
                   control={
                     <Checkbox
                       checked={Array.isArray(answers[currentQ.id]) ? answers[currentQ.id].includes(index) : false}
-                      onChange={() => handleMultiAnswerToggle(currentQ.id, index)}
+                      onChange={() => !isViewOnly && handleMultiAnswerToggle(currentQ.id, index)}
+                      disabled={isViewOnly}
                     />
                   }
                   label={option}
@@ -597,13 +638,13 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
                   ? String(answers[currentQ.id])
                   : ''
               }
-              onChange={(e) => handleSingleAnswerChange(currentQ.id, parseInt(e.target.value, 10))}
+              onChange={(e) => !isViewOnly && handleSingleAnswerChange(currentQ.id, parseInt(e.target.value, 10))}
             >
               {currentQ.options.map((option, index) => (
                 <FormControlLabel
                   key={index}
                   value={String(index)}
-                  control={<Radio />}
+                  control={<Radio disabled={isViewOnly} />}
                   label={option}
                   sx={{ mb: 1 }}
                 />
@@ -613,23 +654,28 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
         </FormControl>
       </Card>
 
-      {/* Navigation */}
-      <Box display="flex" justifyContent="space-between" alignItems="center">
+      {/* Navigation - Centered */}
+      {!isViewOnly && (
+        <Box display="flex" justifyContent="center" alignItems="center" gap={2}>
         <Button
           variant="outlined"
-          startIcon={<ArrowBackIcon />}
-          onClick={handlePrevious}
-          disabled={currentQuestion === 0}
+            onClick={() => {
+              // Skip assessment - mark as complete and redirect
+              if (onComplete) {
+                onComplete(0); // Pass 0 score for skipped
+              }
+            }}
+            sx={{ 
+              color: '#6b7280',
+              borderColor: '#e5e7eb',
+              '&:hover': { borderColor: '#d1d5db', backgroundColor: '#f9fafb' }
+            }}
         >
-          Previous
+            Skip
         </Button>
-
-        <Box display="flex" gap={2}>
-          <Typography variant="body2" color="text.secondary">
-            {currentQuestion + 1} of {totalQuestions}
-          </Typography>
           <Button
             variant="contained"
+            size="large"
             endIcon={currentQuestion === totalQuestions - 1 ? <CheckCircleIcon /> : <ArrowForwardIcon />}
             onClick={handleNext}
             disabled={(() => {
@@ -640,14 +686,16 @@ const KnowledgeAssessment = ({ session, onComplete, onBack }) => {
               return currentAnswer === undefined || currentAnswer === null;
             })()}
             sx={{ 
-              backgroundColor: '#3b82f6', 
-              '&:hover': { backgroundColor: '#2563eb' }
+              backgroundColor: '#114417DB', 
+              '&:hover': { backgroundColor: '#0a2f0e' },
+              px: 4,
+              py: 1.5
             }}
           >
             {currentQuestion === totalQuestions - 1 ? 'Submit' : 'Next'}
           </Button>
         </Box>
-      </Box>
+      )}
     </Box>
   );
 };
