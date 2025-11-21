@@ -19,7 +19,11 @@ import {
   DialogContent,
   DialogActions,
   Alert,
-  Paper
+  Paper,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem
 } from '@mui/material';
 import {
   CheckCircle as CheckCircleIcon,
@@ -35,34 +39,18 @@ import {
 } from '@mui/icons-material';
 import { styled } from '@mui/material/styles';
 import { useSessionRequests } from '../contexts/SessionRequestContext';
+import { sessionAPI } from '../utils/api';
 
 const APPROVAL_WINDOW_DAYS = 5;
 
-const unlockSessionForEmployee = (request) => {
+const unlockSessionForEmployee = async (request) => {
   try {
     console.log('Unlocking session for employee:', request);
-    const stored = localStorage.getItem('published_sessions');
-    if (!stored) {
-      console.error('No published sessions found in localStorage');
-      return;
-    }
-    const sessions = JSON.parse(stored);
-    console.log('Total sessions in storage:', sessions.length);
     
-    // Try multiple matching strategies
-    const targetIndex = sessions.findIndex(session => {
-      const idMatch = String(session.id) === String(request.sessionId);
-      const titleMatch = session.title === request.sessionName || 
-                        session.title?.toLowerCase() === request.sessionName?.toLowerCase();
-      return idMatch || titleMatch;
-    });
-    
-    if (targetIndex === -1) {
-      console.error('Session not found:', {
-        requestedId: request.sessionId,
-        requestedName: request.sessionName,
-        availableSessions: sessions.map(s => ({ id: s.id, title: s.title }))
-      });
+    // Get session from API
+    const session = await sessionAPI.getById(request.session || request.sessionId);
+    if (!session) {
+      console.error('Session not found:', request.sessionId);
       return;
     }
 
@@ -70,50 +58,26 @@ const unlockSessionForEmployee = (request) => {
     const expiration = new Date(now);
     expiration.setDate(expiration.getDate() + APPROVAL_WINDOW_DAYS);
 
-    const currentSession = sessions[targetIndex];
-    console.log('Found session to unlock:', currentSession.title, 'Current status:', currentSession.status, 'isLocked:', currentSession.isLocked);
-    
-    const isCompleted = currentSession.status === 'completed' || 
-                       currentSession.completed === true ||
-                       (currentSession.completedAt !== undefined && currentSession.completedAt !== null);
+    const isCompleted = session.status === 'completed' || 
+                       (session.completedAt !== undefined && session.completedAt !== null);
 
-    // Determine the new status - if not completed, set to 'in-progress' or 'scheduled'
+    // Determine the new status
     let newStatus = 'in-progress';
     if (isCompleted) {
       newStatus = 'completed';
-    } else if (currentSession.scheduledDateTime) {
+    } else if (session.scheduled_datetime) {
       newStatus = 'scheduled';
     }
 
-    // Update session with unlocked state
-    const updatedSession = {
-      ...currentSession,
-      isLocked: false,  // Explicitly unlock
-      status: newStatus, // Set appropriate status
-      approvalExpiresAt: expiration.toISOString(),
-      lastApprovalDate: now.toISOString(),
-      lockedAt: null,  // Clear locked timestamp
-      completed: isCompleted  // Ensure completed flag is correct
-    };
-
-    sessions[targetIndex] = updatedSession;
-    console.log('Updated session:', {
-      title: updatedSession.title,
-      isLocked: updatedSession.isLocked,
-      status: updatedSession.status,
-      approvalExpiresAt: updatedSession.approvalExpiresAt
+    // Update session via API
+    await sessionAPI.update(session.id, {
+      ...session,
+      status: newStatus,
+      // Note: approvalExpiresAt and other fields would need to be stored in session model
+      // For now, we update the status
     });
-
-    localStorage.setItem('published_sessions', JSON.stringify(sessions));
     
-    // Dispatch event to notify listeners
-    window.dispatchEvent(new Event('published-sessions-updated'));
-    
-    // Also manually trigger a storage event simulation for same-tab communication
-    // Since StorageEvent can only be fired by browser, we trigger a custom event
-    // The EmployeeDashboard should pick this up via the event listener
-    
-    console.log('Session unlocked successfully and event dispatched');
+    console.log('Session unlocked successfully via API');
   } catch (error) {
     console.error('Failed to unlock session for employee', error);
   }
@@ -244,44 +208,54 @@ const Approvals = () => {
       {/* Filters and Search */}
       <Card sx={{ p: 3, mb: 4 }}>
         <Grid container spacing={3} alignItems="center">
-          <Grid item xs={12} md={6}>
+          <Grid item xs={12} md={5}>
             <TextField
               fullWidth
+              label="Search Requests"
               placeholder="Search by employee name or session..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
+              InputLabelProps={{
+                shrink: true
+              }}
               InputProps={{
                 startAdornment: <SearchIcon sx={{ mr: 1, color: 'text.secondary' }} />
               }}
             />
           </Grid>
           <Grid item xs={12} md={3}>
-            <TextField
-              select
-              fullWidth
-              label="Filter by Status"
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              SelectProps={{ native: true }}
-            >
-              <option value="all">All Requests</option>
-              <option value="pending">Pending</option>
-              <option value="locked">Locked</option>
-              <option value="approved">Approved</option>
-              <option value="denied">Denied</option>
-            </TextField>
+            <FormControl fullWidth>
+              <InputLabel shrink={true}>Filter by Status</InputLabel>
+              <Select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                label="Filter by Status"
+                displayEmpty
+              >
+                <MenuItem value="all">
+                  <em>All Requests</em>
+                </MenuItem>
+                <MenuItem value="pending">Pending</MenuItem>
+                <MenuItem value="locked">Locked</MenuItem>
+                <MenuItem value="approved">Approved</MenuItem>
+                <MenuItem value="denied">Denied</MenuItem>
+              </Select>
+            </FormControl>
           </Grid>
           <Grid item xs={12} md={3}>
+            {/* Spacer for consistent layout */}
+          </Grid>
+          <Grid item xs={12} md={1}>
             <Button
               variant="outlined"
-              startIcon={<RefreshIcon />}
-              fullWidth
+              size="small"
               onClick={() => {
                 setSearchTerm('');
                 setStatusFilter('all');
               }}
+              sx={{ height: '56px', width: '100%', minWidth: 'auto' }}
             >
-              Reset Filters
+              Clear
             </Button>
           </Grid>
         </Grid>

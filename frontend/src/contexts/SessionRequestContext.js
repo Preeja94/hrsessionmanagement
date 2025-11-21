@@ -1,69 +1,42 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
+import { sessionRequestAPI } from '../utils/api';
 
 const SessionRequestContext = createContext();
 
-// Load from localStorage
-const loadSessionRequests = () => {
-  try {
-    const saved = localStorage.getItem('sessionRequests');
-    if (saved) {
-      return JSON.parse(saved);
-    }
-  } catch (error) {
-    console.error('Error loading session requests from localStorage:', error);
-  }
-  
-  // Default data
-  return [
-    {
-      id: 1,
-      employeeName: "John Smith",
-      sessionName: "Mental Health & Wellbeing",
-      attemptsUsed: 3,
-      maxAttempts: 3,
-      lockedDate: "Dec 16, 2024",
-      status: "locked",
-      reason: "I was having technical difficulties during my quiz attempts and couldn't complete properly. I would appreciate another chance to demonstrate my understanding of the material.",
-      employeeEmail: "john.smith@company.com"
-    },
-    {
-      id: 2,
-      employeeName: "Lisa Wilson",
-      sessionName: "Leadership Development",
-      attemptsUsed: 5,
-      maxAttempts: 5,
-      lockedDate: "Dec 15, 2024",
-      status: "locked",
-      reason: "I need additional study time and would benefit from one more attempt to pass this important leadership training.",
-      employeeEmail: "lisa.wilson@company.com"
-    },
-    {
-      id: 3,
-      employeeName: "Mike Johnson",
-      sessionName: "React Development Fundamentals",
-      attemptsUsed: 2,
-      maxAttempts: 3,
-      lockedDate: "Dec 17, 2024",
-      status: "pending",
-      reason: "I missed the original session due to a family emergency and would like to request access to complete this important training.",
-      employeeEmail: "mike.johnson@company.com"
-    },
-    {
-      id: 4,
-      employeeName: "Sarah Davis",
-      sessionName: "Cybersecurity Fundamentals",
-      attemptsUsed: 4,
-      maxAttempts: 5,
-      lockedDate: "Dec 14, 2024",
-      status: "pending",
-      reason: "I was having internet connectivity issues during my attempts and couldn't complete the assessment properly. Please allow me one more attempt.",
-      employeeEmail: "sarah.davis@company.com"
-    }
-  ];
-};
-
 export const SessionRequestProvider = ({ children }) => {
-  const [sessionRequests, setSessionRequests] = useState(loadSessionRequests);
+  const [sessionRequests, setSessionRequests] = useState([]);
+  const [loading, setLoading] = useState(true);
+  
+  // Load session requests from API
+  useEffect(() => {
+    const loadSessionRequests = async () => {
+      try {
+        setLoading(true);
+        const requests = await sessionRequestAPI.getAll();
+        // Transform API data to match expected format
+        const transformed = requests.map(req => ({
+          id: req.id,
+          employeeName: req.employee_name || '',
+          sessionName: req.session_name || '',
+          attemptsUsed: req.attempts_used || 0,
+          maxAttempts: req.max_attempts || 3,
+          lockedDate: req.locked_date ? new Date(req.locked_date).toLocaleDateString() : null,
+          status: req.status || 'pending',
+          reason: req.reason || '',
+          employeeEmail: req.employee_email || '',
+          employee: req.employee,
+          session: req.session
+        }));
+        setSessionRequests(transformed);
+      } catch (error) {
+        console.error('Error loading session requests from API:', error);
+        setSessionRequests([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadSessionRequests();
+  }, []);
   
   // Employee performance tracking
   const [employeePerformance, setEmployeePerformance] = useState([
@@ -124,52 +97,63 @@ export const SessionRequestProvider = ({ children }) => {
     }
   ]);
 
-  console.log('SessionRequestProvider initialized with:', sessionRequests.length, 'requests');
-
-  // Save to localStorage whenever sessionRequests changes
-  useEffect(() => {
+  const addSessionRequest = async (request) => {
     try {
-      localStorage.setItem('sessionRequests', JSON.stringify(sessionRequests));
-      console.log('Saved session requests to localStorage:', sessionRequests);
+      const newRequest = await sessionRequestAPI.create({
+        employee: request.employee,
+        session: request.session,
+        reason: request.reason || '',
+        status: request.status || 'pending',
+        attempts_used: request.attemptsUsed || 0,
+        max_attempts: request.maxAttempts || 3
+      });
+      
+      // Transform and add to local state
+      const transformed = {
+        id: newRequest.id,
+        employeeName: newRequest.employee_name || '',
+        sessionName: newRequest.session_name || '',
+        attemptsUsed: newRequest.attempts_used || 0,
+        maxAttempts: newRequest.max_attempts || 3,
+        lockedDate: newRequest.locked_date ? new Date(newRequest.locked_date).toLocaleDateString() : null,
+        status: newRequest.status || 'pending',
+        reason: newRequest.reason || '',
+        employeeEmail: newRequest.employee_email || '',
+        employee: newRequest.employee,
+        session: newRequest.session
+      };
+      setSessionRequests(prev => [transformed, ...prev]);
     } catch (error) {
-      console.error('Error saving session requests to localStorage:', error);
+      console.error('Error adding session request:', error);
+      throw error;
     }
-  }, [sessionRequests]);
-
-  // Listen for storage changes (cross-tab communication)
-  useEffect(() => {
-    const handleStorageChange = (e) => {
-      if (e.key === 'sessionRequests' && e.newValue) {
-        try {
-          const newRequests = JSON.parse(e.newValue);
-          setSessionRequests(newRequests);
-          console.log('Received session requests update from another tab:', newRequests);
-        } catch (error) {
-          console.error('Error parsing session requests from storage:', error);
-        }
-      }
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
-  }, []);
-
-  const addSessionRequest = (request) => {
-    const newRequest = {
-      ...request,
-      id: Date.now(),
-      status: request.status || 'pending'
-    };
-    console.log('Adding new session request:', newRequest);
-    setSessionRequests(prev => [newRequest, ...prev]);
   };
 
-  const updateRequestStatus = (requestId, newStatus, extra = {}) => {
-    setSessionRequests(prev =>
-      prev.map(req =>
-        req.id === requestId ? { ...req, status: newStatus, ...extra } : req
-      )
-    );
+  const updateRequestStatus = async (requestId, newStatus, extra = {}) => {
+    try {
+      const request = sessionRequests.find(req => req.id === requestId);
+      if (!request) return;
+      
+      const updated = await sessionRequestAPI.update(requestId, {
+        status: newStatus,
+        ...extra
+      });
+      
+      // Update local state
+      setSessionRequests(prev =>
+        prev.map(req =>
+          req.id === requestId ? {
+            ...req,
+            status: newStatus,
+            ...extra,
+            lockedDate: updated.locked_date ? new Date(updated.locked_date).toLocaleDateString() : req.lockedDate
+          } : req
+        )
+      );
+    } catch (error) {
+      console.error('Error updating session request:', error);
+      throw error;
+    }
   };
 
   // Update employee performance when they complete sessions
@@ -221,11 +205,33 @@ export const SessionRequestProvider = ({ children }) => {
   return (
     <SessionRequestContext.Provider value={{ 
       sessionRequests, 
+      loading,
       employeePerformance,
       addSessionRequest, 
       updateRequestStatus,
       updateEmployeePerformance,
-      getAnalyticsData
+      getAnalyticsData,
+      refreshRequests: async () => {
+        try {
+          const requests = await sessionRequestAPI.getAll();
+          const transformed = requests.map(req => ({
+            id: req.id,
+            employeeName: req.employee_name || '',
+            sessionName: req.session_name || '',
+            attemptsUsed: req.attempts_used || 0,
+            maxAttempts: req.max_attempts || 3,
+            lockedDate: req.locked_date ? new Date(req.locked_date).toLocaleDateString() : null,
+            status: req.status || 'pending',
+            reason: req.reason || '',
+            employeeEmail: req.employee_email || '',
+            employee: req.employee,
+            session: req.session
+          }));
+          setSessionRequests(transformed);
+        } catch (error) {
+          console.error('Error refreshing session requests:', error);
+        }
+      }
     }}>
       {children}
     </SessionRequestContext.Provider>

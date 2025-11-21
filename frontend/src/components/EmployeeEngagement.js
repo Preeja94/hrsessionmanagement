@@ -39,7 +39,7 @@ import {
 import { useSessionRequests } from '../contexts/SessionRequestContext';
 
 const EmployeeEngagement = () => {
-  const { sessionRequests, updateRequestStatus } = useSessionRequests();
+  const { sessionRequests, updateRequestStatus, refreshRequests } = useSessionRequests();
   
   // Fallback data in case context is not working
   const fallbackRequests = [
@@ -76,13 +76,7 @@ const EmployeeEngagement = () => {
   console.log('EmployeeEngagement - sessionRequests length:', sessionRequests.length);
   console.log('EmployeeEngagement - displayRequests:', displayRequests);
   
-  // Force refresh when component mounts
-  useEffect(() => {
-    const saved = localStorage.getItem('sessionRequests');
-    if (saved) {
-      console.log('Found saved session requests:', JSON.parse(saved));
-    }
-  }, []);
+  // Removed localStorage check - now using API via context
 
   const handleAddEmployee = () => {
     if (!newEmployee.firstName || !newEmployee.lastName || !newEmployee.email || !newEmployee.department) {
@@ -117,12 +111,13 @@ const EmployeeEngagement = () => {
   };
 
   const handleRefresh = () => {
-    const saved = localStorage.getItem('sessionRequests');
-    if (saved) {
-      console.log('Manual refresh - Found requests:', JSON.parse(saved));
+    // Refresh from API via context
+    if (refreshRequests) {
+      refreshRequests();
+    } else {
+      // Fallback: reload page
+      window.location.reload();
     }
-    // Force re-render
-    window.location.reload();
   };
 
   return (

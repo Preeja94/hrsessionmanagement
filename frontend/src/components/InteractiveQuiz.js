@@ -32,6 +32,7 @@ import {
   ContentCopy as ContentCopyIcon,
   Delete as DeleteIcon,
   Add as AddIcon,
+  Remove as RemoveIcon,
   DragIndicator as DragIndicatorIcon,
   RadioButtonChecked as RadioButtonCheckedIcon,
   CheckBox as CheckBoxIcon,
@@ -117,6 +118,7 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
   const [activeTab, setActiveTab] = useState(0);
   const [draggedIndex, setDraggedIndex] = useState(null);
   const [showPreview, setShowPreview] = useState(false);
+  const [showValidationErrors, setShowValidationErrors] = useState(false);
   const questionsEndRef = useRef(null);
 
   // Debug: Log when questionTypeAnchor changes
@@ -507,8 +509,8 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
                 placeholder="Enter quiz title"
                 variant="outlined"
                 required={questions.length > 0}
-                error={questions.length > 0 && !assessmentInfo.quizTitle}
-                helperText={questions.length > 0 && !assessmentInfo.quizTitle ? 'Quiz title is required when questions are present' : ''}
+                error={showValidationErrors && questions.length > 0 && !assessmentInfo.quizTitle}
+                helperText={showValidationErrors && questions.length > 0 && !assessmentInfo.quizTitle ? 'Quiz title is required when questions are present' : ''}
               />
             </Grid>
               
@@ -523,8 +525,8 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
                 variant="outlined"
                 inputProps={{ min: 0, max: 100 }}
                 required={questions.length > 0}
-                error={questions.length > 0 && !assessmentInfo.passingScore}
-                helperText={questions.length > 0 && !assessmentInfo.passingScore ? 'Passing score is required when questions are present' : ''}
+                error={showValidationErrors && questions.length > 0 && !assessmentInfo.passingScore}
+                helperText={showValidationErrors && questions.length > 0 && !assessmentInfo.passingScore ? 'Passing score is required when questions are present' : ''}
               />
             </Grid>
               
@@ -539,8 +541,8 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
                 variant="outlined"
                 inputProps={{ min: 1 }}
                 required={questions.length > 0}
-                error={questions.length > 0 && !assessmentInfo.maxAttempts}
-                helperText={questions.length > 0 && !assessmentInfo.maxAttempts ? 'Max attempts is required when questions are present' : ''}
+                error={showValidationErrors && questions.length > 0 && !assessmentInfo.maxAttempts}
+                helperText={showValidationErrors && questions.length > 0 && !assessmentInfo.maxAttempts ? 'Max attempts is required when questions are present' : ''}
               />
             </Grid>
               
@@ -761,14 +763,13 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
                     </Button>
                     {question.correctAnswer !== undefined && question.correctAnswer !== null && (
                       <Button
-                        size="small"
+                        startIcon={<RemoveIcon />}
                         onClick={() => handleClearCorrectAnswer(index)}
                         sx={{
                           textTransform: 'none',
-                          color: '#6b7280',
-                          fontSize: '0.75rem',
+                          color: '#114417DB',
                           '&:hover': {
-                            backgroundColor: 'rgba(107, 114, 128, 0.08)'
+                            backgroundColor: 'rgba(17, 68, 23, 0.08)'
                           }
                         }}
                       >
@@ -1275,10 +1276,12 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
               // Validate required fields if there are questions
               if (questions.length > 0) {
                 if (!assessmentInfo.quizTitle || !assessmentInfo.passingScore || !assessmentInfo.maxAttempts) {
+                  setShowValidationErrors(true);
                   alert('Please fill in all required fields: Quiz Title, Passing Score, and Max Attempts');
                   return;
                 }
               }
+              setShowValidationErrors(false);
               handleSaveQuiz();
             }}
             sx={{

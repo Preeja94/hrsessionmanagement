@@ -191,6 +191,27 @@ const SessionContentView = ({ session, onComplete, onBack }) => {
       return null;
     }
 
+    // Try to get file URL from session.files if activeContentUrl is missing
+    let resolvedContentUrl = activeContentUrl;
+    if (!resolvedContentUrl && activeContent.type !== 'ai' && activeContent.type !== 'assessment' && session?.files) {
+      // Try to find matching file in session.files
+      const matchingFile = session.files.find(f => {
+        const fileName = typeof f === 'string' ? f : (f.name || '');
+        const fileObj = typeof f === 'object' ? f : {};
+        return fileName === activeContent.title || 
+               fileName === activeContent.name ||
+               (fileObj.name && fileObj.name === activeContent.title);
+      });
+      
+      if (matchingFile) {
+        if (typeof matchingFile === 'string') {
+          resolvedContentUrl = matchingFile;
+        } else {
+          resolvedContentUrl = matchingFile.dataUrl || matchingFile.url || matchingFile.downloadUrl || matchingFile.link || null;
+        }
+      }
+    }
+
     if (activeContent.type === 'video') {
       // Try multiple ways to get video URL
       let videoUrl = activeContentUrl;
@@ -332,19 +353,20 @@ const SessionContentView = ({ session, onComplete, onBack }) => {
     }
 
     if (
-      activeContentUrl &&
+      (activeContentUrl || resolvedContentUrl) &&
       (activeContent.type === 'document' ||
         activeContent.type === 'presentation' ||
         activeContent.type === 'file')
     ) {
+      const contentUrl = resolvedContentUrl || activeContentUrl;
       // Check if it's a PDF - PDFs need special handling
       const isPDF = activeContent.name?.toLowerCase().endsWith('.pdf') || 
+                    activeContent.title?.toLowerCase().endsWith('.pdf') ||
                     activeContent.type === 'application/pdf' ||
-                    activeContentUrl.includes('.pdf') ||
-                    activeContentUrl.startsWith('data:application/pdf');
+                    (contentUrl && (contentUrl.includes('.pdf') || contentUrl.startsWith('data:application/pdf')));
       
-      if (isPDF) {
-        // For PDFs, use embed with page view
+      if (isPDF && contentUrl) {
+        // For PDFs, use iframe for better browser compatibility
         return (
           <Box
             sx={{
@@ -360,38 +382,138 @@ const SessionContentView = ({ session, onComplete, onBack }) => {
               border: '1px solid #e2e8f0',
             }}
           >
-            <embed
-              src={`${activeContentUrl}#page=1&toolbar=1&navpanes=1&scrollbar=1`}
+            <iframe
+              src={`${contentUrl}#toolbar=1&navpanes=1&scrollbar=1`}
               type="application/pdf"
-              style={{ width: '100%', height: '100%' }}
+              style={{ width: '100%', height: '100%', border: 'none' }}
               title={activeContent.title || 'PDF Document'}
+              allowFullScreen
             />
           </Box>
         );
       }
       
-      // For other documents (Word, PowerPoint, etc.), use iframe
+      // Check if it's Word or PowerPoint - these need special handling
+      const isWord = activeContent.name?.toLowerCase().endsWith('.doc') || 
+                     activeContent.name?.toLowerCase().endsWith('.docx') ||
+                     activeContent.title?.toLowerCase().endsWith('.doc') ||
+                     activeContent.title?.toLowerCase().endsWith('.docx') ||
+                     (contentUrl && (contentUrl.includes('.doc') || contentUrl.includes('.docx')));
+      
+      const isPPT = activeContent.name?.toLowerCase().endsWith('.ppt') || 
+                    activeContent.name?.toLowerCase().endsWith('.pptx') ||
+                    activeContent.title?.toLowerCase().endsWith('.ppt') ||
+                    activeContent.title?.toLowerCase().endsWith('.pptx') ||
+                    (contentUrl && (contentUrl.includes('.ppt') || contentUrl.includes('.pptx')));
+      
+      // For Word and PowerPoint files, browsers can't render them directly
+      // Show download option with preview message
+      if ((isWord || isPPT) && contentUrl) {
+        return (
+          <Box
+            sx={{
+              height: '70vh',
+              minHeight: 500,
+              backgroundColor: '#f8fafc',
+              borderRadius: 2,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              mb: 3,
+              border: '1px solid #e2e8f0',
+              p: 4,
+              textAlign: 'center'
+            }}
+          >
+            <DescriptionIcon sx={{ fontSize: 80, color: '#114417DB', mb: 3 }} />
+            <Typography variant="h5" fontWeight="bold" gutterBottom>
+              {activeContent.title || activeContent.name || 'Document'}
+            </Typography>
+            <Typography variant="body1" color="text.secondary" mb={4}>
+              {isWord ? 'Word document' : 'PowerPoint presentation'} is ready for download.
+              <br />
+              Click the button below to download and view the file.
+            </Typography>
+            <Button
+              variant="contained"
+              startIcon={<DownloadIcon />}
+              onClick={() => {
+                const link = document.createElement('a');
+                link.href = contentUrl;
+                link.download = activeContent.title || activeContent.name || 'document';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+              }}
+              sx={{
+                backgroundColor: '#114417DB',
+                '&:hover': { backgroundColor: '#0a2f0e' },
+                px: 4,
+                py: 1.5
+              }}
+            >
+              Download {isWord ? 'Word Document' : 'PowerPoint Presentation'}
+            </Button>
+          </Box>
+        );
+      }
+      
+      // For other documents, try iframe (works for some file types)
+      if (contentUrl) {
+        return (
+          <Box
+            sx={{
+              height: '70vh',
+              minHeight: 500,
+              backgroundColor: '#f8fafc',
+              borderRadius: 2,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              mb: 3,
+              overflow: 'hidden',
+              border: '1px solid #e2e8f0',
+            }}
+          >
+            <iframe
+              title={activeContent.title || 'Document Preview'}
+              src={contentUrl}
+              style={{ width: '100%', height: '100%', border: 'none' }}
+              allowFullScreen
+              onError={() => {
+                console.error('Failed to load document in iframe');
+              }}
+            />
+          </Box>
+        );
+      }
+      
+      // If no URL available, show message
       return (
         <Box
           sx={{
-            height: '70vh',
-            minHeight: 500,
-            backgroundColor: '#f8fafc',
+            height: 300,
+            backgroundColor: '#f8f9fa',
             borderRadius: 2,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
+            border: '2px dashed #d1d5db',
             mb: 3,
-            overflow: 'hidden',
-            border: '1px solid #e2e8f0',
+            textAlign: 'center',
+            px: 4
           }}
         >
-          <iframe
-            title={activeContent.title || 'Document Preview'}
-            src={activeContentUrl}
-            style={{ width: '100%', height: '100%', border: 'none' }}
-            allowFullScreen
-          />
+          <Box>
+            <DescriptionIcon sx={{ fontSize: 64, color: '#9ca3af', mb: 2 }} />
+            <Typography variant="h6" color="text.secondary" gutterBottom>
+              File not available
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              The file "{activeContent.title || activeContent.name}" could not be loaded. Please contact support.
+            </Typography>
+          </Box>
         </Box>
       );
     }
@@ -620,19 +742,7 @@ const SessionContentView = ({ session, onComplete, onBack }) => {
   if (currentView === 'assessment') {
     return (
       <Box>
-        {/* Header with Back Button */}
-        <Box mb={3} display="flex" justifyContent="space-between" alignItems="flex-start">
-          {onBack && (
-            <Button
-              startIcon={<ArrowBackIcon />}
-              onClick={onBack}
-              sx={{ color: '#114417DB', '&:hover': { backgroundColor: '#f0fdf4' } }}
-            >
-              Back to My Sessions
-            </Button>
-          )}
-          <Box flex={1} />
-        </Box>
+        {/* Header - Back button removed per requirements */}
         {/* Session Information */}
         {renderSessionInformation()}
         <KnowledgeAssessment
@@ -668,19 +778,7 @@ const SessionContentView = ({ session, onComplete, onBack }) => {
 
   return (
     <Box p={3}>
-      {/* Header with Back Button at Top */}
-      <Box mb={3} display="flex" justifyContent="space-between" alignItems="flex-start">
-        {onBack && (
-          <Button
-            startIcon={<ArrowBackIcon />}
-            onClick={onBack}
-            sx={{ color: '#114417DB', '&:hover': { backgroundColor: '#f0fdf4' } }}
-          >
-            Back to My Sessions
-          </Button>
-        )}
-        <Box flex={1} />
-      </Box>
+      {/* Header - Back button removed per requirements */}
 
       {/* Session Information - shown on all screens until completion */}
       {renderSessionInformation()}

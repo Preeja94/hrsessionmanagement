@@ -19,7 +19,7 @@ import {
   Send as SendIcon
 } from '@mui/icons-material';
 
-const CourseRatingFeedback = ({ session, onSubmit, onBack, backLabel = 'Back to Certificate', isViewOnly = false }) => {
+const CourseRatingFeedback = ({ session, onSubmit, onBack, backLabel = 'Back to Certificate', isViewOnly = false, sectionTitle }) => {
   const [rating, setRating] = useState(session?.feedback?.rating || 0);
   const [feedback, setFeedback] = useState(session?.feedback?.feedback || '');
   const [valuableAspect, setValuableAspect] = useState(session?.feedback?.valuableAspect || '');
@@ -48,20 +48,6 @@ const CourseRatingFeedback = ({ session, onSubmit, onBack, backLabel = 'Back to 
     onSubmit(feedbackData);
   };
 
-  const handleSkip = () => {
-    // Skip feedback - still submit with empty data to complete session
-    const feedbackData = {
-      rating: 0,
-      feedback: '',
-      valuableAspect: '',
-      difficulty: '',
-      sessionId: session.id,
-      sessionTitle: session.title
-    };
-
-    onSubmit(feedbackData);
-  };
-
   const getRatingText = (value) => {
     switch (value) {
       case 1: return 'Poor';
@@ -74,7 +60,7 @@ const CourseRatingFeedback = ({ session, onSubmit, onBack, backLabel = 'Back to 
   };
 
   return (
-    <Box p={3}>
+    <Box px={0} py={3}>
       {/* Header with Back Button */}
       <Box mb={3} display="flex" justifyContent="space-between" alignItems="flex-start">
         {onBack && (
@@ -89,8 +75,14 @@ const CourseRatingFeedback = ({ session, onSubmit, onBack, backLabel = 'Back to 
         <Box flex={1} />
       </Box>
 
-      <Card sx={{ p: 4, backgroundColor: 'white', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
-        <Typography variant="h6" fontWeight="bold" gutterBottom sx={{ color: '#1f2937' }}>
+      <Card sx={{ p: 2, backgroundColor: 'white', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+        {/* Section title (match style with other section headings like Session Content) */}
+        {sectionTitle && (
+          <Typography variant="h6" fontWeight="bold" gutterBottom sx={{ color: '#1f2937' }}>
+            {sectionTitle}
+          </Typography>
+        )}
+        <Typography variant="body1" fontWeight="medium" gutterBottom sx={{ color: '#1f2937' }}>
           How would you rate this session?
         </Typography>
         
@@ -159,18 +151,7 @@ const CourseRatingFeedback = ({ session, onSubmit, onBack, backLabel = 'Back to 
         />
 
         {!isViewOnly && (
-          <Box display="flex" justifyContent="center" alignItems="center" gap={2} mt={4}>
-            <Button
-              variant="outlined"
-              onClick={handleSkip}
-              sx={{ 
-                color: '#6b7280',
-                borderColor: '#e5e7eb',
-                '&:hover': { borderColor: '#d1d5db', backgroundColor: '#f9fafb' }
-              }}
-            >
-              Skip Feedback
-            </Button>
+          <Box display="flex" justifyContent="center" alignItems="center" mt={4}>
             <Button
               variant="contained"
               size="large"

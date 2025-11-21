@@ -7,28 +7,24 @@ import {
   Grid,
   Button,
   Chip,
-  Avatar,
-  Divider,
   List,
   ListItem,
   ListItemText,
-  ListItemIcon,
-  LinearProgress
+  ListItemIcon
 } from '@mui/material';
 import {
-  ArrowBack as ArrowBackIcon,
   PlayArrow as PlayIcon,
-  Person as PersonIcon,
-  AccessTime as TimeIcon,
   School as SchoolIcon,
   VideoLibrary as VideoIcon,
   Description as DescriptionIcon,
   Quiz as QuizIcon,
-  CheckCircle as CheckCircleIcon
+  CheckCircle as CheckCircleIcon,
+  ArrowBack as ArrowBackIcon
 } from '@mui/icons-material';
 import { buildSessionContentItems } from '../utils/sessionContent';
+import CourseRatingFeedback from './CourseRatingFeedback';
 
-const SessionDetail = ({ session, onBack, onGetStarted }) => {
+const SessionDetail = ({ session, onBack, onGetStarted, onFeedbackSubmit, isCompleted = false, backLabel }) => {
   const contentItems = useMemo(
     () => buildSessionContentItems(session),
     [session]
@@ -77,16 +73,8 @@ const SessionDetail = ({ session, onBack, onGetStarted }) => {
     }
   };
 
-  const totalContent = contentItems.length;
-  const progressPercentage = (() => {
-    if (typeof session.progress === 'number') {
-      return Math.min(100, Math.max(0, session.progress));
-    }
-    return session.completed ? 100 : 0;
-  })();
-  const completedContent = session.completed
-    ? totalContent
-    : Math.min(totalContent, Math.round((progressPercentage / 100) * totalContent));
+  const downloadItems = contentItems.filter(item => item.downloadable);
+  const assessmentItem = contentItems.find(item => item.type === 'assessment');
   const lastAccessedValue =
     session.lastAccessed ||
     session.updatedAt ||
@@ -110,29 +98,43 @@ const SessionDetail = ({ session, onBack, onGetStarted }) => {
     .map(word => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ');
   const statusColor = statusColorMap[normalizedStatus] || '#6366f1';
-  const hasDownloadableMaterials = contentItems.some(item => item.downloadable);
+  const hasDownloadableMaterials = downloadItems.length > 0;
+
+  const getContentUrl = (content) => {
+    if (!content) return null;
+    return (
+      content.dataUrl ||
+      content.downloadUrl ||
+      content.url ||
+      content.link ||
+      content.assetUrl ||
+      content.path ||
+      null
+    );
+  };
 
   return (
-    <Box p={3}>
-      {/* Header */}
-      <Box mb={4}>
-        <Typography variant="h4" fontWeight="bold" gutterBottom>
-          {session.title}
-        </Typography>
-        <Typography variant="body1" color="text.secondary" mb={2}>
-          {session.description}
-        </Typography>
-        <Button
-          startIcon={<ArrowBackIcon />}
-          onClick={onBack}
-        >
-          Back to My Sessions
-        </Button>
-      </Box>
-
+    <Box p={3} maxWidth="960px" sx={{ mx: '10px' }}>
       <Grid container spacing={3}>
         <Grid item xs={12}>
-          <Card sx={{ p: 3, mb: 3 }}>
+          {/* Back to My Sessions */}
+          {onBack && (
+            <Box mb={2}>
+              <Button
+                startIcon={<ArrowBackIcon />}
+                onClick={onBack}
+                sx={{
+                  color: '#114417DB',
+                  textTransform: 'none',
+                  '&:hover': { backgroundColor: '#f0fdf4' }
+                }}
+              >
+                {backLabel || 'Back'}
+              </Button>
+            </Box>
+          )}
+
+          <Card sx={{ p: 2, mb: 2, boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
             <Typography variant="h6" fontWeight="bold" gutterBottom>
               Session Information
             </Typography>
@@ -147,10 +149,10 @@ const SessionDetail = ({ session, onBack, onGetStarted }) => {
               </Box>
               <Box>
                 <Typography variant="body2" color="text.secondary">
-                  Duration
+                  Type
                 </Typography>
                 <Typography variant="body1" fontWeight="medium">
-                  {session.duration || 'Self-paced'}
+                  {session.type || 'General'}
                 </Typography>
               </Box>
               <Box>
@@ -174,112 +176,119 @@ const SessionDetail = ({ session, onBack, onGetStarted }) => {
                   {lastAccessedLabel}
                 </Typography>
               </Box>
-            </Box>
-          </Card>
-
-          <Box display="flex" gap={2} mb={3}>
-            <Button
-              variant="contained"
-              startIcon={<PlayIcon />}
-              onClick={() => onGetStarted(session)}
-              sx={{ 
-                backgroundColor: '#10b981', 
-                '&:hover': { backgroundColor: '#059669' },
-                py: 1.5,
-                px: 3
-              }}
-            >
-              {session.status === 'in-progress' ? 'Resume Session' : 'Start Session'}
-            </Button>
-            {hasDownloadableMaterials && (
-              <Button
-                variant="outlined"
-                sx={{ py: 1.5, px: 3 }}
-              >
-                Download Materials
-              </Button>
-            )}
-          </Box>
-
-          {/* Progress */}
-          <Card sx={{ p: 3, mb: 3 }}>
-            <Typography variant="h6" fontWeight="bold" gutterBottom>
-              Progress
-            </Typography>
-            <Box mb={2}>
-              <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-                <Typography variant="body2" fontWeight="medium">
-                  Overall Progress
+              <Box>
+                <Typography variant="body2" color="text.secondary">
+                  Due Date &amp; Time
                 </Typography>
-                <Typography variant="body2" fontWeight="bold">
-                  {Math.round(progressPercentage)}%
+                <Typography variant="body1" fontWeight="medium">
+                  {session.dueDateTime
+                    ? new Date(session.dueDateTime).toLocaleString()
+                    : session.dueDate && session.dueTime
+                    ? `${new Date(session.dueDate).toLocaleDateString()} ${session.dueTime}`
+                    : 'Not set'}
                 </Typography>
               </Box>
-              <LinearProgress
-                variant="determinate"
-                value={progressPercentage}
-                sx={{ height: 8, borderRadius: 4 }}
-              />
+              <Box>
+                <Typography variant="body2" color="text.secondary">
+                  Key Skills
+                </Typography>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
+                  {session.skills && session.skills.length > 0 ? (
+                    session.skills.map((skill, index) => (
+                      <Chip
+                        key={index}
+                        label={skill}
+                        size="small"
+                        sx={{ backgroundColor: '#e8f5e9', color: '#166534' }}
+                      />
+                    ))
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">
+                      No skills specified
+                    </Typography>
+                  )}
+                </Box>
+              </Box>
             </Box>
-            <Typography variant="body2" color="text.secondary">
-              {totalContent > 0
-                ? `${completedContent} of ${totalContent} sections completed`
-                : 'Session progress will appear once content is added'}
-            </Typography>
           </Card>
 
-          {/* Session Content */}
-          <Card sx={{ p: 3 }}>
-            <Typography variant="h6" fontWeight="bold" gutterBottom>
-              Session Content
-            </Typography>
-            <List>
-              {contentItems.map((content) => (
-                <ListItem key={content.id} sx={{ px: 0 }}>
-                  <ListItemIcon>
-                    <Box
-                      sx={{
-                        width: 40,
-                        height: 40,
-                        borderRadius: '50%',
-                        backgroundColor: content.completed ? '#10b981' : '#f3f4f6',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        color: content.completed ? 'white' : getContentColor(content.type)
-                      }}
-                    >
-                      {content.completed ? <CheckCircleIcon /> : getContentIcon(content.type)}
-                    </Box>
-                  </ListItemIcon>
-                  <ListItemText
-                    primary={content.title}
-                    secondary={
-                      <Box>
-                        {content.description && (
-                          <Typography variant="body2" color="text.secondary">
-                            {content.description}
-                          </Typography>
+          {/* Session Content (only after completion) */}
+          {isCompleted && (
+            <Card sx={{ p: 2, mt: 2, boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+              <Typography variant="h6" fontWeight="bold" gutterBottom>
+                Session Content
+              </Typography>
+              {downloadItems.length === 0 && !assessmentItem ? (
+                <Typography variant="body2" color="text.secondary">
+                  No downloadable content available for this session.
+                </Typography>
+              ) : (
+                <List>
+                  {downloadItems.map((content) => {
+                    const url = getContentUrl(content);
+                    return (
+                      <ListItem key={content.id} sx={{ px: 0 }}>
+                        <ListItemText
+                          primary={content.title}
+                          secondary={content.description}
+                        />
+                        {url && (
+                          <Button
+                            variant="outlined"
+                            component="a"
+                            href={url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            sx={{ ml: 2 }}
+                          >
+                            Download
+                          </Button>
                         )}
-                        {content.meta && (
-                          <Typography variant="caption" color="text.secondary" display="block">
-                            {content.meta}
-                          </Typography>
-                        )}
-                        {content.completed && (
-                          <Chip
-                            label="Completed"
-                            size="small"
-                            sx={{ backgroundColor: '#10b981', color: 'white', mt: 0.5 }}
-                          />
-                        )}
-                      </Box>
-                    }
-                  />
-                </ListItem>
-              ))}
-            </List>
-          </Card>
+                      </ListItem>
+                    );
+                  })}
+
+                  {assessmentItem && (
+                    <ListItem sx={{ px: 0 }}>
+                      <ListItemText
+                        primary={assessmentItem.title || 'Assessment'}
+                        secondary="Assessment attached to this session"
+                      />
+                    </ListItem>
+                  )}
+                </List>
+              )}
+            </Card>
+          )}
+
+          {/* Start Session Button (hidden after completion) */}
+          {!isCompleted && (
+            <Box display="flex" justifyContent="center" mt={4}>
+              <Button
+                variant="contained"
+                startIcon={<PlayIcon />}
+                onClick={() => onGetStarted(session)}
+                sx={{ 
+                  backgroundColor: '#10b981', 
+                  '&:hover': { backgroundColor: '#059669' },
+                  py: 1.5,
+                  px: 4
+                }}
+              >
+                {session.status === 'in-progress' ? 'Resume Session' : 'Start Session'}
+              </Button>
+            </Box>
+          )}
+
+          {/* Feedback Section */}
+          <Box mt={0}>
+            <CourseRatingFeedback
+              session={session}
+              onSubmit={onFeedbackSubmit}
+              isViewOnly={false}
+              sectionTitle="Session Feedback"
+            />
+          </Box>
         </Grid>
       </Grid>
     </Box>

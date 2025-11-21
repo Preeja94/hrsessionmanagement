@@ -5,9 +5,16 @@ from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from django.contrib.auth import authenticate
 from django.conf import settings
+from django.shortcuts import get_object_or_404
+from django.db import transaction
 import os
 import json
-from .serializers import UserSerializer, LoginSerializer
+from .serializers import (
+    UserSerializer, LoginSerializer, EmployeeProfileSerializer,
+    EmployeeCreateSerializer, SessionSerializer, SessionListSerializer,
+    SessionRequestSerializer, SessionCompletionSerializer
+)
+from .models import User, EmployeeProfile, Session, SessionRequest, SessionCompletion
 
 # Try to import AI libraries (optional - will work without them)
 try:
@@ -37,7 +44,8 @@ def login(request):
             user_serializer = UserSerializer(user)
             return Response({
                 'token': token.key,
-                'user': user_serializer.data
+                'user': user_serializer.data,
+                'password_reset_required': user.password_reset_required
             }, status=status.HTTP_200_OK)
         else:
             return Response({
@@ -411,4 +419,348 @@ Make the content professional, educational, and suitable for workplace training.
                 {'error': f'Failed to generate content: {str(e)}. Fallback also failed: {str(fallback_error)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+# ==================== Employee Management API ====================
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def employees_list(request):
+    """List all employees or create a new employee"""
+    if request.method == 'GET':
+        # Get all employees with their profiles
+        employees = []
+        users = User.objects.all().select_related('employee_profile')
+        for user in users:
+            try:
+                profile = user.employee_profile
+                serializer = EmployeeProfileSerializer(profile)
+                employees.append(serializer.data)
+            except EmployeeProfile.DoesNotExist:
+                # If no profile exists, create a basic representation
+                employees.append({
+                    'id': user.id,
+                    'firstName': user.first_name or '',
+                    'lastName': user.last_name or '',
+                    'email': user.email or '',
+                    'phone': user.phone_number or '',
+                    'department': user.department or '',
+                    'employeeId': user.employee_id or '',
+                    'role': user.role,
+                    'jobRole': '',
+                    'reportingManager': '',
+                    'keyskills': [],
+                    'status': 'active',
+                    'created_at': user.date_joined.isoformat() if user.date_joined else None,
+                    'updated_at': user.updated_at.isoformat() if hasattr(user, 'updated_at') else None,
+                })
+        return Response(employees, status=status.HTTP_200_OK)
+    
+    elif request.method == 'POST':
+        # Create new employee
+        serializer = EmployeeCreateSerializer(data=request.data)
+        if serializer.is_valid():
+            try:
+                with transaction.atomic():
+                    # Create User
+                    username = serializer.validated_data.get('email', '').split('@')[0]
+                    # Ensure username is unique
+                    base_username = username
+                    counter = 1
+                    while User.objects.filter(username=username).exists():
+                        username = f"{base_username}{counter}"
+                        counter += 1
+                    
+                    user = User.objects.create_user(
+                        username=username,
+                        email=serializer.validated_data['email'],
+                        password=serializer.validated_data['password'],
+                        first_name=serializer.validated_data['firstName'],
+                        last_name=serializer.validated_data['lastName'],
+                        phone_number=serializer.validated_data.get('phone', ''),
+                        department=serializer.validated_data.get('department', ''),
+                        employee_id=serializer.validated_data.get('employeeId', ''),
+                        role=serializer.validated_data.get('role', 'employee'),
+                        password_reset_required=True,  # New employees must reset password on first login
+                    )
+                    
+                    # Create EmployeeProfile
+                    profile = EmployeeProfile.objects.create(
+                        user=user,
+                        job_role=serializer.validated_data.get('jobRole', ''),
+                        reporting_manager=serializer.validated_data.get('reportingManager', ''),
+                        keyskills=serializer.validated_data.get('keyskills', []),
+                    )
+                    
+                    profile_serializer = EmployeeProfileSerializer(profile)
+                    return Response(profile_serializer.data, status=status.HTTP_201_CREATED)
+            except Exception as e:
+                return Response(
+                    {'error': f'Failed to create employee: {str(e)}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def employee_detail(request, pk):
+    """Retrieve, update or delete an employee"""
+    try:
+        user = User.objects.get(pk=pk)
+        try:
+            profile = user.employee_profile
+        except EmployeeProfile.DoesNotExist:
+            # Create profile if it doesn't exist
+            profile = EmployeeProfile.objects.create(
+                user=user,
+                job_role='',
+                reporting_manager='',
+                keyskills=[]
+            )
+    except User.DoesNotExist:
+        return Response(
+            {'error': 'Employee not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    
+    if request.method == 'GET':
+        serializer = EmployeeProfileSerializer(profile)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    elif request.method == 'PUT':
+        data = request.data
+        
+        # Update User fields
+        if 'firstName' in data:
+            user.first_name = data['firstName']
+        if 'lastName' in data:
+            user.last_name = data['lastName']
+        if 'email' in data:
+            user.email = data['email']
+        if 'phone' in data:
+            user.phone_number = data['phone']
+        if 'department' in data:
+            user.department = data['department']
+        if 'employeeId' in data:
+            user.employee_id = data['employeeId']
+        if 'role' in data:
+            user.role = data['role']
+        if 'password' in data and data['password']:
+            user.set_password(data['password'])
+        user.save()
+        
+        # Update Profile fields
+        if 'jobRole' in data:
+            profile.job_role = data['jobRole']
+        if 'reportingManager' in data:
+            profile.reporting_manager = data['reportingManager']
+        if 'keyskills' in data:
+            profile.keyskills = data['keyskills']
+        if 'status' in data:
+            profile.status = data['status']
+        profile.save()
+        
+        serializer = EmployeeProfileSerializer(profile)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    elif request.method == 'DELETE':
+        user.delete()  # This will cascade delete the profile
+        return Response(
+            {'message': 'Employee deleted successfully'},
+            status=status.HTTP_204_NO_CONTENT
+        )
+
+
+# ==================== Session Management API ====================
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def sessions_list(request):
+    """List all sessions or create a new session"""
+    if request.method == 'GET':
+        from django.utils import timezone
+        
+        # Auto-publish scheduled sessions when start time arrives
+        now = timezone.now()
+        scheduled_sessions = Session.objects.filter(
+            status='scheduled',
+            scheduled_datetime__lte=now
+        )
+        for session in scheduled_sessions:
+            session.status = 'published'
+            if not session.published_at:
+                session.published_at = now
+            session.save()
+        
+        status_filter = request.query_params.get('status', None)
+        sessions = Session.objects.all().select_related('created_by').order_by('-updated_at', '-created_at')
+        if status_filter:
+            sessions = sessions.filter(status=status_filter)
+        # Use lightweight serializer for list view (excludes heavy JSON fields)
+        serializer = SessionListSerializer(sessions, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    elif request.method == 'POST':
+        serializer = SessionSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(created_by=request.user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def session_detail(request, pk):
+    """Retrieve, update or delete a session"""
+    try:
+        session = Session.objects.get(pk=pk)
+    except Session.DoesNotExist:
+        return Response(
+            {'error': 'Session not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    
+    if request.method == 'GET':
+        serializer = SessionSerializer(session)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    elif request.method == 'PUT':
+        serializer = SessionSerializer(session, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    elif request.method == 'DELETE':
+        session.delete()
+        return Response(
+            {'message': 'Session deleted successfully'},
+            status=status.HTTP_204_NO_CONTENT
+        )
+
+
+# ==================== Session Request API ====================
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def session_requests_list(request):
+    """List all session requests or create a new request"""
+    if request.method == 'GET':
+        status_filter = request.query_params.get('status', None)
+        requests = SessionRequest.objects.all()
+        if status_filter:
+            requests = requests.filter(status=status_filter)
+        requests = requests.select_related('employee', 'session')
+        serializer = SessionRequestSerializer(requests, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    elif request.method == 'POST':
+        serializer = SessionRequestSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def session_request_detail(request, pk):
+    """Retrieve, update or delete a session request"""
+    try:
+        session_request = SessionRequest.objects.get(pk=pk)
+    except SessionRequest.DoesNotExist:
+        return Response(
+            {'error': 'Session request not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    
+    if request.method == 'GET':
+        serializer = SessionRequestSerializer(session_request)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    elif request.method == 'PUT':
+        serializer = SessionRequestSerializer(session_request, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    elif request.method == 'DELETE':
+        session_request.delete()
+        return Response(
+            {'message': 'Session request deleted successfully'},
+            status=status.HTTP_204_NO_CONTENT
+        )
+
+
+# ==================== Session Completion API ====================
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def session_completions_list(request):
+    """List all session completions or create a new completion"""
+    if request.method == 'GET':
+        employee_id = request.query_params.get('employee', None)
+        session_id = request.query_params.get('session', None)
+        completions = SessionCompletion.objects.all()
+        if employee_id:
+            completions = completions.filter(employee_id=employee_id)
+        if session_id:
+            completions = completions.filter(session_id=session_id)
+        completions = completions.select_related('employee', 'session')
+        serializer = SessionCompletionSerializer(completions, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    elif request.method == 'POST':
+        serializer = SessionCompletionSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def reset_password(request):
+    """Reset password for first-time login"""
+    current_password = request.data.get('current_password')
+    new_password = request.data.get('new_password')
+    confirm_password = request.data.get('confirm_password')
+    
+    if not all([current_password, new_password, confirm_password]):
+        return Response(
+            {'error': 'All password fields are required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    if new_password != confirm_password:
+        return Response(
+            {'error': 'New password and confirm password do not match'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    if len(new_password) < 8:
+        return Response(
+            {'error': 'Password must be at least 8 characters long'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Verify current password
+    user = request.user
+    if not user.check_password(current_password):
+        return Response(
+            {'error': 'Current password is incorrect'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Set new password
+    user.set_password(new_password)
+    user.password_reset_required = False
+    user.save()
+    
+    return Response(
+        {'message': 'Password reset successfully'},
+        status=status.HTTP_200_OK
+    )
 

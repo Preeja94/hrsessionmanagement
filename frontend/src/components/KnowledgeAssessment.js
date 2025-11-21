@@ -254,7 +254,10 @@ const KnowledgeAssessment = ({ session, onComplete, onBack, isViewOnly = false }
 
   const calculateScore = () => {
     const evaluableQuestions = questions.filter(questionHasSolution);
-    if (!evaluableQuestions.length) return 0;
+    // If no questions have correct answers, return null (don't show score)
+    if (!evaluableQuestions.length) return null;
+    // If only one question and it has no correct answer, return null
+    if (questions.length === 1 && !questionHasSolution(questions[0])) return null;
     const correctCount = evaluableQuestions.reduce((count, question) => {
       const selectedAnswer = answers[question.id];
       return isAnswerCorrect(question, selectedAnswer) ? count + 1 : count;
@@ -372,6 +375,8 @@ const KnowledgeAssessment = ({ session, onComplete, onBack, isViewOnly = false }
   if (showResults) {
     const score = calculateScore();
     const evaluableQuestions = questions.filter(questionHasSolution);
+    // Don't show score if no questions have correct answers
+    const shouldShowScore = score !== null && evaluableQuestions.length > 0;
     const correctAnswersCount = evaluableQuestions.reduce((count, question) => {
       const selectedAnswer = answers[question.id];
       return isAnswerCorrect(question, selectedAnswer) ? count + 1 : count;
@@ -381,8 +386,8 @@ const KnowledgeAssessment = ({ session, onComplete, onBack, isViewOnly = false }
       passingScoreValue !== null && !Number.isNaN(parseFloat(passingScoreValue))
         ? parseFloat(passingScoreValue)
         : null;
-    const meetsPassingScore = passingScoreNumeric !== null ? score >= passingScoreNumeric : true;
-    const isPassing = meetsPassingScore;
+    const meetsPassingScore = shouldShowScore && passingScoreNumeric !== null ? score >= passingScoreNumeric : true;
+    const isPassing = shouldShowScore && meetsPassingScore;
 
     // Check if certificate is configured
     const hasCertificate = session?.certificate && (session.certificate.template || session.certificate.id);
@@ -424,14 +429,16 @@ const KnowledgeAssessment = ({ session, onComplete, onBack, isViewOnly = false }
             <Typography variant="body2" color="text.secondary">
               Assessment Complete
             </Typography>
-            <Typography variant="body2" fontWeight="bold" sx={{ color: '#114417DB' }}>
-              100%
+            {shouldShowScore && (
+              <Typography variant="body2" fontWeight="bold" sx={{ color: '#114417DB' }}>
+                100%
               </Typography>
+            )}
             </Box>
           </Box>
           
         <Card sx={{ p: 4, textAlign: 'center', backgroundColor: 'white', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
-          {isPassing ? (
+          {shouldShowScore && isPassing ? (
             <>
               <Typography variant="h4" fontWeight="bold" gutterBottom sx={{ color: '#114417DB' }}>
                 Congratulations!
@@ -443,7 +450,7 @@ const KnowledgeAssessment = ({ session, onComplete, onBack, isViewOnly = false }
                 {getScoreMessage(score)}
               </Typography>
             </>
-          ) : (
+          ) : shouldShowScore && !isPassing ? (
             <>
               <Typography variant="h4" fontWeight="bold" gutterBottom sx={{ color: '#ef4444' }}>
                 Keep Going!
@@ -472,9 +479,19 @@ const KnowledgeAssessment = ({ session, onComplete, onBack, isViewOnly = false }
                 Please review the content and try again.
               </Alert>
             </>
+          ) : (
+            <>
+              <Typography variant="h4" fontWeight="bold" gutterBottom sx={{ color: '#114417DB' }}>
+                Assessment Completed
+              </Typography>
+              <Typography variant="body1" color="text.secondary" mb={3}>
+                You have completed the assessment. Some questions did not have correct answers configured.
+              </Typography>
+            </>
           )}
 
-          <Grid container spacing={3} mb={4}>
+          {shouldShowScore && (
+            <Grid container spacing={3} mb={4}>
             <Grid item xs={6}>
               <Box textAlign="center">
                 <Typography variant="h4" fontWeight="bold" sx={{ color: '#114417DB' }}>
@@ -496,14 +513,15 @@ const KnowledgeAssessment = ({ session, onComplete, onBack, isViewOnly = false }
               </Box>
             </Grid>
           </Grid>
+          )}
 
-          {isPassing ? (
+          {shouldShowScore && isPassing ? (
             hasCertificate ? (
             <Button
               variant="contained"
               size="large"
               startIcon={<CheckCircleIcon />}
-              onClick={() => onComplete(score)}
+              onClick={() => onComplete(shouldShowScore ? score : null)}
               sx={{ 
                   backgroundColor: '#114417DB', 
                   '&:hover': { backgroundColor: '#0a2f0e' },
@@ -518,7 +536,7 @@ const KnowledgeAssessment = ({ session, onComplete, onBack, isViewOnly = false }
                 variant="contained"
                 size="large"
                 startIcon={<CheckCircleIcon />}
-                onClick={() => onComplete(score)}
+                onClick={() => onComplete(shouldShowScore ? score : null)}
                 sx={{ 
                   backgroundColor: '#114417DB', 
                   '&:hover': { backgroundColor: '#0a2f0e' },
@@ -529,7 +547,7 @@ const KnowledgeAssessment = ({ session, onComplete, onBack, isViewOnly = false }
                 Continue
               </Button>
             )
-          ) : (
+          ) : shouldShowScore && !isPassing ? (
             <Button
               variant="contained"
               size="large"
@@ -543,6 +561,21 @@ const KnowledgeAssessment = ({ session, onComplete, onBack, isViewOnly = false }
               }}
             >
               Retake Assessment
+            </Button>
+          ) : (
+            <Button
+              variant="contained"
+              size="large"
+              startIcon={<CheckCircleIcon />}
+              onClick={() => onComplete(null)}
+              sx={{ 
+                backgroundColor: '#114417DB', 
+                '&:hover': { backgroundColor: '#0a2f0e' },
+                px: 4,
+                py: 1.5
+              }}
+            >
+              Continue
             </Button>
           )}
         </Card>

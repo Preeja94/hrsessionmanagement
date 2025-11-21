@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { employeeAPI, sessionAPI } from '../utils/api';
 import {
   Box,
   Typography,
@@ -51,7 +52,8 @@ import {
   Alert,
   CircularProgress,
   Snackbar,
-  Popper
+  Popper,
+  Autocomplete
 } from '@mui/material';
 import {
   BarChart as BarChartIcon,
@@ -78,13 +80,15 @@ import {
   Article as ArticleIcon,
   VideoLibrary as VideoLibraryIcon,
   Quiz as QuizIcon,
+  Assessment as AssessmentIcon,
   Close as CloseIcon,
   Warning as WarningIcon,
   WarningAmber as WarningAmberIcon,
   Search as SearchIcon,
-  Lock as LockIcon,
   Visibility as VisibilityIcon,
   VisibilityOff as VisibilityOffIcon,
+  ExpandMore as ExpandMoreIcon,
+  Lock as LockIcon,
   Folder as FolderIcon,
   FolderOpen as FolderOpenIcon,
   InsertDriveFile as FileIcon,
@@ -92,6 +96,7 @@ import {
   Delete as DeleteIcon,
   DeleteForever as DeleteForeverIcon,
   Save as SaveIcon,
+  PersonOff as PersonOffIcon,
   Publish as PublishIcon,
   LibraryBooks as LibraryBooksIcon,
   GridOn as GridViewIcon,
@@ -117,13 +122,16 @@ import {
   CardMembership as CertificateIcon,
   EmojiEvents as AwardIcon,
   PlayCircleFilled as PlayCircleFilledIcon,
-  School as SchoolIcon
+  School as SchoolIcon,
+  CheckBoxOutlineBlank as CheckboxIcon,
+  CheckBox as CheckedIcon
 } from '@mui/icons-material';
 import { styled } from '@mui/material/styles';
 import Analytics from './Analytics';
 import Approvals from './Approvals';
 import InteractiveQuiz from './InteractiveQuiz';
 import SessionDetail from './SessionDetail';
+import SessionReport from './SessionReport';
 import GrowGridLogo from '../assets/Grow Grid logo.PNG';
 
 const DashboardContainer = styled(Box)(({ theme }) => ({
@@ -198,19 +206,8 @@ const ActivityCard = styled(Card)(({ theme }) => ({
 const AdminDashboard = () => {
   const navigate = useNavigate();
   
-  // Load saved page state from localStorage on mount
-  const [activeTab, setActiveTab] = useState(() => {
-    try {
-      const savedState = localStorage.getItem('admin_page_state');
-      if (savedState) {
-        const state = JSON.parse(savedState);
-        return state.activeTab || 'dashboard';
-      }
-    } catch (error) {
-      console.error('Error loading page state:', error);
-    }
-    return 'dashboard';
-  });
+  // Active tab state - no longer using localStorage
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [dateRangeFilter, setDateRangeFilter] = useState('all'); // 'all', '7days', '30days', 'custom'
   const [showCustomDateDialog, setShowCustomDateDialog] = useState(false);
   const [customStartDate, setCustomStartDate] = useState('');
@@ -230,6 +227,8 @@ const AdminDashboard = () => {
   // Toast notification state
   const [toast, setToast] = useState({ open: false, message: '', severity: 'info' });
   const [selectedCreationMode, setSelectedCreationMode] = useState(null);
+  // Global loading state for API calls
+  const [isLoading, setIsLoading] = useState(false);
 
   // Show toast notification
   const showToast = (message, severity = 'info') => {
@@ -254,6 +253,8 @@ const AdminDashboard = () => {
   const [showSavedSessionsFolder, setShowSavedSessionsFolder] = useState(false);
   const [showCancelConfirmDialog, setShowCancelConfirmDialog] = useState(false);
   const [cancelCallback, setCancelCallback] = useState(null);
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [confirmDialogData, setConfirmDialogData] = useState({ title: '', message: '', onConfirm: null });
   const [currentQuizSessionId, setCurrentQuizSessionId] = useState(null);
   const [passwordData, setPasswordData] = useState({
     currentPassword: '',
@@ -379,17 +380,9 @@ const AdminDashboard = () => {
   // Notification states
   const [notificationAnchorEl, setNotificationAnchorEl] = useState(null);
 
-  // Load functions for initializing state from localStorage
-  // Load employees from localStorage
-  const loadEmployees = () => {
-    const stored = localStorage.getItem('admin_employees');
-    if (stored) {
-      try {
-        return JSON.parse(stored);
-      } catch (e) {
-        console.error('Error loading employees:', e);
-      }
-    }
+  // Load functions - now using API
+  // Employees are loaded via API in useEffect below
+  const getDefaultEmployees = () => {
     return [
       { 
       id: 1, 
@@ -574,16 +567,8 @@ const AdminDashboard = () => {
     ];
   };
 
-  // Load notifications from localStorage
-  const loadNotifications = () => {
-    const stored = localStorage.getItem('admin_notifications');
-    if (stored) {
-      try {
-        return JSON.parse(stored);
-      } catch (e) {
-        console.error('Error loading notifications:', e);
-      }
-    }
+  // Notifications - now loaded from API or default
+  const getDefaultNotifications = () => {
     return [
       { 
         id: 1, 
@@ -621,104 +606,194 @@ const AdminDashboard = () => {
   };
 
   // Employee database with departments
-  const [employees, setEmployees] = useState(() => loadEmployees());
-  const [notifications, setNotifications] = useState(() => loadNotifications());
+  const [employees, setEmployees] = useState([]);
+  const [employeesLoading, setEmployeesLoading] = useState(true);
+  const [notifications, setNotifications] = useState(() => getDefaultNotifications());
+  
+  // Function to load employees (reusable)
+  const fetchEmployees = async () => {
+    try {
+      setEmployeesLoading(true);
+      const data = await employeeAPI.getAll();
+      // Transform API response to match frontend format
+      const transformedEmployees = data.map(emp => ({
+        id: emp.id,
+        firstName: emp.firstName || emp.user?.first_name || '',
+        lastName: emp.lastName || emp.user?.last_name || '',
+        name: `${emp.firstName || emp.user?.first_name || ''} ${emp.lastName || emp.user?.last_name || ''}`.trim(),
+        email: emp.email || emp.user?.email || '',
+        phone: emp.phone || emp.user?.phone_number || '',
+        department: emp.department || emp.user?.department || '',
+        jobRole: emp.jobRole || emp.job_role || '',
+        reportingManager: emp.reportingManager || emp.reporting_manager || '',
+        employeeId: emp.employeeId || emp.user?.employee_id || '',
+        role: emp.role || emp.user?.role || 'employee',
+        keyskills: emp.keyskills || [],
+        status: emp.status || 'active',
+        createdAt: emp.created_at || new Date().toISOString().split('T')[0]
+      }));
+      setEmployees(transformedEmployees);
+    } catch (error) {
+      console.error('Failed to load employees:', error);
+      // Don't fallback to localStorage - show error instead
+      showToast('Failed to load employees from server. Please refresh the page.', 'error');
+      setEmployees([]); // Set empty array instead of localStorage data
+    } finally {
+      setIsLoading(false);
+      setEmployeesLoading(false);
+    }
+  };
+
+  // Load employees from API on mount
+  useEffect(() => {
+    fetchEmployees();
+  }, []);
+
+  // Reload employees when switching to employees tab
+  useEffect(() => {
+    if (activeTab === 'employees') {
+      fetchEmployees();
+    }
+  }, [activeTab]);
+
+  // Helper function to calculate number of modules (content items) in a session
+  const calculateModuleCount = (session) => {
+    if (!session) return 0;
+    let count = 0;
+    
+    // Count creation mode content
+    if (session.creationMode || session.creation_mode) count++;
+    
+    // Count AI content
+    if (session.aiContent || session.resumeState?.aiContentGenerated) count++;
+    
+    // Count files
+    const files = session.files || session.resumeState?.selectedFiles || session.resumeState?.files || [];
+    if (Array.isArray(files)) {
+      count += files.length;
+    }
+    
+    // Count quiz/assessment
+    if (session.quiz || session.assessmentInfo || (session.quiz?.questions && session.quiz.questions.length > 0)) {
+      count++;
+    }
+    
+    return count;
+  };
 
   // Load saved sessions from localStorage or use default data
   const normalizePublishedSession = (session = {}) => ({
     ...session,
-    scheduledDate: session.scheduledDate || null,
-    scheduledTime: session.scheduledTime || null,
-    scheduledDateTime: session.scheduledDateTime || null,
-    dueDate: session.dueDate || null,
-    dueTime: session.dueTime || null,
-    dueDateTime: session.dueDateTime || null,
+    createdAt: session.createdAt || session.created_at || null,
+    updatedAt: session.updatedAt || session.updated_at || null,
+    scheduledDate: session.scheduledDate || session.scheduled_date || null,
+    scheduledTime: session.scheduledTime || session.scheduled_time || null,
+    scheduledDateTime: session.scheduledDateTime || session.scheduled_datetime || null,
+    dueDate: session.dueDate || session.due_date || null,
+    dueTime: session.dueTime || session.due_time || null,
+    dueDateTime: session.dueDateTime || session.due_datetime || null,
     isLocked: session.isLocked ?? false,
     approvalExpiresAt: session.approvalExpiresAt || null,
     lastApprovalDate: session.lastApprovalDate || null,
-    lockedAt: session.lockedAt || null
+    lockedAt: session.lockedAt || null,
+    moduleCount: calculateModuleCount(session) // Add module count
   });
 
-  const loadSavedSessions = () => {
-    const stored = localStorage.getItem('admin_saved_sessions');
-    if (stored) {
-      try {
-        return JSON.parse(stored);
-      } catch (e) {
-        console.error('Error loading saved sessions:', e);
-      }
-    }
-    return [
-      {
-        id: 1,
-        title: "Mental Health & Wellbeing Training",
-        type: "Employee Wellbeing",
-        audience: "All Employees",
-        description: "Comprehensive session on maintaining mental wellness in the workplace",
-        dateTime: "2024-12-25T10:00",
-        files: ["mental_health_guide.pdf", "wellbeing_presentation.pptx"],
-        status: "draft",
-        createdAt: "2024-12-20"
-      },
-      {
-        id: 2,
-        title: "React Development Fundamentals",
-        type: "Technical Training",
-        audience: "Developers",
-        description: "Learn modern React development with hooks and best practices",
-        dateTime: "2024-12-28T14:00",
-        files: ["react_tutorial.pdf", "react_examples.docx"],
-        status: "scheduled",
-        createdAt: "2024-12-18"
-      }
-    ];
-  };
-
-  const [savedSessions, setSavedSessions] = useState(loadSavedSessions());
+  // Sessions are now loaded from API
+  const [savedSessions, setSavedSessions] = useState([]);
+  const [draftSessions, setDraftSessions] = useState([]);
+  const [publishedSessions, setPublishedSessions] = useState([]);
+  const [savedAssessments, setSavedAssessments] = useState([]);
+  const [activities, setActivities] = useState([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
   
-  // Load draft and published sessions from localStorage
-  const loadDraftSessions = () => {
-    const stored = localStorage.getItem('draft_sessions');
-    return stored ? JSON.parse(stored) : [];
-  };
-
-  const loadPublishedSessions = () => {
-    const stored = localStorage.getItem('published_sessions');
-    if (stored) {
+  // Load all sessions from API
+  useEffect(() => {
+    const loadSessions = async () => {
       try {
-        const parsed = JSON.parse(stored);
-        return Array.isArray(parsed) ? parsed.map(normalizePublishedSession) : [];
+        setSessionsLoading(true);
+        const allSessions = await sessionAPI.getAll();
+        
+        // Normalize all sessions first
+        const normalizedSessions = allSessions.map(normalizePublishedSession);
+        
+        // Deduplicate by ID - keep the most recent version of each session
+        const sessionMap = new Map();
+        normalizedSessions.forEach(session => {
+          if (!session.id) return; // Skip sessions without ID
+          const existing = sessionMap.get(session.id);
+          const sessionDate = new Date(session.updated_at || session.updatedAt || session.savedAt || session.created_at || session.createdAt || 0);
+          const existingDate = existing ? new Date(existing.updated_at || existing.updatedAt || existing.savedAt || existing.created_at || existing.createdAt || 0) : new Date(0);
+          
+          // Keep the most recent version, or if dates are equal, prefer the one with a more complete status (scheduled > published > draft)
+          if (!existing || sessionDate > existingDate || 
+              (sessionDate.getTime() === existingDate.getTime() && 
+               (session.status === 'scheduled' && existing.status !== 'scheduled') ||
+               (session.status === 'published' && existing.status === 'draft'))) {
+            sessionMap.set(session.id, session);
+          }
+        });
+        
+        const uniqueSessions = Array.from(sessionMap.values());
+        
+        // Separate by status
+        const drafts = uniqueSessions.filter(s => s.status === 'draft');
+        const published = uniqueSessions.filter(s => s.status === 'published' || s.status === 'scheduled');
+        
+        setDraftSessions(drafts);
+        setPublishedSessions(published);
+        setSavedSessions(uniqueSessions); // All sessions for metrics
       } catch (error) {
-        console.error('Failed to parse published sessions', error);
-        return [];
+        console.error('Error loading sessions:', error);
+        setDraftSessions([]);
+        setPublishedSessions([]);
+        setSavedSessions([]);
+      } finally {
+        setSessionsLoading(false);
       }
+    };
+    loadSessions();
+  }, []);
+
+  // Reload sessions when switching to tabs that need fresh data
+  useEffect(() => {
+    if (activeTab === 'dashboard' || activeTab === 'course-library' || activeTab === 'manage-session') {
+      const loadSessions = async () => {
+        try {
+          setSessionsLoading(true);
+          const allSessions = await sessionAPI.getAll();
+          const normalizedSessions = allSessions.map(normalizePublishedSession);
+          const sessionMap = new Map();
+          normalizedSessions.forEach(session => {
+            if (!session.id) return;
+            const existing = sessionMap.get(session.id);
+            const sessionDate = new Date(session.updated_at || session.updatedAt || session.savedAt || session.created_at || session.createdAt || 0);
+            const existingDate = existing ? new Date(existing.updated_at || existing.updatedAt || existing.savedAt || existing.created_at || existing.createdAt || 0) : new Date(0);
+            if (!existing || sessionDate > existingDate || 
+                (sessionDate.getTime() === existingDate.getTime() && 
+                 (session.status === 'scheduled' && existing.status !== 'scheduled') ||
+                 (session.status === 'published' && existing.status !== 'draft'))) {
+              sessionMap.set(session.id, session);
+            }
+          });
+          const uniqueSessions = Array.from(sessionMap.values());
+          const drafts = uniqueSessions.filter(s => s.status === 'draft');
+          const published = uniqueSessions.filter(s => s.status === 'published' || s.status === 'scheduled');
+          setDraftSessions(drafts);
+          setPublishedSessions(published);
+          setSavedSessions(uniqueSessions);
+        } catch (error) {
+          console.error('Error loading sessions:', error);
+          setDraftSessions([]);
+          setPublishedSessions([]);
+          setSavedSessions([]);
+        } finally {
+          setSessionsLoading(false);
+        }
+      };
+      loadSessions();
     }
-    return [];
-  };
-
-  const loadSavedAssessments = () => {
-    const stored = localStorage.getItem('saved_assessments');
-    return stored ? JSON.parse(stored) : [];
-  };
-
-  // Load activities from localStorage
-  const loadActivities = () => {
-    const stored = localStorage.getItem('admin_activities');
-    if (stored) {
-      try {
-        return JSON.parse(stored);
-      } catch (e) {
-        console.error('Error loading activities:', e);
-        return [];
-      }
-    }
-    return [];
-  };
-
-  const [draftSessions, setDraftSessions] = useState(loadDraftSessions());
-  const [publishedSessions, setPublishedSessions] = useState(loadPublishedSessions());
-  const [savedAssessments, setSavedAssessments] = useState(loadSavedAssessments());
-  const [activities, setActivities] = useState(loadActivities());
+  }, [activeTab]);
   
   // Folder view states
   const [openFolder, setOpenFolder] = useState(null); // 'drafts', 'assessments', 'published'
@@ -737,6 +812,7 @@ const AdminDashboard = () => {
   const [selectedLibrarySession, setSelectedLibrarySession] = useState(null);
   const [showSessionDetailsDialog, setShowSessionDetailsDialog] = useState(false);
   const [sessionViewMode, setSessionViewMode] = useState(null); // 'view', 'edit', 'reschedule'
+  const [showSessionReport, setShowSessionReport] = useState(false);
   
   // Analytics/Reports states
   const [analyticsTab, setAnalyticsTab] = useState('dashboard'); // 'dashboard' or 'reports'
@@ -753,9 +829,7 @@ const AdminDashboard = () => {
   const [reportSearchTerm, setReportSearchTerm] = useState('');
   
   // Employee Management states
-  const [showEmployeesSubmenu, setShowEmployeesSubmenu] = useState(false);
   const [employeesSubTab, setEmployeesSubTab] = useState('manage'); // 'manage' or 'add'
-  const [employeesAnchorEl, setEmployeesAnchorEl] = useState(null);
   const [settingsAnchorEl, setSettingsAnchorEl] = useState(null);
   
   // Publish Course Dialog states
@@ -810,469 +884,24 @@ const AdminDashboard = () => {
   const [selectedSessionForCertification, setSelectedSessionForCertification] = useState(null);
   const [certificationToConfirm, setCertificationToConfirm] = useState(null);
   const [showCertificationConfirm, setShowCertificationConfirm] = useState(false);
-  const [sessionCertifications, setSessionCertifications] = useState(() => {
-    try {
-      const stored = localStorage.getItem('session_certifications');
-      return stored ? JSON.parse(stored) : {};
-    } catch (error) {
-      console.error('Failed to parse stored session certifications', error);
-      return {};
-    }
-  }); // { sessionId: certificationId }
-  const [employeeCompletions, setEmployeeCompletions] = useState(() => {
-    try {
-      const stored = localStorage.getItem('employee_completed_sessions');
-      return stored ? JSON.parse(stored) : [];
-    } catch (error) {
-      console.error('Failed to parse employee completions', error);
-      return [];
-    }
-  });
+  const [sessionCertifications, setSessionCertifications] = useState({}); // { sessionId: certificationId }
+  const [employeeCompletions, setEmployeeCompletions] = useState([]);
   
   // View All dialog states
   const [showViewAllDialog, setShowViewAllDialog] = useState(false);
   const [viewAllType, setViewAllType] = useState(null); // 'drafts', 'popular', 'newlyAdded'
   
-  // Save draft and published sessions to localStorage
-  // Helper function to clean up old localStorage data
-  const cleanupOldData = (aggressive = false) => {
-    try {
-      let cleanedBytes = 0;
-      
-      // Clean up old draft sessions (keep only last 5 if aggressive, 10 otherwise)
-      const drafts = localStorage.getItem('draft_sessions');
-      if (drafts) {
-        const parsed = JSON.parse(drafts);
-        const keepCount = aggressive ? 5 : 10;
-        if (parsed.length > keepCount) {
-          const cleaned = parsed.slice(0, keepCount);
-          const oldSize = drafts.length;
-          localStorage.setItem('draft_sessions', JSON.stringify(cleaned));
-          cleanedBytes += oldSize - JSON.stringify(cleaned).length;
-          console.log(`Cleaned up ${parsed.length - keepCount} old draft sessions`);
-        }
-      }
-      
-      // Clean up old published sessions (remove completed ones older than 14 days if aggressive, 30 days otherwise)
-      const published = localStorage.getItem('published_sessions');
-      if (published) {
-        const parsed = JSON.parse(published);
-        const daysAgo = aggressive ? 14 : 30;
-        const cutoffTime = Date.now() - (daysAgo * 24 * 60 * 60 * 1000);
-        const cleaned = parsed.filter(session => {
-          // Keep active/in-progress sessions
-          if (session.status && session.status !== 'completed') return true;
-          // Keep recent completed sessions
-          const completedAt = session.completedAt ? new Date(session.completedAt).getTime() : 0;
-          return completedAt > cutoffTime;
-        });
-        if (cleaned.length < parsed.length) {
-          const oldSize = published.length;
-          localStorage.setItem('published_sessions', JSON.stringify(cleaned));
-          cleanedBytes += oldSize - JSON.stringify(cleaned).length;
-          console.log(`Cleaned up ${parsed.length - cleaned.length} old published sessions`);
-        }
-      }
-      
-      // Clean up old activities (keep only last 50 if aggressive, 100 otherwise)
-      const activities = localStorage.getItem('admin_activities');
-      if (activities) {
-        const parsed = JSON.parse(activities);
-        const keepCount = aggressive ? 50 : 100;
-        if (parsed.length > keepCount) {
-          const cleaned = parsed.slice(0, keepCount);
-          const oldSize = activities.length;
-          localStorage.setItem('admin_activities', JSON.stringify(cleaned));
-          cleanedBytes += oldSize - JSON.stringify(cleaned).length;
-          console.log(`Cleaned up ${parsed.length - keepCount} old activities`);
-        }
-      }
-      
-      // Clean up saved assessments (keep only last 10 if aggressive, 20 otherwise)
-      const assessments = localStorage.getItem('saved_assessments');
-      if (assessments) {
-        try {
-          const parsed = JSON.parse(assessments);
-          // Check size first - if it's over 2MB, be more aggressive
-          const dataSize = new Blob([assessments]).size;
-          const isLarge = dataSize > 2 * 1024 * 1024; // 2MB
-          const keepCount = isLarge ? 5 : (aggressive ? 10 : 20);
-          
-          if (parsed.length > keepCount || isLarge) {
-            // Keep only the most recent assessments
-            const cleaned = parsed.slice(0, keepCount);
-            const oldSize = assessments.length;
-            localStorage.setItem('saved_assessments', JSON.stringify(cleaned));
-            cleanedBytes += oldSize - JSON.stringify(cleaned).length;
-            console.log(`Cleaned up ${parsed.length - keepCount} old assessments. Reduced size from ${(dataSize / 1024 / 1024).toFixed(2)}MB to ${(new Blob([JSON.stringify(cleaned)]).size / 1024 / 1024).toFixed(2)}MB`);
-          }
-        } catch (error) {
-          console.error('Error cleaning up assessments:', error);
-          // If parsing fails, clear it entirely
-          localStorage.removeItem('saved_assessments');
-          console.log('Removed corrupted saved_assessments data');
-        }
-      }
-      
-      // Clean up saved sessions (keep only last 50 if aggressive, 100 otherwise)
-      const savedSessions = localStorage.getItem('admin_saved_sessions');
-      if (savedSessions) {
-        const parsed = JSON.parse(savedSessions);
-        const keepCount = aggressive ? 50 : 100;
-        if (parsed.length > keepCount) {
-          const cleaned = parsed.slice(0, keepCount);
-          const oldSize = savedSessions.length;
-          localStorage.setItem('admin_saved_sessions', JSON.stringify(cleaned));
-          cleanedBytes += oldSize - JSON.stringify(cleaned).length;
-          console.log(`Cleaned up ${parsed.length - keepCount} old saved sessions`);
-        }
-      }
-      
-      // Clean up old notifications (keep only last 50 if aggressive, 100 otherwise)
-      const notifications = localStorage.getItem('admin_notifications');
-      if (notifications) {
-        const parsed = JSON.parse(notifications);
-        const keepCount = aggressive ? 50 : 100;
-        if (parsed.length > keepCount) {
-          const cleaned = parsed.slice(0, keepCount);
-          const oldSize = notifications.length;
-          localStorage.setItem('admin_notifications', JSON.stringify(cleaned));
-          cleanedBytes += oldSize - JSON.stringify(cleaned).length;
-          console.log(`Cleaned up ${parsed.length - keepCount} old notifications`);
-        }
-      }
-      
-      // Clean up old session certifications (keep only last 100 if aggressive, 200 otherwise)
-      const certifications = localStorage.getItem('session_certifications');
-      if (certifications) {
-        const parsed = JSON.parse(certifications);
-        const keepCount = aggressive ? 100 : 200;
-        if (parsed.length > keepCount) {
-          const cleaned = parsed.slice(0, keepCount);
-          const oldSize = certifications.length;
-          localStorage.setItem('session_certifications', JSON.stringify(cleaned));
-          cleanedBytes += oldSize - JSON.stringify(cleaned).length;
-          console.log(`Cleaned up ${parsed.length - keepCount} old certifications`);
-        }
-      }
-      
-      if (cleanedBytes > 0) {
-        console.log(`Total storage cleaned: ${(cleanedBytes / 1024).toFixed(2)} KB`);
-      }
-      
-      return true;
-    } catch (error) {
-      console.error('Error during cleanup:', error);
-      return false;
-    }
-  };
-
-  // Helper function to safely set localStorage with quota error handling
-  const safeSetLocalStorage = (key, value) => {
-    try {
-      const serialized = JSON.stringify(value);
-      // Check if data is too large (localStorage limit is usually 5-10MB)
-      if (serialized.length > 4 * 1024 * 1024) { // 4MB warning threshold
-        console.warn(`Warning: ${key} data is large (${(serialized.length / 1024 / 1024).toFixed(2)}MB). Consider cleaning up old data.`);
-        // Attempt cleanup before saving
-        cleanupOldData();
-      }
-      localStorage.setItem(key, serialized);
-      return true;
-    } catch (error) {
-      if (error.name === 'QuotaExceededError' || error.code === 22) {
-        console.error(`localStorage quota exceeded for ${key}. Attempting aggressive cleanup...`);
-        // Try aggressive cleanup first
-        if (cleanupOldData(true)) {
-          try {
-            // Try again after aggressive cleanup
-            localStorage.setItem(key, JSON.stringify(value));
-            console.log(`Successfully saved ${key} after aggressive cleanup`);
-            return true;
-          } catch (retryError) {
-            console.error(`Failed to save ${key} even after aggressive cleanup:`, retryError);
-            // Try one more time with even more aggressive cleanup
-            try {
-              // Remove oldest 50% of data from each category
-              const allKeys = Object.keys(localStorage);
-              let totalCleaned = 0;
-              for (const storageKey of allKeys) {
-                if (storageKey.startsWith('admin_') || storageKey.includes('session') || storageKey.includes('assessment')) {
-                  try {
-                    const data = localStorage.getItem(storageKey);
-                    if (data) {
-                      const parsed = JSON.parse(data);
-                      if (Array.isArray(parsed) && parsed.length > 10) {
-                        const keepCount = Math.max(10, Math.floor(parsed.length * 0.5));
-                        const cleaned = parsed.slice(0, keepCount);
-                        localStorage.setItem(storageKey, JSON.stringify(cleaned));
-                        totalCleaned += data.length - JSON.stringify(cleaned).length;
-                      }
-                    }
-                  } catch (e) {
-                    // Skip if can't parse
-                  }
-                }
-              }
-              if (totalCleaned > 0) {
-                console.log(`Emergency cleanup freed ${(totalCleaned / 1024).toFixed(2)} KB`);
-                localStorage.setItem(key, JSON.stringify(value));
-                return true;
-              }
-            } catch (finalError) {
-              console.error(`Final attempt failed:`, finalError);
-            }
-            const message = `Storage limit reached. The app has automatically cleaned up old data, but storage is still full. Please refresh the page to reload data or manually clear old sessions from the dashboard. Your current work will be saved in memory but may be lost on refresh.`;
-            showToast(message, 'warning');
-            return false;
-          }
-        } else {
-          const message = `Storage limit reached. Unable to clean up automatically. Please refresh the page or clear browser storage manually. Your current work will be saved in memory but may be lost on refresh.`;
-          showToast(message, 'warning');
-          return false;
-        }
-      }
-      console.error(`Failed to save ${key}:`, error);
-      return false;
-    }
-  };
-
-  useEffect(() => {
-    safeSetLocalStorage('draft_sessions', draftSessions);
-  }, [draftSessions]);
-
-useEffect(() => {
-  if (safeSetLocalStorage('published_sessions', publishedSessions)) {
-    window.dispatchEvent(new Event('published-sessions-updated'));
-  }
-}, [publishedSessions]);
-
-  // Run cleanup on mount, especially for large saved_assessments
-  useEffect(() => {
-    // Check for large saved_assessments and clean aggressively
-    const assessments = localStorage.getItem('saved_assessments');
-    if (assessments) {
-      const dataSize = new Blob([assessments]).size;
-      if (dataSize > 2 * 1024 * 1024) { // If over 2MB
-        console.log('Large saved_assessments detected, running aggressive cleanup...');
-        cleanupOldData(true); // Aggressive cleanup
-      } else {
-        cleanupOldData(); // Normal cleanup
-      }
-    } else {
-      cleanupOldData(); // Normal cleanup
-    }
-  }, []);
-
-  useEffect(() => {
-    safeSetLocalStorage('saved_assessments', savedAssessments);
-  }, [savedAssessments]);
-
-  // Save activities to localStorage
-  useEffect(() => {
-    safeSetLocalStorage('admin_activities', activities);
-  }, [activities]);
-
-  useEffect(() => {
-    if (safeSetLocalStorage('session_certifications', sessionCertifications)) {
-      window.dispatchEvent(new Event('session-certifications-updated'));
-    }
-  }, [sessionCertifications]);
-
-  useEffect(() => {
-    const syncEmployeeCompletions = () => {
-      try {
-        const stored = localStorage.getItem('employee_completed_sessions');
-        setEmployeeCompletions(stored ? JSON.parse(stored) : []);
-      } catch (error) {
-        console.error('Failed to sync employee completions', error);
-      }
-    };
-
-    window.addEventListener('employee-completions-updated', syncEmployeeCompletions);
-    window.addEventListener('storage', syncEmployeeCompletions);
-
-    return () => {
-      window.removeEventListener('employee-completions-updated', syncEmployeeCompletions);
-      window.removeEventListener('storage', syncEmployeeCompletions);
-    };
-  }, []);
+  // Removed all localStorage cleanup and persistence functions - now using API
   
   // Store File objects separately in memory (not in localStorage)
   const [sessionFileObjects, setSessionFileObjects] = useState({});
-
-  // Save sessions to localStorage whenever they change
-  useEffect(() => {
-    // Create a serializable version of savedSessions (without File objects)
-    const serializableSessions = savedSessions.map(session => ({
-      ...session,
-      files: session.files?.map(file => {
-        if (!file) return file;
-
-        if (file.fileObject) {
-          // Preserve metadata and preview data but omit the File reference
-          const {
-            fileObject,
-            ...rest
-          } = file;
-          return {
-            ...rest,
-            isFileObject: true,
-          };
-        }
-        return file;
-      })
-    }));
-    if (safeSetLocalStorage('admin_saved_sessions', serializableSessions)) {
-    console.log('Saved sessions to localStorage:', serializableSessions);
-    }
-  }, [savedSessions]);
-
-  // Save employees to localStorage whenever they change
-  useEffect(() => {
-    if (safeSetLocalStorage('admin_employees', employees)) {
-    console.log('Saved employees to localStorage:', employees);
-    }
-  }, [employees]);
-
-  // Save notifications to localStorage whenever they change
-  useEffect(() => {
-    if (safeSetLocalStorage('admin_notifications', notifications)) {
-    console.log('Saved notifications to localStorage:', notifications);
-    }
-  }, [notifications]);
-
-  // Real-time updates: Listen for storage changes (cross-tab communication)
-  useEffect(() => {
-    const handleStorageChange = (e) => {
-      if (e.key === 'admin_saved_sessions' && e.newValue) {
-        try {
-          const newSessions = JSON.parse(e.newValue);
-          setSavedSessions(newSessions);
-          console.log('Received sessions update from another tab:', newSessions);
-        } catch (error) {
-          console.error('Error parsing sessions from storage:', error);
-        }
-      } else if (e.key === 'admin_employees' && e.newValue) {
-        try {
-          const newEmployees = JSON.parse(e.newValue);
-          setEmployees(newEmployees);
-          console.log('Received employees update from another tab:', newEmployees);
-        } catch (error) {
-          console.error('Error parsing employees from storage:', error);
-        }
-      } else if (e.key === 'admin_notifications' && e.newValue) {
-        try {
-          const newNotifications = JSON.parse(e.newValue);
-          setNotifications(newNotifications);
-          console.log('Received notifications update from another tab:', newNotifications);
-        } catch (error) {
-          console.error('Error parsing notifications from storage:', error);
-        }
-      }
-    };
-
-    // Listen to storage events (cross-tab)
-    window.addEventListener('storage', handleStorageChange);
-
-    // Also listen to custom storage events for same-tab updates
-    const handleCustomStorageEvent = (e) => {
-      if (e.detail?.key === 'admin_saved_sessions' && e.detail?.value) {
-        try {
-          const newSessions = typeof e.detail.value === 'string' 
-            ? JSON.parse(e.detail.value) 
-            : e.detail.value;
-          setSavedSessions(newSessions);
-        } catch (error) {
-          console.error('Error parsing sessions from custom event:', error);
-        }
-      } else if (e.detail?.key === 'admin_employees' && e.detail?.value) {
-        try {
-          const newEmployees = typeof e.detail.value === 'string' 
-            ? JSON.parse(e.detail.value) 
-            : e.detail.value;
-          setEmployees(newEmployees);
-        } catch (error) {
-          console.error('Error parsing employees from custom event:', error);
-        }
-      } else if (e.detail?.key === 'admin_notifications' && e.detail?.value) {
-        try {
-          const newNotifications = typeof e.detail.value === 'string' 
-            ? JSON.parse(e.detail.value) 
-            : e.detail.value;
-          setNotifications(newNotifications);
-        } catch (error) {
-          console.error('Error parsing notifications from custom event:', error);
-        }
-      }
-    };
-
-    window.addEventListener('localStorageUpdate', handleCustomStorageEvent);
-
-    return () => {
-      window.removeEventListener('storage', handleStorageChange);
-      window.removeEventListener('localStorageUpdate', handleCustomStorageEvent);
-    };
-  }, []);
-
-  // Real-time polling: Periodically check for localStorage updates (for same-tab updates)
-  useEffect(() => {
-    const pollInterval = setInterval(() => {
-      // Check for sessions updates
-      try {
-        const storedSessions = localStorage.getItem('admin_saved_sessions');
-        if (storedSessions) {
-          const parsedSessions = JSON.parse(storedSessions);
-          // Only update if data has changed
-          const currentSessionsStr = JSON.stringify(savedSessions);
-          const storedSessionsStr = JSON.stringify(parsedSessions);
-          if (currentSessionsStr !== storedSessionsStr) {
-            setSavedSessions(parsedSessions);
-          }
-        }
-      } catch (error) {
-        console.error('Error polling sessions:', error);
-      }
-
-      // Check for employees updates
-      try {
-        const storedEmployees = localStorage.getItem('admin_employees');
-        if (storedEmployees) {
-          const parsedEmployees = JSON.parse(storedEmployees);
-          const currentEmployeesStr = JSON.stringify(employees);
-          const storedEmployeesStr = JSON.stringify(parsedEmployees);
-          if (currentEmployeesStr !== storedEmployeesStr) {
-            setEmployees(parsedEmployees);
-          }
-        }
-      } catch (error) {
-        console.error('Error polling employees:', error);
-      }
-
-      // Check for notifications updates
-      try {
-        const storedNotifications = localStorage.getItem('admin_notifications');
-        if (storedNotifications) {
-          const parsedNotifications = JSON.parse(storedNotifications);
-          const currentNotificationsStr = JSON.stringify(notifications);
-          const storedNotificationsStr = JSON.stringify(parsedNotifications);
-          if (currentNotificationsStr !== storedNotificationsStr) {
-            setNotifications(parsedNotifications);
-          }
-        }
-      } catch (error) {
-        console.error('Error polling notifications:', error);
-      }
-    }, 2000); // Poll every 2 seconds for real-time updates
-
-    return () => clearInterval(pollInterval);
-  }, [savedSessions, employees, notifications]);
 
   const [sessionFormData, setSessionFormData] = useState({
     title: '',
     type: '',
     audience: '',
-    description: ''
+    description: '',
+    skills: []
   });
   
   // Track skipped steps
@@ -1351,10 +980,10 @@ useEffect(() => {
     const totalActiveSessions = filteredSessions.filter(s => s.status === 'in_progress').length;
 
     return [
-      { label: 'Total Sessions Created', value: totalSessionsCreated.toString(), color: '#3b82f6', icon: <BarChartIcon sx={{ color: '#3b82f6' }} /> },
       { label: 'Active Employees', value: activeEmployees.toString(), color: '#114417DB', icon: <PeopleIcon sx={{ color: '#114417DB' }} /> },
-      { label: 'Upcoming Sessions', value: upcomingSessions.toString(), color: '#f59e0b', icon: <CalendarIcon sx={{ color: '#f59e0b' }} /> },
-      { label: 'Total Active Sessions', value: totalActiveSessions.toString(), color: '#ef4444', icon: <PlayCircleFilledIcon sx={{ color: '#ef4444' }} /> }
+      { label: 'Total Sessions Created', value: totalSessionsCreated.toString(), color: '#3b82f6', icon: <BarChartIcon sx={{ color: '#3b82f6' }} /> },
+      { label: 'Scheduled Sessions', value: upcomingSessions.toString(), color: '#f59e0b', icon: <CalendarIcon sx={{ color: '#f59e0b' }} /> },
+      { label: 'Published Sessions', value: totalActiveSessions.toString(), color: '#ef4444', icon: <PlayCircleFilledIcon sx={{ color: '#ef4444' }} /> }
     ];
   }, [savedSessions, employees, dateRangeFilter, customStartDate, customEndDate]);
 
@@ -1428,8 +1057,7 @@ useEffect(() => {
         // Only update if there were changes
         const hasChanges = sessionsToPublish.length > 0;
         if (hasChanges) {
-          safeSetLocalStorage('published_sessions', updated);
-          window.dispatchEvent(new Event('published-sessions-updated'));
+          // State is updated via setPublishedSessions above - no localStorage needed
           
           // Log activity for auto-published sessions
           sessionsToPublish.forEach(session => {
@@ -1643,32 +1271,9 @@ useEffect(() => {
     }
     return 'create';
   }); // 'create', 'content-creator', 'live-trainings', 'assessment', 'certification', 'preview', 'schedule'
-  const [manageSessionView, setManageSessionView] = useState(() => {
-    try {
-      const savedState = localStorage.getItem('admin_page_state');
-      if (savedState) {
-        const state = JSON.parse(savedState);
-        return state.manageSessionView || 'create';
-      }
-    } catch (error) {
-      console.error('Error loading page state:', error);
-    }
-    return 'create';
-  }); // Keep for backward compatibility, synced with manageSessionTab
+  const [manageSessionView, setManageSessionView] = useState('create'); // Keep for backward compatibility, synced with manageSessionTab
   
-  // Save page state to localStorage whenever it changes
-  useEffect(() => {
-    const pageState = {
-      activeTab,
-      manageSessionTab,
-      manageSessionView
-    };
-    try {
-      localStorage.setItem('admin_page_state', JSON.stringify(pageState));
-    } catch (error) {
-      console.error('Error saving page state:', error);
-    }
-  }, [activeTab, manageSessionTab, manageSessionView]);
+  // Removed localStorage persistence for page state - now using component state only
   const [manageSessionsViewMode, setManageSessionsViewMode] = useState('list'); // 'list' or 'grid'
   const [manageSessionsSearchTerm, setManageSessionsSearchTerm] = useState('');
 
@@ -1931,7 +1536,10 @@ useEffect(() => {
   };
 
   const handleProfileClick = (event) => {
-    setProfileAnchorEl(event.currentTarget);
+    setActiveTab('profile');
+    setShowProfile(false);
+    setShowEditProfile(false);
+    setShowPasswordManager(false);
   };
 
   const handleProfileClose = () => {
@@ -1945,7 +1553,10 @@ useEffect(() => {
   };
 
   const handleClearAllSessions = () => {
-    if (window.confirm('Are you sure you want to clear ALL sessions? This will delete:\n- All published sessions\n- All draft sessions\n- All saved assessments\n- Employee completion data\n- Session certifications\n\nThis action cannot be undone!')) {
+    setConfirmDialogData({
+      title: 'Clear All Sessions',
+      message: 'Are you sure you want to clear ALL sessions? This will delete:\n- All published sessions\n- All draft sessions\n- All saved assessments\n- Employee completion data\n- Session certifications\n\nThis action cannot be undone!',
+      onConfirm: () => {
       try {
         // Clear all session-related localStorage
         localStorage.removeItem('published_sessions');
@@ -1978,7 +1589,9 @@ useEffect(() => {
         console.error('Error clearing sessions:', error);
         showToast('Error clearing sessions. Please try again.', 'error');
       }
-    }
+      }
+    });
+    setShowConfirmDialog(true);
   };
 
   const handleViewProfile = () => {
@@ -1987,13 +1600,20 @@ useEffect(() => {
   };
 
   const handleCloseProfile = () => {
+    setActiveTab('dashboard');
     setShowProfile(false);
     setShowEditProfile(false);
+    setShowPasswordManager(false);
   };
 
   const handleEditProfile = () => {
     setEditProfileData(profileData);
     setShowEditProfile(true);
+  };
+  
+  const handleChangePassword = () => {
+    setShowPasswordManager(true);
+    setShowEditProfile(false);
   };
 
   const handleEditProfileChange = (field) => (event) => {
@@ -2021,14 +1641,9 @@ useEffect(() => {
     }));
   };
 
-  const handlePasswordReset = () => {
+  const handlePasswordReset = async () => {
     if (!passwordData.currentPassword || !passwordData.newPassword || !passwordData.confirmPassword) {
       showToast('Please fill in all fields', 'warning');
-      return;
-    }
-
-    if (passwordData.currentPassword !== adminCredentials.password) {
-      showToast('Current password is incorrect', 'error');
       return;
     }
 
@@ -2037,15 +1652,33 @@ useEffect(() => {
       return;
     }
 
-    if (passwordData.newPassword.length < 6) {
-      showToast('Password must be at least 6 characters long', 'warning');
+    if (passwordData.newPassword.length < 8) {
+      showToast('Password must be at least 8 characters long', 'warning');
       return;
     }
 
-    setAdminCredentials(prev => ({
-      ...prev,
-      password: passwordData.newPassword
-    }));
+    try {
+      setIsLoading(true);
+      const { getAuthToken } = await import('../utils/api');
+      const token = getAuthToken();
+      
+      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:8000/api'}/auth/reset-password/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Token ${token}`
+        },
+        body: JSON.stringify({
+          current_password: passwordData.currentPassword,
+          new_password: passwordData.newPassword,
+          confirm_password: passwordData.confirmPassword
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || errorData.error || 'Failed to reset password');
+      }
 
     setPasswordData({
       currentPassword: '',
@@ -2054,6 +1687,12 @@ useEffect(() => {
     });
 
     showToast('Password updated successfully!', 'success');
+    } catch (error) {
+      console.error('Password reset error:', error);
+      showToast(error.message || 'Failed to reset password', 'error');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleClosePasswordManager = () => {
@@ -2063,6 +1702,7 @@ useEffect(() => {
       newPassword: '',
       confirmPassword: ''
     });
+    // Stay on profile page
   };
 
   // Notification handlers
@@ -2135,6 +1775,22 @@ useEffect(() => {
 
     return () => clearInterval(interval);
   }, [employees]);
+
+  // Map frontend session type values to backend values
+  const mapSessionTypeToBackend = (frontendType) => {
+    const typeMap = {
+      'compliance': 'Compliance',
+      'learning': 'Technical Training',
+      'engagement': 'Employee Wellbeing',
+      'performance': 'Leadership Development',
+      'culture': 'General',
+      'dei': 'General',
+      'safety': 'General',
+      'security': 'General',
+      'live-training': 'General'
+    };
+    return typeMap[frontendType] || frontendType || 'General';
+  };
 
   const handleSessionFormChange = (field, value) => {
     setSessionFormData(prev => ({
@@ -2582,50 +2238,111 @@ Make the content professional, educational, and suitable for workplace training.
     // setManageSessionTab('all-sessions');
   };
 
-  const handlePublishQuiz = (quizData) => {
-    // Save session with quiz as ready to publish
-    const publishedSession = {
-      id: Date.now(),
-      title: sessionFormData.title || quizData.title || 'Untitled Session',
-      type: sessionFormData.type || 'compliance',
-      audience: sessionFormData.audience || 'all',
-      description: sessionFormData.description || quizData.description || '',
-      files: serializeFilesForStorage(selectedFiles), // Ensure files are included
-      quiz: quizData,
-      aiContent: aiContentGenerated ? { keywords: aiKeywords } : null,
-      creationMode: selectedCreationMode,
-      status: 'published', // Change to published so employees can see it immediately
-      createdAt: new Date().toISOString(),
-      publishedAt: new Date().toISOString(),
-      scheduledDate: null,
-      scheduledTime: null,
-      scheduledDateTime: null,
-      dueDate: null,
-      dueTime: null,
-      dueDateTime: null,
-      isLocked: false,
-      approvalExpiresAt: null,
-      lastApprovalDate: null,
-      instructor: 'HR Team',
-      duration: '60 minutes'
-    };
-    
-    setPublishedSessions(prev => [normalizePublishedSession(publishedSession), ...prev]);
+  const handlePublishQuiz = async (quizData) => {
+    try {
+      setIsLoading(true);
+      
+      // Get or use the draft ID to ensure we update the same session
+      let sessionId = sessionFormData?.draftId;
+      
+      // If no ID found, try to find existing session by title
+      if (!sessionId) {
+        const resolvedSessionForm = sessionContentSnapshot?.sessionForm || sessionFormData;
+        const sessionTitle = resolvedSessionForm.title || quizData.title;
+        if (sessionTitle) {
+          const existingByTitle = draftSessions.find(d => d.title === sessionTitle) || 
+                                  savedSessions.find(s => s.title === sessionTitle);
+          if (existingByTitle && existingByTitle.id) {
+            sessionId = existingByTitle.id;
+          }
+        }
+      }
+      
+      // Build complete session data
+      const resolvedSessionForm = sessionContentSnapshot?.sessionForm || sessionFormData;
+      const resolvedAiContent = sessionContentSnapshot?.aiContent ?? (aiContentGenerated ? { keywords: aiKeywords } : null);
+      const resolvedFiles = sessionContentSnapshot?.files ?? mapFilesToMetadata(selectedFiles);
+      const resolvedQuiz = quizData?.quiz || quizData || null;
+      const resolvedCreationMode = sessionContentSnapshot?.creationMode ?? selectedCreationMode;
+      
+      const sessionData = {
+        title: resolvedSessionForm.title || quizData.title || 'Untitled Session',
+        type: mapSessionTypeToBackend(resolvedSessionForm.type) || 'General',
+        description: resolvedSessionForm.description || quizData.description || '',
+        skills: resolvedSessionForm.skills || [],
+        files: resolvedFiles,
+        quiz: resolvedQuiz,
+        ai_content: resolvedAiContent,
+        creation_mode: resolvedCreationMode,
+        status: 'published',
+        published_at: new Date().toISOString()
+      };
+      
+      // Save to API - update if draft exists, create if new
+      let savedSession;
+      if (sessionId) {
+        // Try to find existing session by ID
+        const existingSession = draftSessions.find(d => d.id === sessionId) || 
+                                savedSessions.find(s => s.id === sessionId);
+        if (existingSession && existingSession.id) {
+          // Update existing session using its database ID
+          savedSession = await sessionAPI.update(existingSession.id, sessionData);
+        } else {
+          // Try to update with the sessionId (might be a database ID)
+          try {
+            savedSession = await sessionAPI.update(sessionId, sessionData);
+          } catch (updateError) {
+            // If update fails, create new session
+            console.log('Update failed, creating new session:', updateError);
+            savedSession = await sessionAPI.create(sessionData);
+          }
+        }
+      } else {
+        // Create new session
+        savedSession = await sessionAPI.create(sessionData);
+      }
+      
+      // Update sessionFormData with the saved session ID
+      if (savedSession.id) {
+        setSessionFormData(prev => ({ ...prev, draftId: savedSession.id }));
+      }
+      
+      // Remove from drafts (use savedSession.id to ensure we remove the correct one)
+      setDraftSessions(prev => prev.filter(s => s.id !== savedSession.id));
+      
+      // Add to published sessions
+      const normalized = normalizePublishedSession(savedSession);
+      setPublishedSessions(prev => {
+        const filtered = prev.filter(s => s.id !== savedSession.id);
+        return [normalized, ...filtered];
+      });
+      
+      // Also update savedSessions
+      setSavedSessions(prev => {
+        const filtered = prev.filter(s => s.id !== savedSession.id);
+        return [normalized, ...filtered];
+      });
     
     // Log activity
     addActivity(
-      `Session published: ${publishedSession.title}`,
+        `Session published: ${sessionData.title}`,
       'Admin',
       'published',
       'session_published'
     );
     
-    showToast('Session published successfully! It is now ready to schedule.', 'success');
+      showToast('Session published successfully! It is now visible to employees.', 'success');
     setCurrentQuizData(null);
     setShowQuizForm(false);
     // Navigate to Schedule step in manage section
     setActiveTab('manage-session');
     setManageSessionTab('schedule');
+    } catch (error) {
+      console.error('Failed to publish session:', error);
+      showToast(`Failed to publish session: ${error.message}`, 'error');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleQuizPreview = (quizData) => {
@@ -2761,98 +2478,104 @@ Make the content professional, educational, and suitable for workplace training.
   };
 
   // Universal Save as Draft function - saves current state from any page
-  const handleSaveAsDraft = () => {
-    // Determine if we have a title (from sessionFormData or generate one)
-    const draftTitle = sessionFormData.title || 
-                      (selectedFiles.length > 0 ? `Draft - ${selectedFiles[0].name}` : 'Untitled Session');
-    
-    // Get or create draftId - always use the same ID for the same session
-    let existingDraftId = sessionFormData.draftId;
-    
-    // If no draftId exists, create one and set it
-    if (!existingDraftId) {
-      existingDraftId = Date.now();
-      setSessionFormData(prev => ({ ...prev, draftId: existingDraftId }));
+  const handleSaveAsDraft = async () => {
+    try {
+      // Determine if we have a title (from sessionFormData or generate one)
+      const draftTitle = sessionFormData.title || 
+                        (selectedFiles.length > 0 ? `Draft - ${selectedFiles[0].name}` : 'Untitled Session');
+      
+      // Get or create draftId - always use the same ID for the same session
+      let existingDraftId = sessionFormData.draftId;
+      
+      // If no draftId exists, create one and set it
+      if (!existingDraftId) {
+        existingDraftId = Date.now();
+        setSessionFormData(prev => ({ ...prev, draftId: existingDraftId }));
+      }
+      
+      // Build session data for API
+      const resolvedSessionForm = sessionContentSnapshot?.sessionForm || sessionFormData;
+      const resolvedAiContent = sessionContentSnapshot?.aiContent ?? (aiContentGenerated ? { keywords: aiKeywords } : null);
+      const resolvedFiles = sessionContentSnapshot?.files ?? mapFilesToMetadata(selectedFiles);
+      const resolvedQuiz = currentQuizData?.quiz || currentQuizData || null;
+      const resolvedCreationMode = sessionContentSnapshot?.creationMode ?? selectedCreationMode;
+      
+      const sessionData = {
+        title: draftTitle,
+        type: mapSessionTypeToBackend(resolvedSessionForm.type) || 'General',
+        description: resolvedSessionForm.description || '',
+        skills: resolvedSessionForm.skills || [],
+        files: resolvedFiles,
+        quiz: resolvedQuiz,
+        ai_content: resolvedAiContent,
+        creation_mode: resolvedCreationMode,
+        status: 'draft'
+      };
+      
+      // Save to API - update if draft exists (by ID or by title match), create if new
+      let savedSession;
+      // First try to find by ID
+      let existingDraft = draftSessions.find(d => d.id === existingDraftId);
+      // If not found by ID, try to find by title (in case ID changed)
+      if (!existingDraft && draftTitle) {
+        existingDraft = draftSessions.find(d => d.title === draftTitle && d.status === 'draft');
+      }
+      // Also check savedSessions for any existing session with this title
+      if (!existingDraft && draftTitle) {
+        existingDraft = savedSessions.find(s => s.title === draftTitle && (s.status === 'draft' || s.status === 'scheduled'));
+      }
+      
+      if (existingDraft && existingDraft.id) {
+        // Update existing session using its database ID
+        savedSession = await sessionAPI.update(existingDraft.id, sessionData);
+        // Update draftId with the actual ID from server
+        if (savedSession.id) {
+          setSessionFormData(prev => ({ ...prev, draftId: savedSession.id }));
+        }
+      } else {
+        // Create new session
+        savedSession = await sessionAPI.create(sessionData);
+        // Update draftId with the actual ID from server
+        if (savedSession.id) {
+          setSessionFormData(prev => ({ ...prev, draftId: savedSession.id }));
+        }
+      }
+      
+      // Update local state
+      const normalized = normalizePublishedSession(savedSession);
+      setDraftSessions(prev => {
+        const filtered = prev.filter(d => d.id !== savedSession.id);
+        return [normalized, ...filtered];
+      });
+      
+      setSavedSessions(prev => {
+        const filtered = prev.filter(s => s.id !== savedSession.id);
+        return [normalized, ...filtered];
+      });
+
+      // Store File objects separately in memory for restoration
+      if (selectedFiles.length > 0) {
+        setSessionFileObjects(prev => ({
+          ...prev,
+          [savedSession.id]: selectedFiles
+        }));
+      }
+
+      // Don't log activity every time to avoid noise - only log on initial creation
+      if (!existingDraft) {
+        addActivity(
+          `Draft saved: ${draftTitle}`,
+          'Admin',
+          'draft',
+          'session_saved'
+        );
+      }
+
+      // Don't show toast here - only show when cancelled
+    } catch (error) {
+      console.error('Failed to save draft:', error);
+      // Silently fail for drafts - don't interrupt user workflow
     }
-    
-    // Create resume state object with current progress
-    const resumeState = {
-      contentCreatorView: contentCreatorView,
-      selectedFiles: serializeFilesForStorage(selectedFiles),
-      aiContentGenerated: aiContentGenerated,
-      aiKeywords: aiKeywords,
-      selectedCreationMode: selectedCreationMode,
-      showContentPreview: showContentPreview,
-      sessionFormData: { ...sessionFormData, draftId: existingDraftId },
-      currentQuizData: currentQuizData,
-      activeTab: activeTab,
-      manageSessionTab: manageSessionTab,
-      selectedTemplate: selectedTemplate,
-      certificateFields: certificateFields,
-      fieldsSaved: fieldsSaved
-    };
-
-    const sessionId = existingDraftId;
-    
-    // Get existing draft to preserve createdAt
-    const existingDraft = draftSessions.find(d => d.id === sessionId);
-    
-    const draftSession = {
-      id: sessionId,
-      title: draftTitle,
-      type: sessionFormData.type || 'compliance',
-      audience: sessionFormData.audience || 'all',
-      description: sessionFormData.description || '',
-      files: serializeFilesForStorage(selectedFiles),
-      status: 'draft',
-      createdAt: existingDraft?.createdAt || new Date().toISOString(),
-      savedAt: new Date().toISOString(),
-      resumeState: resumeState,
-      aiContent: aiContentGenerated ? { keywords: aiKeywords, content: sessionContentSnapshot?.aiContent?.content } : sessionContentSnapshot?.aiContent || null,
-      creationMode: selectedCreationMode,
-      quiz: currentQuizData?.quiz || currentQuizData || null,
-      certificate: (selectedTemplate && fieldsSaved) ? {
-        id: 'preview-cert',
-        name: selectedTemplate.name || 'Certificate',
-        template: selectedTemplate,
-        fields: certificateFields
-      } : null,
-      draftId: existingDraftId // Store draftId for consistency
-    };
-
-    // Update or add to draft sessions - always update the same draft, don't create new ones
-    setDraftSessions(prev => {
-      const filtered = prev.filter(d => d.id !== sessionId);
-      const updated = [draftSession, ...filtered];
-      safeSetLocalStorage('draft_sessions', updated);
-      return updated;
-    });
-
-    // Store File objects separately in memory for restoration
-    if (selectedFiles.length > 0) {
-      setSessionFileObjects(prev => ({
-        ...prev,
-        [sessionId]: selectedFiles
-      }));
-    }
-
-    // Also update savedSessions for compatibility
-    setSavedSessions(prev => {
-      const filtered = prev.filter(s => s.id !== sessionId);
-      return [draftSession, ...filtered];
-    });
-
-    // Don't log activity every time to avoid noise - only log on initial creation
-    if (!existingDraft) {
-      addActivity(
-        `Draft saved: ${draftTitle}`,
-        'Admin',
-        'draft',
-        'session_saved'
-      );
-    }
-
-    // Don't show toast here - only show when cancelled
   };
 
   const handleSaveSession = () => {
@@ -3170,17 +2893,8 @@ Make the content professional, educational, and suitable for workplace training.
     // Also remove from saved sessions
     setSavedSessions(prev => prev.filter(s => s.id !== session.id));
     
-    // Persist to localStorage
-    try {
-      const published = publishedSessions.filter(s => s.id !== session.id);
-      safeSetLocalStorage('published_sessions', published);
-      const drafts = draftSessions.filter(s => s.id !== session.id);
-      safeSetLocalStorage('draft_sessions', drafts);
-      const saved = savedSessions.filter(s => s.id !== session.id);
-      safeSetLocalStorage('admin_saved_sessions', saved);
-    } catch (error) {
-      console.error('Error updating localStorage after delete:', error);
-    }
+    // State updates are handled by setPublishedSessions, setDraftSessions, setSavedSessions above
+    // No localStorage needed - data is managed via API
     
     // Log activity
     addActivity(
@@ -3373,11 +3087,32 @@ Make the content professional, educational, and suitable for workplace training.
                 </Typography>
               </Grid>
             )}
+            {session.skills && session.skills.length > 0 && (
+              <Grid item xs={12}>
+                <Typography variant="body2" color="text.secondary" gutterBottom>
+                  Skills
+                </Typography>
+                <Box display="flex" flexWrap="wrap" gap={1}>
+                  {session.skills.map((skill, idx) => (
+                    <Chip
+                      key={idx}
+                      label={skill}
+                      size="small"
+                      sx={{
+                        backgroundColor: '#e8f5e9',
+                        color: '#2e7d32',
+                        fontSize: '0.75rem'
+                      }}
+                    />
+                  ))}
+                </Box>
+              </Grid>
+            )}
           </Grid>
         </Card>
 
         {/* Stage 2: Content Creator */}
-        {(session.files?.length > 0 || session.quiz || session.aiContent || session.creationMode) && (
+        {(session.files?.length > 0 || session.aiContent || session.creationMode) ? (
           <Card sx={{ p: 3, mb: 3, backgroundColor: '#ffffff', border: '1px solid #e5e7eb' }}>
             <Box display="flex" alignItems="center" gap={1} mb={2}>
               <CheckCircleIcon sx={{ color: '#114417DB' }} />
@@ -3490,6 +3225,18 @@ Make the content professional, educational, and suitable for workplace training.
               </Box>
             )}
           </Card>
+        ) : (
+          <Card sx={{ p: 3, mb: 3, backgroundColor: '#fff3cd', border: '1px solid #ffc107' }}>
+            <Box display="flex" alignItems="center" gap={1} mb={2}>
+              <WarningAmberIcon sx={{ color: '#ffc107' }} />
+              <Typography variant="subtitle1" fontWeight="bold" sx={{ color: '#856404' }}>
+                Stage 2: Content Creator (Not Configured)
+              </Typography>
+            </Box>
+            <Typography variant="body2" color="text.secondary">
+              No content was added to this session. Upload files, generate AI content, or use content creator to add materials.
+            </Typography>
+          </Card>
         )}
 
         {/* Stage 3: Checkpoint Assessment */}
@@ -3557,19 +3304,33 @@ Make the content professional, educational, and suitable for workplace training.
                         </Typography>
                         {question.options && question.options.length > 0 && (
                           <Box ml={2} mt={1}>
-                            {question.options.map((option, oIndex) => (
-                              <Typography 
-                                key={oIndex} 
-                                variant="body2" 
-                                sx={{ 
-                                  color: question.correctAnswer === oIndex || question.correctAnswer === option ? '#114417DB' : 'text.primary',
-                                  fontWeight: question.correctAnswer === oIndex || question.correctAnswer === option ? 'bold' : 'normal'
-                                }}
-                              >
-                                {String.fromCharCode(65 + oIndex)}. {option}
-                                {(question.correctAnswer === oIndex || question.correctAnswer === option) && ' ✓'}
-                              </Typography>
-                            ))}
+                            {question.options.map((option, oIndex) => {
+                              // Check if this option is the correct answer
+                              // Only show as correct if correctAnswer is explicitly set (not null/undefined/empty)
+                              const hasCorrectAnswer = question.correctAnswer !== null && 
+                                                       question.correctAnswer !== undefined && 
+                                                       question.correctAnswer !== '';
+                              const isCorrect = hasCorrectAnswer && (
+                                question.correctAnswer === oIndex || 
+                                question.correctAnswer === option ||
+                                (Array.isArray(question.correctAnswers) && question.correctAnswers.includes(oIndex)) ||
+                                (Array.isArray(question.correctAnswers) && question.correctAnswers.includes(option))
+                              );
+                              
+                              return (
+                                <Typography 
+                                  key={oIndex} 
+                                  variant="body2" 
+                                  sx={{ 
+                                    color: isCorrect ? '#114417DB' : 'text.primary',
+                                    fontWeight: isCorrect ? 'bold' : 'normal'
+                                  }}
+                                >
+                                  {String.fromCharCode(65 + oIndex)}. {option}
+                                  {isCorrect && ' ✓'}
+                                </Typography>
+                              );
+                            })}
                           </Box>
                         )}
                         {question.type && (
@@ -3815,9 +3576,12 @@ Make the content professional, educational, and suitable for workplace training.
   };
 
   const handleDeleteSession = (sessionId) => {
-    if (window.confirm('Are you sure you want to delete this session? This action cannot be undone.')) {
-      const session = savedSessions.find(s => s.id === sessionId);
-      setSavedSessions(prev => prev.filter(session => session.id !== sessionId));
+    setConfirmDialogData({
+      title: 'Delete Session',
+      message: 'Are you sure you want to delete this session? This action cannot be undone.',
+      onConfirm: () => {
+        const session = savedSessions.find(s => s.id === sessionId);
+        setSavedSessions(prev => prev.filter(session => session.id !== sessionId));
       
       // Also remove from draftSessions if it's a draft
       if (session && session.status === 'draft') {
@@ -3842,7 +3606,9 @@ Make the content professional, educational, and suitable for workplace training.
       }
       
       showToast('Session deleted successfully!', 'success');
-    }
+      }
+    });
+    setShowConfirmDialog(true);
   };
 
   // Folder view handlers
@@ -3871,40 +3637,51 @@ Make the content professional, educational, and suitable for workplace training.
     setViewMode('edit');
   };
 
-  const handleSaveEdits = () => {
+  const handleSaveEdits = async () => {
     if (!editingSession || !selectedAllSessionItem) return;
 
-    const updatedSession = { ...editingSession };
-    // Remove folderType before saving
-    const folderType = updatedSession.folderType;
-    delete updatedSession.folderType;
-    
-    // Update savedAt timestamp
-    updatedSession.savedAt = new Date().toISOString();
+    try {
+      const updatedSession = { ...editingSession };
+      // Remove folderType before saving
+      const folderType = updatedSession.folderType;
+      delete updatedSession.folderType;
+      
+      // Update savedAt timestamp
+      updatedSession.savedAt = new Date().toISOString();
 
-    // Update in the appropriate array
-    if (folderType === 'drafts') {
-      setDraftSessions(prev => {
-        const updated = prev.map(s => s.id === updatedSession.id ? updatedSession : s);
-        localStorage.setItem('draft_sessions', JSON.stringify(updated));
-        return updated;
+      // Save to backend API
+      const savedSession = await sessionAPI.update(updatedSession.id, updatedSession);
+      const normalized = normalizePublishedSession(savedSession);
+
+      // Update in the appropriate array based on status
+      if (normalized.status === 'draft') {
+        setDraftSessions(prev => {
+          const filtered = prev.filter(s => s.id !== normalized.id);
+          return [normalized, ...filtered];
+        });
+      } else if (normalized.status === 'published' || normalized.status === 'scheduled') {
+        setPublishedSessions(prev => {
+          const filtered = prev.filter(s => s.id !== normalized.id);
+          return [normalized, ...filtered];
+        });
+      }
+
+      // Update savedSessions
+      setSavedSessions(prev => {
+        const filtered = prev.filter(s => s.id !== normalized.id);
+        return [normalized, ...filtered];
       });
-    } else if (folderType === 'assessments') {
-      setSavedAssessments(prev => {
-        const updated = prev.map(a => a.id === updatedSession.id ? updatedSession : a);
-        localStorage.setItem('saved_assessments', JSON.stringify(updated));
-        return updated;
-      });
-    } else if (folderType === 'published') {
-      setPublishedSessions(prev => prev.map(s => s.id === updatedSession.id ? normalizePublishedSession(updatedSession) : s));
+
+      // Update the selected item with folderType restored
+      const sessionWithFolder = { ...normalized, folderType };
+      setSelectedAllSessionItem(sessionWithFolder);
+      setEditingSession(null);
+      setViewMode('preview');
+      showToast('Session updated successfully!', 'success');
+    } catch (error) {
+      console.error('Failed to save session edits:', error);
+      showToast(`Failed to save session: ${error.message}`, 'error');
     }
-
-    // Update the selected item with folderType restored
-    const sessionWithFolder = { ...updatedSession, folderType };
-    setSelectedAllSessionItem(sessionWithFolder);
-    setEditingSession(null);
-    setViewMode('preview');
-    showToast('Session updated successfully!', 'success');
   };
 
   const handleCancelEdit = () => {
@@ -4018,52 +3795,75 @@ Make the content professional, educational, and suitable for workplace training.
 
   const removeQuestion = (questionIndex) => {
     if (!editingSession) return;
-    if (!window.confirm('Are you sure you want to remove this question?')) return;
-    
-    const updated = JSON.parse(JSON.stringify(editingSession));
-    const questions = updated.quiz?.questions || updated.questions || [];
-    questions.splice(questionIndex, 1);
-    
-    if (updated.quiz) {
-      updated.quiz.questions = questions;
-    } else {
-      updated.questions = questions;
-    }
-    
-    setEditingSession(updated);
+    setConfirmDialogData({
+      title: 'Remove Question',
+      message: 'Are you sure you want to remove this question?',
+      onConfirm: () => {
+        const updated = JSON.parse(JSON.stringify(editingSession));
+        const questions = updated.quiz?.questions || updated.questions || [];
+        questions.splice(questionIndex, 1);
+        
+        if (updated.quiz) {
+          updated.quiz.questions = questions;
+        } else {
+          updated.questions = questions;
+        }
+        
+        setEditingSession(updated);
+      }
+    });
+    setShowConfirmDialog(true);
   };
 
   const handleDeleteDraftSession = (sessionId) => {
-    if (window.confirm('Are you sure you want to delete this draft session? This action cannot be undone.')) {
-      const session = draftSessions.find(s => s.id === sessionId);
-      setDraftSessions(prev => prev.filter(s => s.id !== sessionId));
-      
-      // Also remove from savedSessions
-      setSavedSessions(prev => prev.filter(s => s.id !== sessionId));
-      
-      // Clean up file objects
-      setSessionFileObjects(prev => {
-        const updated = { ...prev };
-        delete updated[sessionId];
-        return updated;
-      });
-      
-      // Log activity
-      if (session) {
-        addActivity(
-          `Draft session deleted: ${session.title || 'Untitled'}`,
-          'Admin',
-          'deleted',
-          'session_deleted'
-        );
+    setConfirmDialogData({
+      title: 'Delete Draft Session',
+      message: 'Are you sure you want to delete this draft session? This action cannot be undone.',
+      onConfirm: async () => {
+        try {
+          const session = draftSessions.find(s => s.id === sessionId);
+          
+          // Delete from backend
+          await sessionAPI.delete(sessionId);
+          
+          // Remove from local state
+          setDraftSessions(prev => prev.filter(s => s.id !== sessionId));
+          
+          // Also remove from savedSessions
+          setSavedSessions(prev => prev.filter(s => s.id !== sessionId));
+          
+          // Clean up file objects
+          setSessionFileObjects(prev => {
+            const updated = { ...prev };
+            delete updated[sessionId];
+            return updated;
+          });
+          
+          // Log activity
+          if (session) {
+            addActivity(
+              `Draft session deleted: ${session.title || 'Untitled'}`,
+              'Admin',
+              'deleted',
+              'session_deleted'
+            );
+          }
+          
+          showToast('Draft session deleted successfully!', 'success');
+        } catch (error) {
+          console.error('Failed to delete draft session:', error);
+          showToast(`Failed to delete draft session: ${error.message}`, 'error');
+        }
       }
-      
-      showToast('Draft session deleted successfully!', 'success');
-    }
+    });
+    setShowConfirmDialog(true);
   };
 
   const handleDeleteAssessment = (assessmentId) => {
-    if (window.confirm('Are you sure you want to delete this assessment? This action cannot be undone.')) {
+    setConfirmDialogData({
+      title: 'Delete Assessment',
+      message: 'Are you sure you want to delete this assessment? This action cannot be undone.',
+      onConfirm: () => {
       const assessment = savedAssessments.find(a => a.id === assessmentId);
       setSavedAssessments(prev => prev.filter(a => a.id !== assessmentId));
       
@@ -4078,11 +3878,16 @@ Make the content professional, educational, and suitable for workplace training.
       }
       
       showToast('Assessment deleted successfully!', 'success');
-    }
+      }
+    });
+    setShowConfirmDialog(true);
   };
 
   const handleDeletePublishedSession = (sessionId) => {
-    if (window.confirm('Are you sure you want to delete this published session? This action cannot be undone.')) {
+    setConfirmDialogData({
+      title: 'Delete Published Session',
+      message: 'Are you sure you want to delete this published session? This action cannot be undone.',
+      onConfirm: () => {
       // Use functional update to ensure we're working with the latest state
       setPublishedSessions(prev => {
         const session = prev.find(s => s.id === sessionId);
@@ -4118,7 +3923,9 @@ Make the content professional, educational, and suitable for workplace training.
       
       // Show success message
       showToast('Published session deleted successfully!', 'success');
-    }
+      }
+    });
+    setShowConfirmDialog(true);
   };
 
 
@@ -4232,8 +4039,28 @@ Make the content professional, educational, and suitable for workplace training.
     }
 
     // Combine date and time for scheduledDateTime
-    const scheduledDateTime = new Date(`${scheduleData.date}T${scheduleData.startTime}`).toISOString();
-    const dueDateTime = new Date(`${scheduleData.date}T${scheduleData.endTime}`).toISOString();
+    const scheduledDateTime = new Date(`${scheduleData.date}T${scheduleData.startTime}`);
+    const dueDateTime = new Date(`${scheduleData.date}T${scheduleData.endTime}`);
+    const now = new Date();
+
+    // Validate that start and end date/time are not in the past
+    if (scheduledDateTime <= now) {
+      showToast('Start date and time cannot be in the past', 'error');
+      return;
+    }
+
+    if (dueDateTime <= now) {
+      showToast('End date and time cannot be in the past', 'error');
+      return;
+    }
+
+    if (dueDateTime <= scheduledDateTime) {
+      showToast('End date and time must be after start date and time', 'error');
+      return;
+    }
+
+    const scheduledDateTimeISO = scheduledDateTime.toISOString();
+    const dueDateTimeISO = dueDateTime.toISOString();
 
     // Ensure session has an ID
     const sessionId = sessionToSchedule.id || Date.now();
@@ -4248,10 +4075,10 @@ Make the content professional, educational, and suitable for workplace training.
       publishedAt: sessionToSchedule.publishedAt || new Date().toISOString(),
       scheduledDate: scheduleData.date,
       scheduledTime: scheduleData.startTime,
-      scheduledDateTime: scheduledDateTime,
+      scheduledDateTime: scheduledDateTimeISO,
       dueDate: scheduleData.date,
       dueTime: scheduleData.endTime,
-      dueDateTime: dueDateTime,
+      dueDateTime: dueDateTimeISO,
       // Preserve files, quiz, and other content
       files: sessionToSchedule.files || sessionToSchedule.resumeState?.selectedFiles || [],
       quiz: sessionToSchedule.quiz || null,
@@ -4275,13 +4102,9 @@ Make the content professional, educational, and suitable for workplace training.
     setPublishedSessions(prev => {
       const filtered = prev.filter(s => s.id !== sessionId);
       const updated = [updatedSession, ...filtered];
-      // Immediately save to localStorage to ensure it's available
-      if (safeSetLocalStorage('published_sessions', updated)) {
-        // Dispatch custom event to ensure employee dashboard picks it up
-        window.dispatchEvent(new Event('published-sessions-updated'));
+      // State updated - no localStorage needed
         console.log('Session scheduled and saved:', updatedSession.title, updatedSession.id);
         console.log('Total published sessions:', updated.length);
-      }
       return updated;
     });
 
@@ -4300,7 +4123,6 @@ Make the content professional, educational, and suitable for workplace training.
     
     // Redirect to session library after scheduling
     setTimeout(() => {
-      console.log('Published sessions in localStorage:', localStorage.getItem('published_sessions'));
       setActiveTab('course-library');
       setManageSessionTab('create');
       setManageSessionView('create');
@@ -4308,18 +4130,42 @@ Make the content professional, educational, and suitable for workplace training.
     }, 1500);
   };
 
-  const renderDashboard = () => (
-    <Box p={3}>
-      {/* Header */}
-      <Box mb={4} display="flex" justifyContent="space-between" alignItems="flex-start">
-        <Box>
-          <Typography variant="h4" fontWeight="bold" gutterBottom>
-            Dashboard Overview
-          </Typography>
+  const renderDashboard = () => {
+    // Show loader if any API is still loading
+    const isDashboardLoading = sessionsLoading || employeesLoading;
+    
+    if (isDashboardLoading) {
+      return (
+        <Box 
+          sx={{ 
+            display: 'flex', 
+            flexDirection: 'column',
+            alignItems: 'center', 
+            justifyContent: 'center',
+            minHeight: '60vh',
+            gap: 2
+          }}
+        >
+          <CircularProgress size={60} sx={{ color: '#114417DB' }} />
           <Typography variant="body1" color="text.secondary">
-            Comprehensive session management and employee oversight
+            Loading dashboard data...
           </Typography>
         </Box>
+      );
+    }
+    
+    return (
+      <Box p={3}>
+        {/* Header */}
+        <Box mb={4} display="flex" justifyContent="space-between" alignItems="flex-start">
+          <Box>
+            <Typography variant="h4" fontWeight="bold" gutterBottom>
+              Dashboard Overview
+            </Typography>
+            <Typography variant="body1" color="text.secondary">
+              Comprehensive session management and employee oversight
+            </Typography>
+          </Box>
         <Box display="flex" gap={2} alignItems="center">
           <FormControl size="small" sx={{ minWidth: 180 }}>
             <InputLabel id="date-range-filter-label">Date Range</InputLabel>
@@ -4591,7 +4437,7 @@ Make the content professional, educational, and suitable for workplace training.
                     key={session.id} 
                     sx={{ 
                       px: 0, 
-                      py: 1,
+                      py: 0,
                       cursor: 'pointer',
                       '&:hover': {
                         backgroundColor: '#f3f4f6',
@@ -4605,7 +4451,7 @@ Make the content professional, educational, and suitable for workplace training.
                     </ListItemIcon>
                     <ListItemText
                       primary={session.title}
-                      secondary={`${session.type} • ${new Date(session.createdAt).toLocaleDateString()}`}
+                      secondary={`${session.type} • ${session.createdAt ? new Date(session.createdAt).toLocaleDateString() : 'Not available'}`}
                     />
                   </ListItem>
                 ))}
@@ -4695,7 +4541,7 @@ Make the content professional, educational, and suitable for workplace training.
                     </ListItemIcon>
                     <ListItemText
                       primary={session.title}
-                      secondary={`${session.type} • ${new Date(session.createdAt).toLocaleDateString()}`}
+                      secondary={`${session.type} • ${session.createdAt ? new Date(session.createdAt).toLocaleDateString() : 'Not available'}`}
                     />
                   </ListItem>
                 ))}
@@ -4753,7 +4599,7 @@ Make the content professional, educational, and suitable for workplace training.
                     key={session.id}
                     sx={{
                       px: 0, 
-                      py: 2,
+                      py: viewAllType === 'drafts' ? 0 : 2,
                       borderBottom: '1px solid #e5e7eb',
                       cursor: viewAllType === 'drafts' ? 'pointer' : 'default',
                       '&:hover': {
@@ -4786,13 +4632,17 @@ Make the content professional, educational, and suitable for workplace training.
                             {session.type || 'N/A'} • {session.audience || 'All Employees'}
                           </Typography>
                           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-                            Created: {new Date(session.createdAt).toLocaleDateString('en-US', { 
-                              year: 'numeric', 
-                              month: 'short', 
-                              day: 'numeric',
-                              hour: '2-digit',
-                              minute: '2-digit'
-                            })}
+                            {session.createdAt ? (
+                              <>Created: {new Date(session.createdAt).toLocaleDateString('en-US', { 
+                                year: 'numeric', 
+                                month: 'short', 
+                                day: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              })}</>
+                            ) : (
+                              <>Created: Not available</>
+                            )}
                             {session.savedAt && (
                               <span> • Last saved: {new Date(session.savedAt).toLocaleDateString('en-US', { 
                                 month: 'short', 
@@ -4848,9 +4698,12 @@ Make the content professional, educational, and suitable for workplace training.
                         color="error"
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (window.confirm('Are you sure you want to delete this session?')) {
-                            handleDeleteSession(session.id);
-                          }
+                          setConfirmDialogData({
+                            title: 'Delete Session',
+                            message: 'Are you sure you want to delete this session?',
+                            onConfirm: () => handleDeleteSession(session.id)
+                          });
+                          setShowConfirmDialog(true);
                         }}
                       >
                         <DeleteIcon />
@@ -4971,7 +4824,8 @@ Make the content professional, educational, and suitable for workplace training.
         </DialogActions>
       </Dialog>
     </Box>
-  );
+    );
+  };
 
   const renderLiveTrainings = () => (
     <Box p={3}>
@@ -6447,6 +6301,17 @@ Make the content professional, educational, and suitable for workplace training.
                             onChange={(e) => handleSessionFormChange('type', e.target.value)}
                             label="Session Type"
                             displayEmpty
+                            MenuProps={{
+                              PaperProps: {
+                                style: {
+                                  maxHeight: 300,
+                                  zIndex: 9999
+                                }
+                              },
+                              style: {
+                                zIndex: 9999
+                              }
+                            }}
                             renderValue={(selected) => {
                               if (!selected) {
                                 return <em style={{ fontStyle: 'normal', color: '#9ca3af' }}>Select</em>;
@@ -6487,6 +6352,17 @@ Make the content professional, educational, and suitable for workplace training.
                 onChange={(e) => handleSessionFormChange('audience', e.target.value)}
                 label="Participants"
                 displayEmpty
+                MenuProps={{
+                  PaperProps: {
+                    style: {
+                      maxHeight: 300,
+                      zIndex: 9999
+                    }
+                  },
+                  style: {
+                    zIndex: 9999
+                  }
+                }}
                 renderValue={(selected) => {
                   if (!selected) {
                     return <em style={{ fontStyle: 'normal', color: '#9ca3af' }}>Select</em>;
@@ -6517,6 +6393,47 @@ Make the content professional, educational, and suitable for workplace training.
                           multiline
                           rows={3}
                           margin="normal"
+                        />
+            <Autocomplete
+              multiple
+              options={availableKeySkills}
+              value={sessionFormData.skills || []}
+              onChange={(event, newValue) => {
+                handleSessionFormChange('skills', newValue);
+              }}
+              PopperProps={{
+                style: {
+                  zIndex: 9999
+                }
+              }}
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label="Attach Skills"
+                  margin="normal"
+                  placeholder="Select skills"
+                />
+              )}
+              renderTags={(value, getTagProps) =>
+                value.map((option, index) => (
+                  <Chip
+                    {...getTagProps({ index })}
+                    key={option}
+                    label={option}
+                    sx={{
+                      backgroundColor: '#e8f5e9',
+                      color: '#2e7d32',
+                      '& .MuiChip-deleteIcon': {
+                        color: '#2e7d32',
+                        '&:hover': {
+                          color: '#1b5e20',
+                        },
+                      },
+                    }}
+                  />
+                ))
+              }
+              fullWidth
                         />
             <Box display="flex" gap={2} mt={3} justifyContent="center">
               <Button 
@@ -7674,7 +7591,7 @@ Make the content professional, educational, and suitable for workplace training.
     setShowCalendar(false);
   };
 
-  const handleSendAndPublish = () => {
+  const handleSendAndPublish = async () => {
     if (!scheduleDate || !scheduleTime) {
       showToast('Please select both date and time', 'warning');
       return;
@@ -7687,6 +7604,18 @@ Make the content professional, educational, and suitable for workplace training.
 
     const scheduledDateTime = new Date(`${scheduleDate}T${scheduleTime}`);
     const dueDateTime = new Date(`${scheduleDueDate}T${scheduleDueTime}`);
+    const now = new Date();
+
+    // Validate that start and end date/time are not in the past
+    if (scheduledDateTime <= now) {
+      showToast('Start date and time cannot be in the past', 'error');
+      return;
+    }
+
+    if (dueDateTime <= now) {
+      showToast('End date and time cannot be in the past', 'error');
+      return;
+    }
 
     if (dueDateTime <= scheduledDateTime) {
       showToast('Due date must be after the session start time.', 'warning');
@@ -7719,7 +7648,21 @@ Make the content professional, educational, and suitable for workplace training.
     }
     
     // Get or use the draft ID to ensure we update the same session
-    const sessionId = selectedSessionForScheduling?.id || sessionFormData?.draftId || Date.now();
+    // Priority: selectedSessionForScheduling ID > sessionFormData draftId > find by title
+    let sessionId = selectedSessionForScheduling?.id || sessionFormData?.draftId;
+    
+    // If no ID found, try to find existing session by title
+    if (!sessionId) {
+      const resolvedSessionForm = sessionContentSnapshot?.sessionForm || sessionFormData;
+      const sessionTitle = resolvedSessionForm.title || selectedSessionForScheduling?.title;
+      if (sessionTitle) {
+        const existingByTitle = draftSessions.find(d => d.title === sessionTitle) || 
+                                savedSessions.find(s => s.title === sessionTitle);
+        if (existingByTitle && existingByTitle.id) {
+          sessionId = existingByTitle.id;
+        }
+      }
+    }
     
     // Build complete session with all data
     const resolvedSessionForm = sessionContentSnapshot?.sessionForm || sessionFormData;
@@ -7745,50 +7688,81 @@ Make the content professional, educational, and suitable for workplace training.
       fields: certificateFields
     } : null;
     
-    // Create session with scheduled status (will auto-publish when start time arrives)
-    const updatedSession = {
-      ...selectedSessionForScheduling,
-      id: sessionId,
-      title: resolvedSessionForm.title || selectedSessionForScheduling?.title || 'Untitled Session',
-      description: resolvedSessionForm.description || selectedSessionForScheduling?.description || '',
-      type: resolvedSessionForm.type || selectedSessionForScheduling?.type || 'compliance',
-      audience: resolvedSessionForm.audience || selectedSessionForScheduling?.audience || 'all',
-      files: resolvedFiles,
-      quiz: resolvedQuiz,
-      aiContent: resolvedAiContent,
-      creationMode: resolvedCreationMode,
-      certificate: sessionCert || selectedSessionForScheduling?.certificate || null,
-      scheduledDate: scheduleDate,
-      scheduledTime: scheduleTime,
-      scheduledDateTime: scheduledDateTime.toISOString(),
-      dueDate: scheduleDueDate,
-      dueTime: scheduleDueTime,
-      dueDateTime: dueDateTime.toISOString(),
-      status: 'scheduled', // Changed from 'published' to 'scheduled'
-      isLocked: false,
-      approvalExpiresAt: null,
-      lastApprovalDate: null,
-      createdAt: selectedSessionForScheduling?.createdAt || new Date().toISOString(),
-      savedAt: new Date().toISOString(),
-      publishedAt: null // Will be set when auto-published
-    };
+    try {
+      setIsLoading(true);
+      
+      // Prepare session data for API
+      // IMPORTANT: Save directly as 'scheduled', NOT as 'draft'
+      // This ensures no additional draft is created when scheduling
+      const sessionData = {
+        title: resolvedSessionForm.title || selectedSessionForScheduling?.title || 'Untitled Session',
+        description: resolvedSessionForm.description || selectedSessionForScheduling?.description || '',
+        type: mapSessionTypeToBackend(resolvedSessionForm.type || selectedSessionForScheduling?.type) || 'General',
+        skills: resolvedSessionForm.skills || selectedSessionForScheduling?.skills || [],
+        files: resolvedFiles,
+        quiz: resolvedQuiz,
+        ai_content: resolvedAiContent,
+        creation_mode: resolvedCreationMode,
+        scheduled_date: scheduleDate,
+        scheduled_time: scheduleTime,
+        scheduled_datetime: scheduledDateTime.toISOString(),
+        due_date: scheduleDueDate,
+        due_time: scheduleDueTime,
+        due_datetime: dueDateTime.toISOString(),
+        status: 'scheduled' // Explicitly set to 'scheduled', not 'draft'
+      };
+      
+      // Save to API - update if draft exists, create if new
+      let savedSession;
+      if (sessionId) {
+        // Try to find existing session by ID
+        const existingSession = draftSessions.find(d => d.id === sessionId) || 
+                                savedSessions.find(s => s.id === sessionId);
+        if (existingSession && existingSession.id) {
+          // Update existing session using its database ID
+          savedSession = await sessionAPI.update(existingSession.id, sessionData);
+        } else {
+          // Try to update with the sessionId (might be a database ID)
+          try {
+            savedSession = await sessionAPI.update(sessionId, sessionData);
+          } catch (updateError) {
+            // If update fails, create new session
+            console.log('Update failed, creating new session:', updateError);
+            savedSession = await sessionAPI.create(sessionData);
+          }
+        }
+      } else {
+        // Create new session
+        savedSession = await sessionAPI.create(sessionData);
+      }
+      
+      // Update sessionFormData with the saved session ID
+      if (savedSession.id) {
+        setSessionFormData(prev => ({ ...prev, draftId: savedSession.id }));
+      }
 
-    // Remove from draft sessions
-    setDraftSessions(prev => prev.filter(s => s.id !== sessionId));
-    
-    // Add/update in published sessions (will show as scheduled with countdown)
-    setPublishedSessions(prev => {
-      const filtered = prev.filter(s => s.id !== sessionId);
-      const updated = [normalizePublishedSession(updatedSession), ...filtered];
-      safeSetLocalStorage('published_sessions', updated);
-      // Dispatch event for employee dashboard
-      window.dispatchEvent(new Event('published-sessions-updated'));
-      return updated;
-    });
+      // Remove from draft sessions (use savedSession.id to ensure we remove the correct one)
+      setDraftSessions(prev => prev.filter(s => s.id !== savedSession.id));
+      
+      // Add/update in published sessions (will show as scheduled with countdown)
+      const normalized = normalizePublishedSession(savedSession);
+      setPublishedSessions(prev => {
+        const filtered = prev.filter(s => s.id !== savedSession.id);
+        const updated = [normalized, ...filtered];
+        // Dispatch event for employee dashboard
+        window.dispatchEvent(new Event('published-sessions-updated'));
+        return updated;
+      });
+      
+      // Also update savedSessions
+      setSavedSessions(prev => {
+        const filtered = prev.filter(s => s.id !== savedSession.id);
+        return [normalized, ...filtered];
+      });
 
     // Log activity
     addActivity(
-      `Session saved and scheduled: ${updatedSession.title} (Publishing in ${getTimeUntilPublish(scheduledDateTime)})`,
+        `Session saved and scheduled: ${sessionData.title} (Publishing in ${getTimeUntilPublish(scheduledDateTime)})`,
       'Admin',
       'scheduled',
       'session_scheduled'
@@ -7819,6 +7793,12 @@ Make the content professional, educational, and suitable for workplace training.
     setActiveTab('course-library');
     
     showToast('Session saved and scheduled successfully! It will auto-publish when the start time arrives.', 'success');
+    } catch (error) {
+      console.error('Failed to save and schedule session:', error);
+      showToast(`Failed to save and schedule session: ${error.message}`, 'error');
+    } finally {
+      setIsLoading(false);
+    }
   };
   
   // Helper function to calculate time until publish
@@ -7864,6 +7844,7 @@ Make the content professional, educational, and suitable for workplace training.
         description: resolvedSessionForm.description || '',
         type: resolvedSessionForm.type || 'compliance',
         audience: resolvedSessionForm.audience || 'all',
+        skills: resolvedSessionForm.skills || [],
         files: resolvedFiles,
         quiz: resolvedQuiz,
         aiContent: resolvedAiContent,
@@ -8214,21 +8195,36 @@ Make the content professional, educational, and suitable for workplace training.
         {/* Schedule Sessions Content */}
         <Box>
           {/* Search and View Toggle */}
-          <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+          <Card sx={{ p: 3, mb: 3 }}>
+            <Grid container spacing={3} alignItems="center">
+              <Grid item xs={12} md={11}>
               <TextField
-                placeholder="Search sessions..."
+                  fullWidth
+                  label="Search Sessions"
+                  placeholder="Search by session title..."
                 value={scheduleSessionsSearchTerm}
                 onChange={(e) => setScheduleSessionsSearchTerm(e.target.value)}
-                size="small"
+                  InputLabelProps={{
+                    shrink: true
+                  }}
                 InputProps={{
-                  startAdornment: (
-                    <InputAdornment position="start">
-                      <SearchIcon />
-                    </InputAdornment>
-                  ),
-                }}
-                sx={{ width: 400 }}
-              />
+                    startAdornment: <SearchIcon sx={{ mr: 1, color: 'text.secondary' }} />
+                  }}
+                />
+              </Grid>
+              <Grid item xs={12} md={1}>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  onClick={() => setScheduleSessionsSearchTerm('')}
+                  sx={{ height: '56px', width: '100%', minWidth: 'auto' }}
+                >
+                  Clear
+                </Button>
+              </Grid>
+            </Grid>
+          </Card>
+          <Box display="flex" justifyContent="flex-end" alignItems="center" mb={3}>
               <Box display="flex" gap={1}>
                 <IconButton
                   onClick={() => setScheduleSessionsViewMode('grid')}
@@ -10292,10 +10288,6 @@ Make the content professional, educational, and suitable for workplace training.
     // Render detailed preview
     return (
       <Box sx={{ backgroundColor: '#f8f9fa', minHeight: '100vh', p: 3 }}>
-        <Typography variant="h4" fontWeight="bold" mb={4} sx={{ color: '#1f2937' }}>
-          Preview Session
-              </Typography>
-
         {/* Session Information */}
         <Card sx={{ mb: 3, p: 3 }}>
           <Typography variant="h6" fontWeight="bold" mb={2} sx={{ color: '#114417DB' }}>
@@ -10339,6 +10331,27 @@ Make the content professional, educational, and suitable for workplace training.
                 HR Team
               </Typography>
             </Grid>
+            {resolvedSessionForm.skills && resolvedSessionForm.skills.length > 0 && (
+              <Grid item xs={12}>
+                <Typography variant="body2" color="text.secondary" gutterBottom>
+                  Skills
+                </Typography>
+                <Box display="flex" flexWrap="wrap" gap={1}>
+                  {resolvedSessionForm.skills.map((skill, idx) => (
+                    <Chip
+                      key={idx}
+                      label={skill}
+                      size="small"
+                      sx={{
+                        backgroundColor: '#e8f5e9',
+                        color: '#2e7d32',
+                        fontSize: '0.75rem'
+                      }}
+                    />
+                  ))}
+                </Box>
+              </Grid>
+            )}
             {resolvedSessionForm.description && (
               <Grid item xs={12}>
                 <Typography variant="body2" color="text.secondary" gutterBottom>
@@ -11042,20 +11055,12 @@ Make the content professional, educational, and suitable for workplace training.
         <Typography variant="h4" fontWeight="bold">
           Admin Profile
         </Typography>
-        <Box display="flex" gap={2}>
-          <IconButton 
-            onClick={handleEditProfile}
-            sx={{ border: '1px solid rgba(0, 0, 0, 0.23)', '&:hover': { borderColor: 'rgba(0, 0, 0, 0.87)' } }}
-          >
-            <EditIcon />
-          </IconButton>
           <IconButton 
             onClick={handleCloseProfile}
             sx={{ border: '1px solid rgba(0, 0, 0, 0.23)', '&:hover': { borderColor: 'rgba(0, 0, 0, 0.87)' } }}
           >
             <CloseIcon />
           </IconButton>
-        </Box>
       </Box>
 
       <Card sx={{ p: 3 }}>
@@ -11092,8 +11097,58 @@ Make the content professional, educational, and suitable for workplace training.
             <Typography variant="body1" color="text.secondary">Employee ID:</Typography>
             <Typography variant="h6">{profileData.employeeId}</Typography>
           </Grid>
+          {profileData.keyskills && profileData.keyskills.length > 0 && (
+            <Grid item xs={12}>
+              <Typography variant="body1" color="text.secondary" gutterBottom>
+                Skills:
+              </Typography>
+              <Box display="flex" flexWrap="wrap" gap={1}>
+                {profileData.keyskills.map((skill, idx) => (
+                  <Chip
+                    key={idx}
+                    label={skill}
+                    size="small"
+                    sx={{
+                      backgroundColor: '#e8f5e9',
+                      color: '#2e7d32',
+                      fontSize: '0.75rem'
+                    }}
+                  />
+                ))}
+              </Box>
+            </Grid>
+          )}
         </Grid>
       </Card>
+      
+      {/* Action Buttons */}
+      <Box display="flex" gap={2} mt={3} justifyContent="center">
+        <Button
+          variant="contained"
+          startIcon={<EditIcon />}
+          onClick={handleEditProfile}
+          sx={{
+            backgroundColor: '#114417DB',
+            '&:hover': { backgroundColor: '#0a2f0e' },
+            minWidth: 200
+          }}
+        >
+          Edit
+        </Button>
+        <Button
+          variant="outlined"
+          startIcon={<LockIcon />}
+          onClick={handleChangePassword}
+          sx={{
+            borderColor: '#114417DB',
+            color: '#114417DB',
+            '&:hover': { borderColor: '#0a2f0e', backgroundColor: 'rgba(17, 68, 23, 0.08)' },
+            minWidth: 200
+          }}
+        >
+          Change Password
+        </Button>
+      </Box>
     </Box>
   );
 
@@ -11214,32 +11269,8 @@ Make the content professional, educational, and suitable for workplace training.
         </Box>
 
         <Grid container spacing={3}>
-          {/* Current Credentials */}
-          <Grid item xs={12} md={6}>
-            <Card sx={{ p: 3 }}>
-              <Typography variant="h6" fontWeight="bold" gutterBottom>
-                Current Credentials
-              </Typography>
-              <Box mt={3}>
-                <Typography variant="body1" color="text.secondary" gutterBottom>
-                  Login ID:
-                </Typography>
-                <Typography variant="h6" mb={2}>
-                  {adminCredentials.username}
-                </Typography>
-                
-                <Typography variant="body1" color="text.secondary" gutterBottom>
-                  Password:
-                </Typography>
-                <Typography variant="h6">
-                  ••••••••
-                </Typography>
-              </Box>
-            </Card>
-          </Grid>
-
           {/* Reset Password */}
-          <Grid item xs={12} md={6}>
+          <Grid item xs={12} md={8} sx={{ mx: 'auto' }}>
             <Card sx={{ p: 3 }}>
               <Typography variant="h6" fontWeight="bold" gutterBottom>
                 Reset Password
@@ -11375,7 +11406,7 @@ Make the content professional, educational, and suitable for workplace training.
                   <Box display="flex" gap={2} flexWrap="wrap" mb={2}>
                     <Chip label={`Type: ${session.type}`} size="small" variant="outlined" />
                     <Chip label={`Audience: ${session.audience}`} size="small" variant="outlined" />
-                    <Chip label={`Created: ${new Date(session.createdAt).toLocaleDateString()}`} size="small" variant="outlined" />
+                    <Chip label={`Created: ${session.createdAt ? new Date(session.createdAt).toLocaleDateString() : 'Not available'}`} size="small" variant="outlined" />
                   </Box>
                 </Box>
               </Box>
@@ -11570,9 +11601,35 @@ Make the content professional, educational, and suitable for workplace training.
   const [showSettingsSubmenu, setShowSettingsSubmenu] = useState(false);
   const [showAddEmployee, setShowAddEmployee] = useState(false);
   const [showEditEmployee, setShowEditEmployee] = useState(false);
+  const [showAddEmployeePassword, setShowAddEmployeePassword] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState(null);
   const [employeeRoleFilter, setEmployeeRoleFilter] = useState('all');
+  
+  // Validation handlers
+  const handleNameChange = (field, value) => {
+    // Only allow letters, spaces, hyphens, and apostrophes
+    const nameRegex = /^[a-zA-Z\s'-]*$/;
+    if (nameRegex.test(value) || value === '') {
+      setNewEmployee(prev => ({ ...prev, [field]: value }));
+    }
+  };
+  
+  const handlePhoneChange = (value) => {
+    // Only allow numbers and limit to 10 digits
+    const phoneRegex = /^\d*$/;
+    if (phoneRegex.test(value) && value.length <= 10) {
+      setNewEmployee(prev => ({ ...prev, phone: value }));
+    }
+  };
+  
+  const validatePhone = (phone) => {
+    return phone === '' || (phone.length === 10 && /^\d{10}$/.test(phone));
+  };
+  
   const [employeeSearchTerm, setEmployeeSearchTerm] = useState('');
+  const [employeeSkillsFilter, setEmployeeSkillsFilter] = useState([]);
+  const [showEmployeeView, setShowEmployeeView] = useState(false);
+  const [viewingEmployee, setViewingEmployee] = useState(null);
   const [newEmployee, setNewEmployee] = useState({
     firstName: '',
     lastName: '',
@@ -11583,21 +11640,110 @@ Make the content professional, educational, and suitable for workplace training.
     reportingManager: '',
     employeeId: '',
     role: 'employee', // 'employee' or 'admin'
-    password: '',
-    skills: ''
+    password: 'Data@123', // Default password
+    keyskills: [] // Changed to array for multi-select
   });
+  
+  // Reset form when opening Add Employee dialog
+  useEffect(() => {
+    if (showAddEmployee && !showEditEmployee) {
+      setNewEmployee({
+        firstName: '',
+        lastName: '',
+        email: '',
+        phone: '',
+        department: '',
+        jobRole: '',
+        reportingManager: '',
+        employeeId: '',
+        role: 'employee',
+        password: 'Data@123',
+        keyskills: []
+      });
+      setShowAddEmployeePassword(false);
+      setSelectedEmployee(null);
+    }
+  }, [showAddEmployee, showEditEmployee]);
 
-  const handleAddEmployee = () => {
+  // Available key skills
+  const availableKeySkills = [
+    'Python and Django framework',
+    'TypeScript and React development',
+    'Next.js for full-stack applications',
+    'Node.js and Express.js',
+    'PostgreSQL database management',
+    'RESTful and GraphQL API design',
+    'Docker and Kubernetes containerization',
+    'CI/CD pipeline implementation',
+    'AWS or Azure cloud services',
+    'OAuth 2.0 and JWT authentication',
+    'HIPAA compliance and PHI handling',
+    'OWASP security best practices',
+    'Automated testing with Pytest and Playwright',
+    'Git version control and workflows',
+    'FHIR and HL7 healthcare standards',
+    'SOC 2 and regulatory compliance',
+    'API security and rate limiting',
+    'Monitoring and logging infrastructure',
+    'Agile and Scrum methodologies'
+  ];
+
+  const handleAddEmployee = async () => {
     if (!newEmployee.firstName || !newEmployee.lastName || !newEmployee.email || !newEmployee.employeeId) {
       showToast('Please fill in all required fields', 'warning');
       return;
     }
     
+    // Validate names (only letters)
+    if (!/^[a-zA-Z\s'-]+$/.test(newEmployee.firstName.trim())) {
+      showToast('First name should only contain letters', 'error');
+      return;
+    }
+    if (!/^[a-zA-Z\s'-]+$/.test(newEmployee.lastName.trim())) {
+      showToast('Last name should only contain letters', 'error');
+      return;
+    }
+    
+    // Validate phone number if provided
+    if (newEmployee.phone && !validatePhone(newEmployee.phone)) {
+      showToast('Phone number must be exactly 10 digits', 'error');
+      return;
+    }
+    
+    try {
+      setIsLoading(true);
+      const employeeData = {
+        firstName: newEmployee.firstName,
+        lastName: newEmployee.lastName,
+        email: newEmployee.email,
+        phone: newEmployee.phone || '',
+        department: newEmployee.department || '',
+        employeeId: newEmployee.employeeId || '',
+        role: newEmployee.role || 'employee',
+        password: newEmployee.password || 'Data@123',
+        jobRole: newEmployee.jobRole || '',
+        reportingManager: newEmployee.reportingManager || '',
+        keyskills: newEmployee.keyskills || []
+      };
+      
+      const created = await employeeAPI.create(employeeData);
+      
+      // Transform and add to state
     const employee = {
-      id: Date.now(),
-      ...newEmployee,
-      status: 'active',
-      createdAt: new Date().toISOString().split('T')[0]
+        id: created.id,
+        firstName: created.firstName || created.user?.first_name || '',
+        lastName: created.lastName || created.user?.last_name || '',
+        name: `${created.firstName || created.user?.first_name || ''} ${created.lastName || created.user?.last_name || ''}`.trim(),
+        email: created.email || created.user?.email || '',
+        phone: created.phone || created.user?.phone_number || '',
+        department: created.department || created.user?.department || '',
+        jobRole: created.jobRole || created.job_role || '',
+        reportingManager: created.reportingManager || created.reporting_manager || '',
+        employeeId: created.employeeId || created.user?.employee_id || '',
+        role: created.role || created.user?.role || 'employee',
+        keyskills: created.keyskills || [],
+        status: created.status || 'active',
+        createdAt: created.created_at || new Date().toISOString().split('T')[0]
     };
     
     setEmployees(prev => [employee, ...prev]);
@@ -11611,26 +11757,88 @@ Make the content professional, educational, and suitable for workplace training.
       reportingManager: '',
       employeeId: '',
       role: 'employee',
-      password: '',
-      skills: ''
+        password: 'Data@123',
+        keyskills: []
     });
     setShowAddEmployee(false);
     showToast('Employee added successfully!', 'success');
+    } catch (error) {
+      console.error('Failed to add employee:', error);
+      showToast(`Failed to add employee: ${error.message}`, 'error');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleEditEmployee = (employee) => {
     setSelectedEmployee(employee);
     setNewEmployee({
       ...employee,
-      skills: employee.skills || ''
+      keyskills: employee.keyskills || []
     });
     setShowEditEmployee(true);
   };
 
-  const handleUpdateEmployee = () => {
+  const handleUpdateEmployee = async () => {
+    // Validate names (only letters)
+    if (newEmployee.firstName && !/^[a-zA-Z\s'-]+$/.test(newEmployee.firstName.trim())) {
+      showToast('First name should only contain letters', 'error');
+      return;
+    }
+    if (newEmployee.lastName && !/^[a-zA-Z\s'-]+$/.test(newEmployee.lastName.trim())) {
+      showToast('Last name should only contain letters', 'error');
+      return;
+    }
+    
+    // Validate phone number if provided
+    if (newEmployee.phone && !validatePhone(newEmployee.phone)) {
+      showToast('Phone number must be exactly 10 digits', 'error');
+      return;
+    }
+    
+    try {
+      setIsLoading(true);
+      const employeeData = {
+        firstName: newEmployee.firstName,
+        lastName: newEmployee.lastName,
+        email: newEmployee.email,
+        phone: newEmployee.phone || '',
+        department: newEmployee.department || '',
+        employeeId: newEmployee.employeeId || '',
+        role: newEmployee.role || 'employee',
+        jobRole: newEmployee.jobRole || '',
+        reportingManager: newEmployee.reportingManager || '',
+        keyskills: newEmployee.keyskills || []
+      };
+      
+      // Only include password if it was changed
+      if (newEmployee.password && newEmployee.password !== 'Data@123') {
+        employeeData.password = newEmployee.password;
+      }
+      
+      const updated = await employeeAPI.update(selectedEmployee.id, employeeData);
+      
+      // Transform and update state
+      const employee = {
+        id: updated.id,
+        firstName: updated.firstName || updated.user?.first_name || '',
+        lastName: updated.lastName || updated.user?.last_name || '',
+        name: `${updated.firstName || updated.user?.first_name || ''} ${updated.lastName || updated.user?.last_name || ''}`.trim(),
+        email: updated.email || updated.user?.email || '',
+        phone: updated.phone || updated.user?.phone_number || '',
+        department: updated.department || updated.user?.department || '',
+        jobRole: updated.jobRole || updated.job_role || '',
+        reportingManager: updated.reportingManager || updated.reporting_manager || '',
+        employeeId: updated.employeeId || updated.user?.employee_id || '',
+        role: updated.role || updated.user?.role || 'employee',
+        keyskills: updated.keyskills || [],
+        status: updated.status || 'active',
+        createdAt: updated.created_at || selectedEmployee.createdAt
+      };
+      
     setEmployees(prev => 
       prev.map(emp => 
-        emp.id === selectedEmployee.id ? { ...emp, ...newEmployee } : emp
+          emp.id === selectedEmployee.id ? employee : emp
       )
     );
     setShowEditEmployee(false);
@@ -11645,15 +11853,27 @@ Make the content professional, educational, and suitable for workplace training.
       reportingManager: '',
       employeeId: '',
       role: 'employee',
-      password: '',
-      skills: ''
+        password: 'Data@123',
+        keyskills: []
     });
     showToast('Employee updated successfully!', 'success');
+    } catch (error) {
+      console.error('Failed to update employee:', error);
+      showToast(`Failed to update employee: ${error.message}`, 'error');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const handleDeleteEmployee = (employeeId) => {
-    if (window.confirm('Are you sure you want to delete this employee?')) {
+  const handleDeleteEmployee = async (employeeId) => {
+    setConfirmDialogData({
+      title: 'Delete Employee',
+      message: 'Are you sure you want to delete this employee?',
+      onConfirm: async () => {
+      try {
+        setIsLoading(true);
       const employee = employees.find(emp => emp.id === employeeId);
+        await employeeAPI.delete(employeeId);
       setEmployees(prev => prev.filter(emp => emp.id !== employeeId));
       
       // Log activity
@@ -11666,8 +11886,16 @@ Make the content professional, educational, and suitable for workplace training.
         );
       }
       
-      showToast('Employee deleted successfully!', 'success');
-    }
+        showToast('Employee deleted successfully!', 'success');
+      } catch (error) {
+        console.error('Failed to delete employee:', error);
+        showToast(`Failed to delete employee: ${error.message}`, 'error');
+      } finally {
+        setIsLoading(false);
+      }
+      }
+    });
+    setShowConfirmDialog(true);
   };
 
   const filteredEmployees = employees.filter(emp => {
@@ -11681,7 +11909,10 @@ Make the content professional, educational, and suitable for workplace training.
       emp.department.toLowerCase().includes(employeeSearchTerm.toLowerCase()) ||
       emp.jobRole.toLowerCase().includes(employeeSearchTerm.toLowerCase());
     
-    return matchesRole && matchesSearch;
+    const matchesSkills = employeeSkillsFilter.length === 0 || 
+      (emp.keyskills && emp.keyskills.some(skill => employeeSkillsFilter.includes(skill)));
+    
+    return matchesRole && matchesSearch && matchesSkills;
   });
 
   const renderSettings = () => (
@@ -11763,111 +11994,196 @@ Make the content professional, educational, and suitable for workplace training.
         </Box>
       </Card>
 
-      {/* System Settings - Clear All Sessions */}
-      <Card sx={{ p: 3, mb: 4, border: '2px solid #ef4444' }}>
-        <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-          <Box>
-            <Typography variant="h5" fontWeight="bold" color="error" gutterBottom>
-              System Maintenance
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Clear all session data from the system
-            </Typography>
-          </Box>
-        </Box>
-        <Box mb={2}>
-          <Typography variant="body2" color="text.secondary" gutterBottom>
-            This will permanently delete:
-          </Typography>
-          <Box component="ul" sx={{ pl: 3, mb: 2 }}>
-            <li><Typography variant="body2" color="text.secondary">All published sessions</Typography></li>
-            <li><Typography variant="body2" color="text.secondary">All draft sessions</Typography></li>
-            <li><Typography variant="body2" color="text.secondary">All saved assessments</Typography></li>
-            <li><Typography variant="body2" color="text.secondary">Employee completion data</Typography></li>
-            <li><Typography variant="body2" color="text.secondary">Session certifications</Typography></li>
-            <li><Typography variant="body2" color="text.secondary">Session requests</Typography></li>
-          </Box>
-          <Alert severity="warning" sx={{ mb: 2 }}>
-            <strong>Warning:</strong> This action cannot be undone. All session data will be permanently deleted.
-          </Alert>
-        </Box>
-        <Button
-          variant="contained"
-          color="error"
-          startIcon={<DeleteForeverIcon />}
-          onClick={handleClearAllSessions}
-          sx={{
-            backgroundColor: '#ef4444',
-            '&:hover': {
-              backgroundColor: '#dc2626',
-            }
-          }}
-        >
-          Clear All Sessions
-        </Button>
-      </Card>
     </Box>
   );
 
   const renderEmployees = () => (
     <Box p={3}>
-      {/* Manage Employee Accounts Tab */}
+      {/* Employee Management Tab */}
       {employeesSubTab === 'manage' && (
         <Card sx={{ p: 3, mb: 4 }}>
           <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
             <Typography variant="h5" fontWeight="bold">
-              Manage Employee Accounts
+              Employee Management
             </Typography>
+            <Button
+              variant="contained"
+              startIcon={<AddIcon />}
+              onClick={() => {
+                // Reset form when adding new employee
+                setNewEmployee({
+                  firstName: '',
+                  lastName: '',
+                  email: '',
+                  phone: '',
+                  department: '',
+                  jobRole: '',
+                  reportingManager: '',
+                  employeeId: '',
+                  role: 'employee',
+                  password: 'Data@123',
+                  keyskills: []
+                });
+                setShowAddEmployeePassword(false);
+                setSelectedEmployee(null);
+                setShowEditEmployee(false);
+                setShowAddEmployee(true);
+              }}
+              sx={{
+                backgroundColor: '#114417DB',
+                '&:hover': { backgroundColor: '#0a2f0e' }
+              }}
+            >
+              Add Employee
+            </Button>
           </Box>
 
         {/* Search and Filter Controls */}
         <Grid container spacing={3} mb={3}>
-          <Grid item xs={12} md={6}>
+          <Grid item xs={12} md={5}>
             <TextField
               fullWidth
               label="Search Employees"
               placeholder="Search by name, email, ID, department, or job role..."
               value={employeeSearchTerm}
               onChange={(e) => setEmployeeSearchTerm(e.target.value)}
+              InputLabelProps={{
+                shrink: true
+              }}
               InputProps={{
                 startAdornment: <SearchIcon sx={{ mr: 1, color: 'text.secondary' }} />
               }}
             />
           </Grid>
           <Grid item xs={12} md={3}>
-            <TextField
-              select
-              fullWidth
-              label="Filter by Role"
+            <FormControl fullWidth>
+              <InputLabel shrink={true}>Filter by Role</InputLabel>
+              <Select
               value={employeeRoleFilter}
               onChange={(e) => setEmployeeRoleFilter(e.target.value)}
-              SelectProps={{ native: true }}
-            >
-              <option value="all">All Roles</option>
-              <option value="employee">Employees</option>
-              <option value="admin">Admins</option>
-            </TextField>
+                label="Filter by Role"
+                displayEmpty
+              >
+                <MenuItem value="all">
+                  <em>All Roles</em>
+                </MenuItem>
+                <MenuItem value="employee">Employees</MenuItem>
+                <MenuItem value="admin">Admins</MenuItem>
+              </Select>
+            </FormControl>
           </Grid>
           <Grid item xs={12} md={3}>
+            <Autocomplete
+              multiple
+              options={availableKeySkills}
+              value={employeeSkillsFilter}
+              onChange={(event, newValue) => {
+                setEmployeeSkillsFilter(newValue);
+              }}
+              renderOption={(props, option, { selected }) => (
+                <li {...props}>
+                  <Checkbox
+                    icon={<CheckboxIcon />}
+                    checkedIcon={<CheckedIcon />}
+                    style={{ marginRight: 8 }}
+                    checked={selected}
+                  />
+                  {option}
+                </li>
+              )}
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label="Filter by Key Skills"
+                  placeholder="Select skills to filter"
+                  InputLabelProps={{
+                    shrink: true
+                  }}
+                />
+              )}
+              renderTags={(value, getTagProps) =>
+                value.map((option, index) => (
+                  <Chip
+                    label={option}
+                    {...getTagProps({ index })}
+                    size="small"
+                    sx={{
+                      backgroundColor: '#d1fae5',
+                      color: '#065f46',
+                      fontSize: '0.75rem'
+                    }}
+                  />
+                ))
+              }
+            />
+          </Grid>
+          <Grid item xs={12} md={1}>
             <Button
               variant="outlined"
-              fullWidth
+              size="small"
               onClick={() => {
                 setEmployeeSearchTerm('');
                 setEmployeeRoleFilter('all');
+                setEmployeeSkillsFilter([]);
               }}
-              sx={{ height: '56px' }}
+              sx={{ height: '56px', width: '100%', minWidth: 'auto' }}
             >
-              Clear Filters
+              Clear
             </Button>
           </Grid>
         </Grid>
 
         {/* Employees List */}
+        {employeesLoading ? (
+          <Box display="flex" justifyContent="center" alignItems="center" py={8}>
+            <CircularProgress size={60} sx={{ color: '#114417DB' }} />
+          </Box>
+        ) : (
         <Grid container spacing={3}>
           {filteredEmployees.map((employee) => (
             <Grid item xs={12} md={6} lg={4} key={employee.id}>
-              <Card sx={{ p: 3, height: '100%' }}>
+              <Card 
+                sx={{ 
+                  p: 3, 
+                  height: '100%',
+                  cursor: 'pointer',
+                  '&:hover': {
+                    boxShadow: 4,
+                    transition: 'box-shadow 0.2s'
+                  }
+                }}
+                onClick={async () => {
+                  try {
+                    // Fetch latest employee data from API
+                    const employeeData = await employeeAPI.getById(employee.id);
+                    // Transform API response to match frontend format
+                    const transformedEmployee = {
+                      id: employeeData.id,
+                      firstName: employeeData.firstName || employeeData.user?.first_name || '',
+                      lastName: employeeData.lastName || employeeData.user?.last_name || '',
+                      name: `${employeeData.firstName || employeeData.user?.first_name || ''} ${employeeData.lastName || employeeData.user?.last_name || ''}`.trim(),
+                      email: employeeData.email || employeeData.user?.email || '',
+                      phone: employeeData.phone || employeeData.user?.phone_number || '',
+                      department: employeeData.department || employeeData.user?.department || '',
+                      jobRole: employeeData.jobRole || employeeData.job_role || '',
+                      reportingManager: employeeData.reportingManager || employeeData.reporting_manager || '',
+                      employeeId: employeeData.employeeId || employeeData.user?.employee_id || '',
+                      role: employeeData.role || employeeData.user?.role || 'employee',
+                      keyskills: employeeData.keyskills || [],
+                      status: employeeData.status || 'active',
+                      createdAt: employeeData.created_at || employee.createdAt
+                    };
+                    setViewingEmployee(transformedEmployee);
+                    setShowEmployeeView(true);
+                  } catch (error) {
+                    console.error('Failed to load employee details:', error);
+                    // Fallback to local data if API fails
+                    setViewingEmployee(employee);
+                    setShowEmployeeView(true);
+                    showToast('Failed to load latest employee data. Showing cached data.', 'warning');
+                  }
+                }}
+              >
                 <Box display="flex" justifyContent="space-between" alignItems="start" mb={2}>
                   <Box>
                     <Typography variant="h6" fontWeight="bold">
@@ -11897,42 +12213,35 @@ Make the content professional, educational, and suitable for workplace training.
                   <Typography variant="body2" color="text.secondary">
                     <strong>Reporting Manager:</strong> {employee.reportingManager}
                   </Typography>
-                </Box>
-
-                <Box display="flex" gap={1}>
-                  <Button
-                    variant="outlined"
+                  {employee.keyskills && employee.keyskills.length > 0 && (
+                    <Box mt={1}>
+                      <Typography variant="body2" color="text.secondary" gutterBottom>
+                        <strong>Key Skills:</strong>
+                      </Typography>
+                      <Box display="flex" flexWrap="wrap" gap={0.5} mt={0.5}>
+                        {employee.keyskills.map((skill, idx) => (
+                          <Chip
+                            key={idx}
+                            label={skill}
                     size="small"
-                    startIcon={<EditIcon />}
-                    onClick={() => handleEditEmployee(employee)}
-                    sx={{ flex: 1 }}
-                  >
-                    Edit
-                  </Button>
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    startIcon={<CloseIcon />}
-                    onClick={() => handleDeleteEmployee(employee.id)}
                     sx={{ 
-                      flex: 1,
-                      borderColor: '#ef4444',
-                      color: '#ef4444',
-                      '&:hover': {
-                        borderColor: '#dc2626',
-                        backgroundColor: '#fef2f2'
-                      }
-                    }}
-                  >
-                    Delete
-                  </Button>
+                              backgroundColor: '#d1fae5',
+                              color: '#065f46',
+                              fontSize: '0.75rem'
+                            }}
+                          />
+                        ))}
+                      </Box>
+                    </Box>
+                  )}
                 </Box>
               </Card>
             </Grid>
           ))}
         </Grid>
+        )}
 
-        {filteredEmployees.length === 0 && (
+        {!employeesLoading && filteredEmployees.length === 0 && (
           <Box textAlign="center" py={4}>
             <Typography variant="h6" color="text.secondary" gutterBottom>
               No employees found
@@ -11943,12 +12252,14 @@ Make the content professional, educational, and suitable for workplace training.
                 : 'Add your first employee to get started'
               }
             </Typography>
-            {(employeeSearchTerm || employeeRoleFilter !== 'all') && (
+            {(employeeSearchTerm || employeeRoleFilter !== 'all' || employeeSkillsFilter.length > 0) && (
               <Button
                 variant="outlined"
+                size="small"
                 onClick={() => {
                   setEmployeeSearchTerm('');
                   setEmployeeRoleFilter('all');
+                  setEmployeeSkillsFilter([]);
                 }}
                 sx={{ mt: 2 }}
               >
@@ -12043,13 +12354,34 @@ Make the content professional, educational, and suitable for workplace training.
                 />
               </Grid>
               <Grid item xs={12}>
+                <Autocomplete
+                  multiple
+                  options={availableKeySkills}
+                  value={newEmployee.keyskills || []}
+                  onChange={(event, newValue) => {
+                    setNewEmployee(prev => ({ ...prev, keyskills: newValue }));
+                  }}
+                  renderInput={(params) => (
                 <TextField
-                  label="Skills"
-                  value={newEmployee.skills}
-                  onChange={(e) => setNewEmployee(prev => ({ ...prev, skills: e.target.value }))}
-                  fullWidth
-                  placeholder="e.g. Leadership, Project Management, Communication"
-                  helperText="Add relevant skills, separated by commas"
+                      {...params}
+                      label="Key Skills"
+                      placeholder="Select or search for skills"
+                      helperText="Select multiple skills from the dropdown"
+                    />
+                  )}
+                  renderTags={(value, getTagProps) =>
+                    value.map((option, index) => (
+                      <Chip
+                        label={option}
+                        {...getTagProps({ index })}
+                        size="small"
+                        sx={{
+                          backgroundColor: '#d1fae5',
+                          color: '#065f46'
+                        }}
+                      />
+                    ))
+                  }
                 />
               </Grid>
               <Grid item xs={12} sm={6}>
@@ -12099,8 +12431,8 @@ Make the content professional, educational, and suitable for workplace training.
                     reportingManager: '',
                     employeeId: '',
                     role: 'employee',
-            password: '',
-            skills: ''
+                    password: 'Data@123',
+                    keyskills: []
                   });
                 }}
               >
@@ -12128,9 +12460,10 @@ Make the content professional, educational, and suitable for workplace training.
             reportingManager: '',
             employeeId: '',
             role: 'employee',
-            password: '',
-            skills: ''
+            password: 'Data@123',
+            keyskills: []
           });
+          setShowAddEmployeePassword(false);
         }}
         maxWidth="md"
         fullWidth
@@ -12146,18 +12479,22 @@ Make the content professional, educational, and suitable for workplace training.
               <TextField
                 label="First Name"
                 value={newEmployee.firstName}
-                onChange={(e) => setNewEmployee(prev => ({ ...prev, firstName: e.target.value }))}
+                onChange={(e) => handleNameChange('firstName', e.target.value)}
                 fullWidth
                 required
+                helperText={newEmployee.firstName && !/^[a-zA-Z\s'-]+$/.test(newEmployee.firstName) ? 'Name should only contain letters' : ''}
+                error={newEmployee.firstName && !/^[a-zA-Z\s'-]+$/.test(newEmployee.firstName)}
               />
             </Grid>
             <Grid item xs={12} sm={6}>
               <TextField
                 label="Last Name"
                 value={newEmployee.lastName}
-                onChange={(e) => setNewEmployee(prev => ({ ...prev, lastName: e.target.value }))}
+                onChange={(e) => handleNameChange('lastName', e.target.value)}
                 fullWidth
                 required
+                helperText={newEmployee.lastName && !/^[a-zA-Z\s'-]+$/.test(newEmployee.lastName) ? 'Name should only contain letters' : ''}
+                error={newEmployee.lastName && !/^[a-zA-Z\s'-]+$/.test(newEmployee.lastName)}
               />
             </Grid>
             <Grid item xs={12} sm={6}>
@@ -12174,8 +12511,11 @@ Make the content professional, educational, and suitable for workplace training.
               <TextField
                 label="Phone Number"
                 value={newEmployee.phone}
-                onChange={(e) => setNewEmployee(prev => ({ ...prev, phone: e.target.value }))}
+                onChange={(e) => handlePhoneChange(e.target.value)}
                 fullWidth
+                inputProps={{ maxLength: 10 }}
+                helperText={newEmployee.phone && !validatePhone(newEmployee.phone) ? 'Phone number must be exactly 10 digits' : newEmployee.phone ? `${newEmployee.phone.length}/10 digits` : ''}
+                error={newEmployee.phone && !validatePhone(newEmployee.phone)}
               />
             </Grid>
             <Grid item xs={12} sm={6}>
@@ -12214,13 +12554,34 @@ Make the content professional, educational, and suitable for workplace training.
               />
             </Grid>
             <Grid item xs={12}>
+              <Autocomplete
+                multiple
+                options={availableKeySkills}
+                value={newEmployee.keyskills || []}
+                onChange={(event, newValue) => {
+                  setNewEmployee(prev => ({ ...prev, keyskills: newValue }));
+                }}
+                renderInput={(params) => (
               <TextField
-                label="Skills"
-                value={newEmployee.skills}
-                onChange={(e) => setNewEmployee(prev => ({ ...prev, skills: e.target.value }))}
-                fullWidth
-                placeholder="e.g. Leadership, Project Management, Communication"
-                helperText="Add relevant skills, separated by commas"
+                    {...params}
+                    label="Key Skills"
+                    placeholder="Select or search for skills"
+                    helperText="Select multiple skills from the dropdown"
+                  />
+                )}
+                renderTags={(value, getTagProps) =>
+                  value.map((option, index) => (
+                    <Chip
+                      label={option}
+                      {...getTagProps({ index })}
+                      size="small"
+                        sx={{
+                          backgroundColor: '#d1fae5',
+                          color: '#065f46'
+                        }}
+                    />
+                  ))
+                }
               />
             </Grid>
             <Grid item xs={12} sm={6}>
@@ -12236,24 +12597,40 @@ Make the content professional, educational, and suitable for workplace training.
                 </Select>
               </FormControl>
             </Grid>
+            {showAddEmployee && !showEditEmployee && (
             <Grid item xs={12} sm={6}>
               <TextField
                 label="Password"
-                type="password"
+                  type={showAddEmployeePassword ? 'text' : 'password'}
                 value={newEmployee.password}
                 onChange={(e) => setNewEmployee(prev => ({ ...prev, password: e.target.value }))}
                 fullWidth
                 required
                 helperText="Set initial password for the employee"
+                  InputProps={{
+                    endAdornment: (
+                      <InputAdornment position="end">
+                        <IconButton
+                          onClick={() => setShowAddEmployeePassword(!showAddEmployeePassword)}
+                          edge="end"
+                          type="button"
+                        >
+                          {showAddEmployeePassword ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                        </IconButton>
+                      </InputAdornment>
+                    ),
+                  }}
               />
             </Grid>
+            )}
           </Grid>
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={{ px: 3, pb: 3 }}>
           <Button onClick={() => {
             setShowAddEmployee(false);
             setShowEditEmployee(false);
             setSelectedEmployee(null);
+            setShowAddEmployeePassword(false);
           }}>
             Cancel
           </Button>
@@ -12266,24 +12643,434 @@ Make the content professional, educational, and suitable for workplace training.
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Employee View Dialog */}
+      <Dialog 
+        open={showEmployeeView} 
+        onClose={() => {
+          setShowEmployeeView(false);
+          setViewingEmployee(null);
+        }}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>
+          <Box display="flex" justifyContent="space-between" alignItems="center">
+            <Typography variant="h5" fontWeight="bold">
+              {viewingEmployee?.role === 'admin' ? 'Admin Details' : 'Employee Details'}
+            </Typography>
+            <IconButton
+              onClick={() => {
+                setShowEmployeeView(false);
+                setViewingEmployee(null);
+              }}
+              sx={{
+                color: 'text.secondary',
+                '&:hover': { backgroundColor: '#f3f4f6' }
+              }}
+            >
+              <CloseIcon />
+            </IconButton>
+          </Box>
+        </DialogTitle>
+        <DialogContent sx={{ pb: 2, px: 3 }}>
+          {viewingEmployee && (
+            <Grid container spacing={3} sx={{ mt: 1 }}>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  label="First Name"
+                  value={viewingEmployee.firstName || ''}
+                  fullWidth
+                  InputProps={{
+                    readOnly: true
+                  }}
+                  onFocus={(e) => e.target.blur()}
+                  sx={{
+                    '& .MuiInputBase-root': {
+                      backgroundColor: '#f8f9fa',
+                      '& fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                      '&:hover fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                      '&.Mui-focused fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                    },
+                    '& .MuiInputBase-input': {
+                      cursor: 'default',
+                      userSelect: 'none',
+                      backgroundColor: '#f8f9fa',
+                    }
+                  }}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  label="Last Name"
+                  value={viewingEmployee.lastName || ''}
+                  fullWidth
+                  InputProps={{
+                    readOnly: true
+                  }}
+                  onFocus={(e) => e.target.blur()}
+                  sx={{
+                    '& .MuiInputBase-root': {
+                      backgroundColor: '#f8f9fa',
+                      '& fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                      '&:hover fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                      '&.Mui-focused fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                    },
+                    '& .MuiInputBase-input': {
+                      cursor: 'default',
+                      userSelect: 'none',
+                      backgroundColor: '#f8f9fa',
+                    }
+                  }}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  label="Email"
+                  type="email"
+                  value={viewingEmployee.email || ''}
+                  fullWidth
+                  InputProps={{
+                    readOnly: true
+                  }}
+                  onFocus={(e) => e.target.blur()}
+                  sx={{
+                    '& .MuiInputBase-root': {
+                      backgroundColor: '#f8f9fa',
+                      '& fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                      '&:hover fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                      '&.Mui-focused fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                    },
+                    '& .MuiInputBase-input': {
+                      cursor: 'default',
+                      userSelect: 'none',
+                      backgroundColor: '#f8f9fa',
+                    }
+                  }}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  label="Phone Number"
+                  value={viewingEmployee.phone || ''}
+                  fullWidth
+                  InputProps={{
+                    readOnly: true
+                  }}
+                  onFocus={(e) => e.target.blur()}
+                  sx={{
+                    '& .MuiInputBase-root': {
+                      backgroundColor: '#f8f9fa',
+                      '& fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                      '&:hover fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                      '&.Mui-focused fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                    },
+                    '& .MuiInputBase-input': {
+                      cursor: 'default',
+                      userSelect: 'none',
+                      backgroundColor: '#f8f9fa',
+                    }
+                  }}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  label="Department"
+                  value={viewingEmployee.department || ''}
+                  fullWidth
+                  InputProps={{
+                    readOnly: true
+                  }}
+                  onFocus={(e) => e.target.blur()}
+                  sx={{
+                    '& .MuiInputBase-root': {
+                      backgroundColor: '#f8f9fa',
+                      '& fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                      '&:hover fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                      '&.Mui-focused fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                    },
+                    '& .MuiInputBase-input': {
+                      cursor: 'default',
+                      userSelect: 'none',
+                      backgroundColor: '#f8f9fa',
+                    }
+                  }}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  label="Job Role"
+                  value={viewingEmployee.jobRole || ''}
+                  fullWidth
+                  InputProps={{
+                    readOnly: true
+                  }}
+                  onFocus={(e) => e.target.blur()}
+                  sx={{
+                    '& .MuiInputBase-root': {
+                      backgroundColor: '#f8f9fa',
+                      '& fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                      '&:hover fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                      '&.Mui-focused fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                    },
+                    '& .MuiInputBase-input': {
+                      cursor: 'default',
+                      userSelect: 'none',
+                      backgroundColor: '#f8f9fa',
+                    }
+                  }}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  label="Reporting Manager"
+                  value={viewingEmployee.reportingManager || ''}
+                  fullWidth
+                  InputProps={{
+                    readOnly: true
+                  }}
+                  onFocus={(e) => e.target.blur()}
+                  sx={{
+                    '& .MuiInputBase-root': {
+                      backgroundColor: '#f8f9fa',
+                      '& fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                      '&:hover fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                      '&.Mui-focused fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                    },
+                    '& .MuiInputBase-input': {
+                      cursor: 'default',
+                      userSelect: 'none',
+                      backgroundColor: '#f8f9fa',
+                    }
+                  }}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  label="Employee ID"
+                  value={viewingEmployee.employeeId || ''}
+                  fullWidth
+                  InputProps={{
+                    readOnly: true
+                  }}
+                  onFocus={(e) => e.target.blur()}
+                  sx={{
+                    '& .MuiInputBase-root': {
+                      backgroundColor: '#f8f9fa',
+                      '& fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                      '&:hover fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                      '&.Mui-focused fieldset': {
+                        borderColor: '#e5e7eb',
+                      },
+                    },
+                    '& .MuiInputBase-input': {
+                      cursor: 'default',
+                      userSelect: 'none',
+                      backgroundColor: '#f8f9fa',
+                    }
+                  }}
+                />
+              </Grid>
+              <Grid item xs={12}>
+                <Autocomplete
+                  multiple
+                  options={availableKeySkills}
+                  value={viewingEmployee.keyskills || []}
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      label="Key Skills"
+                      placeholder="No skills selected"
+                      sx={{
+                        '& .MuiInputBase-root': {
+                          backgroundColor: '#f8f9fa',
+                          '& fieldset': {
+                            borderColor: '#e5e7eb',
+                          },
+                          '&:hover fieldset': {
+                            borderColor: '#e5e7eb',
+                          },
+                          '&.Mui-focused fieldset': {
+                            borderColor: '#e5e7eb',
+                          },
+                        },
+                        '& .MuiInputBase-input': {
+                          backgroundColor: '#f8f9fa',
+                        }
+                      }}
+                    />
+                  )}
+                  renderTags={(value, getTagProps) =>
+                    value.map((option, index) => (
+                      <Chip
+                        label={option}
+                        {...getTagProps({ index })}
+                        size="small"
+                        sx={{
+                          backgroundColor: '#d1fae5',
+                          color: '#065f46'
+                        }}
+                      />
+                    ))
+                  }
+                  disabled
+                />
+              </Grid>
+            </Grid>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 3, justifyContent: 'center', gap: 2 }}>
+          <Button
+            variant="contained"
+            startIcon={<EditIcon />}
+            onClick={() => {
+              if (viewingEmployee) {
+                handleEditEmployee(viewingEmployee);
+                setShowEmployeeView(false);
+                setViewingEmployee(null);
+              }
+            }}
+            sx={{
+              backgroundColor: '#114417DB',
+              '&:hover': { backgroundColor: '#0a2f0e' },
+              minWidth: 150
+            }}
+          >
+            Edit
+          </Button>
+          <Button
+            variant="outlined"
+            startIcon={<PersonOffIcon />}
+            onClick={async () => {
+              setConfirmDialogData({
+                title: viewingEmployee.status === 'active' ? 'Deactivate Employee' : 'Activate Employee',
+                message: `Are you sure you want to ${viewingEmployee.status === 'active' ? 'deactivate' : 'activate'} this employee?`,
+                onConfirm: async () => {
+                  if (viewingEmployee) {
+                try {
+                  setIsLoading(true);
+                  const employeeData = {
+                    firstName: viewingEmployee.firstName,
+                    lastName: viewingEmployee.lastName,
+                    email: viewingEmployee.email,
+                    phone: viewingEmployee.phone || '',
+                    department: viewingEmployee.department || '',
+                    employeeId: viewingEmployee.employeeId || '',
+                    role: viewingEmployee.role || 'employee',
+                    jobRole: viewingEmployee.jobRole || '',
+                    reportingManager: viewingEmployee.reportingManager || '',
+                    keyskills: viewingEmployee.keyskills || [],
+                    status: viewingEmployee.status === 'active' ? 'inactive' : 'active'
+                  };
+                  
+                  const updated = await employeeAPI.update(viewingEmployee.id, employeeData);
+                  
+                  // Update the employee in state
+                  const updatedEmployee = {
+                    ...viewingEmployee,
+                    status: updated.status || (viewingEmployee.status === 'active' ? 'inactive' : 'active')
+                  };
+                  
+                  setEmployees(prev => 
+                    prev.map(emp => 
+                      emp.id === viewingEmployee.id ? updatedEmployee : emp
+                    )
+                  );
+                  setViewingEmployee(updatedEmployee);
+                  showToast(`Employee ${updatedEmployee.status === 'active' ? 'activated' : 'deactivated'} successfully!`, 'success');
+                } catch (error) {
+                  console.error('Failed to update employee status:', error);
+                  showToast(`Failed to ${viewingEmployee.status === 'active' ? 'deactivate' : 'activate'} employee: ${error.message}`, 'error');
+                } finally {
+                  setIsLoading(false);
+                }
+              }
+                }
+              });
+              setShowConfirmDialog(true);
+            }}
+            sx={{
+              borderColor: '#ef4444',
+              color: '#ef4444',
+              '&:hover': { 
+                borderColor: '#dc2626',
+                backgroundColor: '#fef2f2'
+              },
+              minWidth: 150
+            }}
+          >
+            {viewingEmployee?.status === 'active' ? 'Deactivate' : 'Activate'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 
   // Combine all sessions and assessments from different sources
   const getAllCourses = () => {
     const courses = [];
+    const courseMap = new Map(); // Use Map to deduplicate by ID
     
     // Add draft sessions (exclude deleted)
     draftSessions.filter(s => s.status !== 'deleted').forEach(session => {
+      if (!session.id) return; // Skip sessions without ID
+      const moduleCount = session.moduleCount || calculateModuleCount(session) || 0;
       const questionCount = session.quiz?.questions?.length || session.questions?.length || 0;
       const duration = questionCount > 0 ? `${questionCount * 5}min` : 'N/A';
       
-      courses.push({
+      const course = {
         id: session.id,
         title: session.title || 'Untitled Session',
-        modules: questionCount || 0,
+        modules: moduleCount,
         duration: duration,
-        skill: 'NA', // Can be enhanced later
+        skills: session.skills || [],
+        skill: session.skills && session.skills.length > 0 ? session.skills[0] : 'NA',
         rating: 0.0,
         reviews: 0,
         thumbnail: session.type === 'Employee Wellbeing' ? '🧘' : session.type === 'Technical Training' ? '💻' : '📚',
@@ -12292,20 +13079,29 @@ Make the content professional, educational, and suitable for workplace training.
         createdAt: session.savedAt || session.createdAt,
         originalData: session,
         source: 'draft'
-      });
+      };
+      
+      // Only add if not already exists, or if existing is draft and this is more recent
+      const existing = courseMap.get(session.id);
+      if (!existing || (existing.status === 'draft' && session.status !== 'draft')) {
+        courseMap.set(session.id, course);
+      }
     });
     
-    // Add published sessions (exclude deleted)
+    // Add published sessions (exclude deleted) - these take priority over drafts
     publishedSessions.filter(s => s.status !== 'deleted').forEach(session => {
+      if (!session.id) return; // Skip sessions without ID
+      const moduleCount = session.moduleCount || calculateModuleCount(session) || 0;
       const questionCount = session.quiz?.questions?.length || session.questions?.length || 0;
       const duration = questionCount > 0 ? `${questionCount * 5}min` : 'N/A';
       
-      courses.push({
+      const course = {
         id: session.id,
         title: session.title || 'Untitled Session',
-        modules: questionCount || 0,
+        modules: moduleCount,
         duration: duration,
-        skill: 'NA',
+        skills: session.skills || [],
+        skill: session.skills && session.skills.length > 0 ? session.skills[0] : 'NA',
         rating: 0.0,
         reviews: 0,
         thumbnail: session.type === 'Employee Wellbeing' ? '🧘' : session.type === 'Technical Training' ? '💻' : '📚',
@@ -12314,18 +13110,25 @@ Make the content professional, educational, and suitable for workplace training.
         createdAt: session.publishedAt || session.createdAt,
         originalData: session,
         source: 'published'
-      });
+      };
+      
+      // Published sessions always override drafts
+      courseMap.set(session.id, course);
     });
+    
+    // Convert map to array
+    courses.push(...Array.from(courseMap.values()));
     
     // Add saved assessments
     savedAssessments.forEach(assessment => {
+      const moduleCount = assessment.moduleCount || calculateModuleCount(assessment) || 0;
       const questionCount = assessment.quiz?.questions?.length || assessment.questions?.length || 0;
       const duration = questionCount > 0 ? `${questionCount * 5}min` : 'N/A';
       
       courses.push({
         id: assessment.id,
         title: assessment.title || assessment.assessmentInfo?.quizTitle || 'Untitled Assessment',
-        modules: questionCount || 0,
+        modules: moduleCount,
         duration: duration,
         skill: 'NA',
         rating: 0.0,
@@ -12343,13 +13146,33 @@ Make the content professional, educational, and suitable for workplace training.
   };
 
   const renderCourseLibrary = () => {
+    // Show loading spinner while sessions are being loaded
+    if (sessionsLoading) {
+      return (
+        <Box p={3} display="flex" justifyContent="center" alignItems="center" minHeight="400px">
+          <Box textAlign="center">
+            <CircularProgress size={60} sx={{ color: '#114417DB', mb: 2 }} />
+            <Typography variant="body1" color="text.secondary">
+              Loading sessions...
+            </Typography>
+          </Box>
+        </Box>
+      );
+    }
+
     // Get latest courses from all sources (published + drafts)
     const allCourses = getAllCourses();
+
+    // Get all unique skills from courses
+    const allSkills = Array.from(new Set(
+      allCourses.flatMap(course => course.skills || [])
+    )).sort();
 
     // Filter courses based on search and filters
     const filteredCourses = allCourses.filter(course => {
       const matchesSearch = course.title.toLowerCase().includes(courseSearchTerm.toLowerCase());
-      const matchesSkill = courseFilters.skill === 'all' || course.skill === courseFilters.skill;
+      const matchesSkill = courseFilters.skill === 'all' || 
+                          (course.skills && course.skills.includes(courseFilters.skill));
       const matchesCategory = courseFilters.category === 'all' || course.category === courseFilters.category;
       const matchesStatus = courseFilters.status === 'all' || course.status.toLowerCase() === courseFilters.status.toLowerCase();
       
@@ -12369,69 +13192,96 @@ Make the content professional, educational, and suitable for workplace training.
       </Box>
 
       {/* Filters and Search */}
-      <Box mb={3} display="flex" gap={2} alignItems="center" flexWrap="wrap">
-        {/* Filter Dropdowns */}
-        <FormControl size="small" sx={{ minWidth: 120 }}>
-          <InputLabel>Skill</InputLabel>
+      <Card sx={{ p: 3, mb: 4 }}>
+        <Grid container spacing={3} alignItems="center">
+          <Grid item xs={12} md={5}>
+            <TextField
+              fullWidth
+              label="Search Sessions"
+              placeholder="Search by session title..."
+              value={courseSearchTerm}
+              onChange={(e) => setCourseSearchTerm(e.target.value)}
+              InputLabelProps={{
+                shrink: true
+              }}
+              InputProps={{
+                startAdornment: <SearchIcon sx={{ mr: 1, color: 'text.secondary' }} />
+              }}
+            />
+          </Grid>
+          <Grid item xs={12} md={2}>
+            <FormControl fullWidth>
+              <InputLabel shrink={true}>Filter by Skill</InputLabel>
           <Select
             value={courseFilters.skill}
-            label="Skill"
+                label="Filter by Skill"
             onChange={(e) => setCourseFilters(prev => ({ ...prev, skill: e.target.value }))}
-          >
-            <MenuItem value="all">All Skills</MenuItem>
-            <MenuItem value="NA">NA</MenuItem>
-            {/* Add more skills as needed */}
+                displayEmpty
+              >
+                <MenuItem value="all">
+                  <em>All Skills</em>
+                </MenuItem>
+                {allSkills.map(skill => (
+                  <MenuItem key={skill} value={skill}>{skill}</MenuItem>
+                ))}
           </Select>
         </FormControl>
-
-        <FormControl size="small" sx={{ minWidth: 120 }}>
-          <InputLabel>Category</InputLabel>
+          </Grid>
+          <Grid item xs={12} md={2}>
+            <FormControl fullWidth>
+              <InputLabel shrink={true}>Filter by Category</InputLabel>
           <Select
             value={courseFilters.category}
-            label="Category"
+                label="Filter by Category"
             onChange={(e) => setCourseFilters(prev => ({ ...prev, category: e.target.value }))}
+                displayEmpty
           >
-            <MenuItem value="all">All Categories</MenuItem>
+                <MenuItem value="all">
+                  <em>All Categories</em>
+                </MenuItem>
             {[...new Set(allCourses.map(c => c.category))].map(category => (
               <MenuItem key={category} value={category}>{category}</MenuItem>
             ))}
           </Select>
         </FormControl>
-
-        <FormControl size="small" sx={{ minWidth: 120 }}>
-          <InputLabel>Status</InputLabel>
+          </Grid>
+          <Grid item xs={12} md={2}>
+            <FormControl fullWidth>
+              <InputLabel shrink={true}>Filter by Status</InputLabel>
           <Select
             value={courseFilters.status}
-            label="Status"
+                label="Filter by Status"
             onChange={(e) => setCourseFilters(prev => ({ ...prev, status: e.target.value }))}
+                displayEmpty
           >
-            <MenuItem value="all">All Status</MenuItem>
+                <MenuItem value="all">
+                  <em>All Status</em>
+                </MenuItem>
             <MenuItem value="draft">Draft</MenuItem>
             <MenuItem value="published">Published</MenuItem>
             <MenuItem value="scheduled">Scheduled</MenuItem>
             <MenuItem value="saved">Saved</MenuItem>
           </Select>
         </FormControl>
-
-        {/* Search Bar */}
-        <Box flex={1} minWidth={250}>
-          <TextField
-            placeholder="Search by session title"
-            value={courseSearchTerm}
-            onChange={(e) => setCourseSearchTerm(e.target.value)}
-            fullWidth
+          </Grid>
+          <Grid item xs={12} md={1}>
+            <Button
+              variant="outlined"
             size="small"
-            InputProps={{
-              startAdornment: (
-                <InputAdornment position="start">
-                  <SearchIcon />
-                </InputAdornment>
-              ),
-            }}
-          />
-        </Box>
+              onClick={() => {
+                setCourseSearchTerm('');
+                setCourseFilters({ skill: 'all', category: 'all', status: 'all' });
+              }}
+              sx={{ height: '56px', width: '100%', minWidth: 'auto' }}
+            >
+              Clear
+            </Button>
+          </Grid>
+        </Grid>
+      </Card>
 
         {/* View Toggle Buttons */}
+      <Box display="flex" justifyContent="flex-end" alignItems="center" mb={3}>
         <Box display="flex" gap={1}>
           <IconButton
             onClick={() => setCourseLibraryView('grid')}
@@ -12548,10 +13398,40 @@ Make the content professional, educational, and suitable for workplace training.
                   </Box>
 
                   {/* Skills */}
-                  <Box sx={{ minWidth: 100, textAlign: 'right' }}>
+                  <Box sx={{ minWidth: 150, textAlign: 'right' }}>
+                    {course.skills && course.skills.length > 0 ? (
+                      <Box display="flex" flexWrap="wrap" gap={0.5} justifyContent="flex-end">
+                        {course.skills.slice(0, 3).map((skill, idx) => (
+                          <Chip
+                            key={idx}
+                            label={skill}
+                            size="small"
+                            sx={{
+                              backgroundColor: '#e8f5e9',
+                              color: '#2e7d32',
+                              fontSize: '0.7rem',
+                              height: '24px'
+                            }}
+                          />
+                        ))}
+                        {course.skills.length > 3 && (
+                          <Chip
+                            label={`+${course.skills.length - 3}`}
+                            size="small"
+                            sx={{
+                              backgroundColor: '#f3f4f6',
+                              color: '#6b7280',
+                              fontSize: '0.7rem',
+                              height: '24px'
+                            }}
+                          />
+                        )}
+                      </Box>
+                    ) : (
                     <Typography variant="body2" color="text.secondary">
-                      Skills: {course.skill}
+                        No skills
                     </Typography>
+                    )}
                   </Box>
 
                   {/* Rating */}
@@ -12645,11 +13525,41 @@ Make the content professional, educational, and suitable for workplace training.
                         {course.originalData.description}
                       </Typography>
                     )}
+                    {course.skills && course.skills.length > 0 ? (
+                      <Box mb={2} display="flex" flexWrap="wrap" gap={0.5}>
+                        {course.skills.slice(0, 2).map((skill, idx) => (
+                          <Chip
+                            key={idx}
+                            label={skill}
+                            size="small"
+                            sx={{
+                              backgroundColor: '#e8f5e9',
+                              color: '#2e7d32',
+                              fontSize: '0.65rem',
+                              height: '22px'
+                            }}
+                          />
+                        ))}
+                        {course.skills.length > 2 && (
+                          <Chip
+                            label={`+${course.skills.length - 2}`}
+                            size="small"
+                            sx={{
+                              backgroundColor: '#f3f4f6',
+                              color: '#6b7280',
+                              fontSize: '0.65rem',
+                              height: '22px'
+                            }}
+                          />
+                        )}
+                      </Box>
+                    ) : (
                     <Box mb={2}>
-                      <Typography variant="body2" color="text.secondary">
-                        Skills: {course.skill}
+                        <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
+                          No skills
                       </Typography>
                     </Box>
+                    )}
                     <Box display="flex" alignItems="center" gap={1} mt="auto">
                       <StarIcon sx={{ color: '#fbbf24', fontSize: 18 }} />
                       <Typography variant="body2" fontWeight="medium">
@@ -12769,7 +13679,7 @@ Make the content professional, educational, and suitable for workplace training.
               <Box display="flex" justifyContent="center" gap={2} flexWrap="wrap">
                 <Button
                   variant="contained"
-                  startIcon={<VisibilityIcon />}
+                  startIcon={<ExpandMoreIcon />}
                   onClick={() => setSessionViewMode('view')}
                   sx={{
                     backgroundColor: '#114417DB',
@@ -12777,8 +13687,22 @@ Make the content professional, educational, and suitable for workplace training.
                     minWidth: 150
                   }}
                 >
-                  View
+                  Expand
                 </Button>
+                {selectedLibrarySession?.status === 'published' && (
+                  <Button
+                    variant="contained"
+                    startIcon={<AssessmentIcon />}
+                    onClick={() => setShowSessionReport(true)}
+                    sx={{
+                      backgroundColor: '#f59e0b',
+                      '&:hover': { backgroundColor: '#d97706' },
+                      minWidth: 150
+                    }}
+                  >
+                    Session Report
+                  </Button>
+                )}
                 {selectedLibrarySession?.status !== 'published' && (
                   <>
                     <Button
@@ -12855,13 +13779,6 @@ Make the content professional, educational, and suitable for workplace training.
         </DialogContent>
         {sessionViewMode && (
           <DialogActions>
-            <Button
-              onClick={() => {
-                setSessionViewMode(null);
-              }}
-            >
-              Back
-            </Button>
             {sessionViewMode === 'edit' && (
               <Button
                 variant="contained"
@@ -13807,17 +14724,61 @@ Make the content professional, educational, and suitable for workplace training.
 
   return (
     <DashboardContainer>
+      {/* Global Loading Overlay */}
+      {isLoading && (
+        <Box
+          sx={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+          }}
+        >
+          <Box
+            sx={{
+              backgroundColor: 'white',
+              borderRadius: 2,
+              p: 4,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 2,
+            }}
+          >
+            <CircularProgress size={60} sx={{ color: '#114417DB' }} />
+            <Typography variant="h6" color="text.primary">
+              Loading...
+            </Typography>
+          </Box>
+        </Box>
+      )}
       {/* Toast Notification */}
       <Snackbar
         open={toast.open}
         autoHideDuration={6000}
         onClose={closeToast}
-        anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        sx={{ bottom: { xs: 90, sm: 24 } }}
       >
         <Alert 
           onClose={closeToast} 
           severity={toast.severity}
-          sx={{ width: '100%' }}
+          sx={{ 
+            width: '100%',
+            minWidth: 300,
+            fontSize: '0.95rem',
+            fontWeight: 500,
+            '& .MuiAlert-message': {
+              color: 'white',
+              fontWeight: 500
+            }
+          }}
           variant="filled"
         >
           {toast.message}
@@ -13884,32 +14845,12 @@ Make the content professional, educational, and suitable for workplace training.
               key={item.id} 
               component="div"
               onClick={() => {
-                // Handle clicks - manage-session is now a tab-based view
-                if (item.id !== 'employees') {
+                // Handle clicks - clicking Employee Management goes directly to Manage Employee Accounts
+                if (item.id === 'employees') {
                 handleTabChange(item.id);
-                } else {
-                  // For employees, clicking the parent just opens/closes submenu
-                  if (showEmployeesSubmenu) {
-                    setShowEmployeesSubmenu(false);
+                  setEmployeesSubTab('manage');
                   } else {
                     handleTabChange(item.id);
-                }
-                }
-              }}
-              onMouseEnter={(e) => {
-                if (item.id === 'employees') {
-                  setEmployeesAnchorEl(e.currentTarget);
-                  setShowEmployeesSubmenu(true);
-                }
-              }}
-              onMouseLeave={() => {
-                if (item.id === 'employees') {
-                  setTimeout(() => {
-                    if (!document.querySelector('[data-submenu="employees"]:hover')) {
-                      setShowEmployeesSubmenu(false);
-                      setEmployeesAnchorEl(null);
-                }
-                  }, 100);
                 }
               }}
               sx={{
@@ -13937,88 +14878,6 @@ Make the content professional, educational, and suitable for workplace training.
             </ListItem>
           ))}
         </List>
-        
-        {/* Employee Management Submenu - Using Popper to escape sidebar overflow */}
-        <Popper
-          open={showEmployeesSubmenu}
-          anchorEl={employeesAnchorEl}
-          placement="right-start"
-          modifiers={[
-            {
-              name: 'offset',
-              options: {
-                offset: [8, 0],
-              },
-            },
-          ]}
-          sx={{
-            zIndex: 9999,
-            '&[data-popper-placement*="right"]': {
-              marginLeft: '8px !important',
-            },
-          }}
-          onMouseEnter={() => setShowEmployeesSubmenu(true)}
-          onMouseLeave={() => {
-            setShowEmployeesSubmenu(false);
-            setEmployeesAnchorEl(null);
-          }}
-        >
-          <Box
-            data-submenu="employees"
-                  sx={{
-                    minWidth: 250,
-                    backgroundColor: 'white',
-                    borderRadius: 2,
-                    boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
-                    border: '1px solid #e5e7eb',
-              mt: 0.5,
-                  }}
-                >
-                  <List sx={{ p: 1 }}>
-                    <ListItem
-                      button
-                      onClick={() => {
-                  handleTabChange('employees');
-                  setEmployeesSubTab('manage');
-                  setShowEmployeesSubmenu(false);
-                  setEmployeesAnchorEl(null);
-                      }}
-                      sx={{
-                        borderRadius: 1,
-                        mb: 0.5,
-                        '&:hover': {
-                          backgroundColor: '#f0fdf4',
-                        },
-                      }}
-                    >
-                      <ListItemText 
-                        primary="Manage Employee Accounts" 
-                        primaryTypographyProps={{ fontSize: '0.875rem', color: '#374151' }}
-                      />
-                    </ListItem>
-                    <ListItem
-                      button
-                      onClick={() => {
-                  handleTabChange('employees');
-                  setEmployeesSubTab('add');
-                  setShowEmployeesSubmenu(false);
-                  setEmployeesAnchorEl(null);
-                      }}
-                      sx={{
-                        borderRadius: 1,
-                        '&:hover': {
-                          backgroundColor: '#f0fdf4',
-                        },
-                      }}
-                    >
-                      <ListItemText 
-                        primary="Add Employee" 
-                        primaryTypographyProps={{ fontSize: '0.875rem', color: '#374151' }}
-                      />
-                    </ListItem>
-                  </List>
-                </Box>
-        </Popper>
       </Sidebar>
 
       <MainContent>
@@ -14074,24 +14933,6 @@ Make the content professional, educational, and suitable for workplace training.
                 <Badge badgeContent={unreadNotificationsCount} color="error">
                   <NotificationsIcon sx={{ fontSize: 24, color: '#374151 !important' }} />
                 </Badge>
-              </IconButton>
-              
-              {/* Settings */}
-              <IconButton
-                onClick={(e) => {
-                  setSettingsAnchorEl(e.currentTarget);
-                }}
-                size="medium"
-                  sx={{ 
-                  color: '#374151 !important',
-                  width: 40,
-                  height: 40,
-                  '&:hover': {
-                    backgroundColor: 'rgba(0, 0, 0, 0.04)',
-                  }
-                }}
-              >
-                <SettingsIcon sx={{ fontSize: 24, color: '#374151 !important' }} />
             </IconButton>
               
               {/* Profile */}
@@ -14120,8 +14961,7 @@ Make the content professional, educational, and suitable for workplace training.
         <Box sx={{ mt: '64px' }}>
         {showContentPreview ? renderContentPreview() :
          showSavedSessionsFolder ? renderSavedSessionsFolder() :
-         showPasswordManager ? renderPasswordManager() :
-         showProfile ? (showEditProfile ? renderEditProfile() : renderProfile()) :
+         activeTab === 'profile' ? (showPasswordManager ? renderPasswordManager() : (showEditProfile ? renderEditProfile() : renderProfile())) :
          activeTab === 'dashboard' ? renderDashboard() :
          activeTab === 'manage-session' ? renderManageSession() :
          showQuizForm ? <InteractiveQuiz 
@@ -14138,26 +14978,6 @@ Make the content professional, educational, and suitable for workplace training.
          activeTab === 'settings' ? renderSettings() :
          renderOtherTabs()}
         </Box>
-
-        {/* Settings Menu */}
-        <Menu
-          anchorEl={settingsAnchorEl}
-          open={Boolean(settingsAnchorEl)}
-          onClose={() => setSettingsAnchorEl(null)}
-          PaperProps={{
-            sx: { minWidth: 200 }
-          }}
-        >
-          <MenuItem onClick={() => {
-            setSettingsAnchorEl(null);
-            setActiveTab('settings');
-          }}>
-            <ListItemIcon>
-              <LockIcon fontSize="small" />
-            </ListItemIcon>
-            <ListItemText>Manage Passwords</ListItemText>
-          </MenuItem>
-        </Menu>
 
         {/* Profile Menu */}
         <Menu
@@ -14536,6 +15356,49 @@ Make the content professional, educational, and suitable for workplace training.
           </DialogActions>
         </Dialog>
 
+        {/* General Confirmation Dialog */}
+        <Dialog
+          open={showConfirmDialog}
+          onClose={() => setShowConfirmDialog(false)}
+          maxWidth="sm"
+          fullWidth
+        >
+          <DialogTitle>
+            <Box display="flex" alignItems="center" gap={1}>
+              <WarningIcon sx={{ color: '#f59e0b' }} />
+              <Typography variant="h6" fontWeight="bold">
+                {confirmDialogData.title || 'Confirm Action'}
+              </Typography>
+            </Box>
+          </DialogTitle>
+          <DialogContent>
+            <Typography variant="body1" color="text.secondary" sx={{ whiteSpace: 'pre-line' }}>
+              {confirmDialogData.message || 'Are you sure you want to proceed?'}
+            </Typography>
+          </DialogContent>
+          <DialogActions sx={{ p: 2, gap: 1 }}>
+            <Button
+              onClick={() => setShowConfirmDialog(false)}
+              variant="outlined"
+              sx={{ color: '#6b7280' }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (confirmDialogData.onConfirm) {
+                  confirmDialogData.onConfirm();
+                }
+                setShowConfirmDialog(false);
+              }}
+              variant="contained"
+              sx={{ backgroundColor: '#ef4444', '&:hover': { backgroundColor: '#dc2626' } }}
+            >
+              Confirm
+            </Button>
+          </DialogActions>
+        </Dialog>
+
         {/* Cancel Confirmation Dialog */}
         <Dialog
           open={showCancelConfirmDialog}
@@ -14587,6 +15450,15 @@ Make the content professional, educational, and suitable for workplace training.
             </Button>
           </DialogActions>
         </Dialog>
+
+        {/* Session Report Dialog */}
+        {selectedLibrarySession && (
+          <SessionReport
+            session={selectedLibrarySession}
+            open={showSessionReport}
+            onClose={() => setShowSessionReport(false)}
+          />
+        )}
       </MainContent>
     </DashboardContainer>
   );

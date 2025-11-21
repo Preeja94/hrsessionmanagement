@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import { setAuthToken } from '../utils/api';
 import {
   Box,
   Typography,
@@ -94,6 +96,7 @@ const determineUserRole = (email) => {
 
 const LoginPage = () => {
   const navigate = useNavigate();
+  const { login } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -137,60 +140,52 @@ const LoginPage = () => {
     setError('');
 
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // Call the actual API login endpoint
+      const response = await fetch('http://localhost:8000/api/auth/login/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          username: email, // Backend expects 'username' field
+          password: password,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Invalid credentials' }));
+        throw new Error(errorData.error || 'Invalid credentials');
+      }
+
+      const data = await response.json();
       
-      // Determine user role based on email
-      const userRole = determineUserRole(email);
+      // Store authentication data using AuthContext
+      const userData = {
+        id: data.user?.id || email,
+        email: data.user?.email || email,
+        role: data.user?.role || determineUserRole(email),
+        ...data.user
+      };
       
-      // Validate credentials based on role
-      let isValid = false;
+      login(data.token, userData);
+      setAuthToken(data.token);
       
-      if (userRole === 'admin') {
-        // Admin credentials
-        const adminCredentials = [
-          { email: 'admin', password: 'admin' },
-          { email: 'admin@company.com', password: 'admin123' },
-          { email: 'hr@company.com', password: 'admin123' },
-          { email: 'administrator@company.com', password: 'admin123' }
-        ];
-        
-        isValid = adminCredentials.some(
-          cred => (cred.email.toLowerCase() === email.toLowerCase() || 
-                   email.toLowerCase().includes('admin') || 
-                   email.toLowerCase().includes('hr')) && 
-                  cred.password === password
-        );
-        
-        // Also accept any email with admin pattern and any password for demo
-        if (!isValid && (email.toLowerCase().includes('admin') || email.toLowerCase().includes('hr'))) {
-          isValid = true;
-        }
-      } else {
-        // Employee credentials - accept any email and password for demo
-        isValid = true;
+      // Check if password reset is required
+      if (data.password_reset_required) {
+        navigate('/reset-password', { state: { showInfo: true }, replace: true });
+        return;
       }
       
-      if (isValid) {
-        // Store login state in localStorage for session management
-        localStorage.setItem('isLoggedIn', 'true');
-        localStorage.setItem('userRole', userRole);
-        localStorage.setItem('userId', email);
-        localStorage.setItem('userEmail', email);
-        
-        // Navigate to appropriate dashboard
-        if (userRole === 'admin') {
-          navigate('/admin-dashboard', { replace: true });
-        } else {
-          navigate('/employee-dashboard', { replace: true });
-        }
+      // Navigate to appropriate dashboard
+      const userRole = userData.role;
+      if (userRole === 'admin' || userRole === 'hr_admin') {
+        navigate('/admin-dashboard', { replace: true });
       } else {
-        setError('Invalid credentials. Please check your email and password.');
-        setLoading(false);
+        navigate('/employee-dashboard', { replace: true });
       }
     } catch (error) {
       console.error('Login error:', error);
-      setError('Login failed. Please try again.');
+      setError(error.message || 'Login failed. Please try again.');
       setLoading(false);
     }
   };
@@ -450,14 +445,6 @@ const LoginPage = () => {
                   </Box>
                 </Box>
 
-                {/* Footer */}
-                <Box sx={{ p: 3, pt: 0 }}>
-                  <Typography variant="body2" color="text.secondary" textAlign="center">
-                    Demo Credentials:<br/>
-                    <strong>Employee:</strong> Any email (e.g., employee@company.com) + Any Password<br/>
-                    <strong>Admin:</strong> admin@company.com or hr@company.com + admin123
-                  </Typography>
-                </Box>
               </FlipFaceFront>
 
               {/* Back Face - Forgot Password Form */}

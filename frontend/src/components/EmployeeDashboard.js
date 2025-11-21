@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import { employeeAPI, sessionAPI, sessionCompletionAPI, getAuthToken } from '../utils/api';
 import {
   Box,
   Typography,
@@ -49,7 +51,10 @@ import {
   Work as WorkIcon,
   SupervisorAccount as SupervisorIcon,
   Close as CloseIcon,
-  ArrowBack as ArrowBackIcon
+  ArrowBack as ArrowBackIcon,
+  Settings as SettingsIcon,
+  Visibility as VisibilityIcon,
+  VisibilityOff as VisibilityOffIcon
 } from '@mui/icons-material';
 import { styled } from '@mui/material/styles';
 import MyCourses from './MyCourses';
@@ -91,35 +96,51 @@ const MainContent = styled(Box)(({ theme }) => ({
   flexDirection: 'column',
 }));
 
+// Helper function to calculate number of modules (content items) in a session
+const calculateModuleCount = (session) => {
+  if (!session) return 0;
+  let count = 0;
+  
+  // Count creation mode content
+  if (session.creationMode || session.creation_mode) count++;
+  
+  // Count AI content
+  if (session.aiContent || session.resumeState?.aiContentGenerated) count++;
+  
+  // Count files
+  const files = session.files || session.resumeState?.selectedFiles || session.resumeState?.files || [];
+  if (Array.isArray(files)) {
+    count += files.length;
+  }
+  
+  // Count quiz/assessment
+  if (session.quiz || session.assessmentInfo || (session.quiz?.questions && session.quiz.questions.length > 0)) {
+    count++;
+  }
+  
+  return count;
+};
+
 const normalizePublishedSession = (session = {}) => ({
   ...session,
-  scheduledDate: session.scheduledDate || null,
-  scheduledTime: session.scheduledTime || null,
-  scheduledDateTime: session.scheduledDateTime || null,
-  dueDate: session.dueDate || null,
-  dueTime: session.dueTime || null,
-  dueDateTime: session.dueDateTime || null,
+  createdAt: session.createdAt || session.created_at || null,
+  scheduledDate: session.scheduledDate || session.scheduled_date || null,
+  scheduledTime: session.scheduledTime || session.scheduled_time || null,
+  scheduledDateTime: session.scheduledDateTime || session.scheduled_datetime || null,
+  dueDate: session.dueDate || session.due_date || null,
+  dueTime: session.dueTime || session.due_time || null,
+  dueDateTime: session.dueDateTime || session.due_datetime || null,
   isLocked: session.isLocked ?? false,
   approvalExpiresAt: session.approvalExpiresAt || null,
   lastApprovalDate: session.lastApprovalDate || null,
   lockedAt: session.lockedAt || null,
   completedAt: session.completedAt || null,
   lastCompletionScore: session.lastCompletionScore ?? null,
-  lastFeedback: session.lastFeedback || null
+  lastFeedback: session.lastFeedback || null,
+  moduleCount: calculateModuleCount(session) // Add module count
 });
 
-const loadPublishedSessions = () => {
-  const stored = localStorage.getItem('published_sessions');
-  if (stored) {
-    try {
-      const parsed = JSON.parse(stored);
-      return Array.isArray(parsed) ? parsed.map(normalizePublishedSession) : [];
-    } catch (error) {
-      console.error('Failed to load published sessions', error);
-    }
-  }
-  return [];
-};
+// Removed loadPublishedSessions - now using API
 
 const HeaderBar = styled(AppBar)(({ theme }) => ({
   backgroundColor: 'white',
@@ -154,62 +175,174 @@ const ActivityCard = styled(Card)(({ theme }) => ({
 
 const EmployeeDashboard = () => {
   const navigate = useNavigate();
+  const { getUserId, getUserEmail } = useAuth();
   const [activeTab, setActiveTab] = useState('dashboard');
   const [profileAnchorEl, setProfileAnchorEl] = useState(null);
+  const [settingsAnchorEl, setSettingsAnchorEl] = useState(null);
   const [showProfile, setShowProfile] = useState(false);
   const [showEditProfile, setShowEditProfile] = useState(false);
+  const [showPasswordManager, setShowPasswordManager] = useState(false);
   const [currentView, setCurrentView] = useState(null);
   const [selectedSession, setSelectedSession] = useState(null);
-  
-  // Dynamic metrics state
-  const [completedSessions, setCompletedSessions] = useState(() => {
-    try {
-      const stored = localStorage.getItem('employee_completed_sessions');
-      const parsed = stored ? JSON.parse(stored) : [];
-      const initialSet = new Set([2, ...parsed]);
-      return Array.from(initialSet);
-    } catch (error) {
-      console.error('Failed to load completed sessions', error);
-      return [2];
-    }
-  }); // Array of completed session IDs
-  const [activeSessions, setActiveSessions] = useState(1);
-  const [totalSessionsStarted, setTotalSessionsStarted] = useState(2);
-  const [certificatesEarned, setCertificatesEarned] = useState(1);
-  const [sessionCertifications, setSessionCertifications] = useState(() => {
-    try {
-      const stored = localStorage.getItem('session_certifications');
-      return stored ? JSON.parse(stored) : {};
-    } catch (error) {
-      console.error('Failed to read session certifications', error);
-      return {};
-    }
+  const [sessionDetailSource, setSessionDetailSource] = useState('my-courses'); // 'my-courses' or 'course-library'
+  const [passwordData, setPasswordData] = useState({
+    currentPassword: '',
+    newPassword: '',
+    confirmPassword: ''
   });
-  const [publishedSessions, setPublishedSessions] = useState(loadPublishedSessions);
-  const persistPublishedSessions = useCallback((updater) => {
-    setPublishedSessions(prev => {
-      const next = typeof updater === 'function' ? updater(prev) : updater;
-      const normalized = Array.isArray(next) ? next.map(normalizePublishedSession) : [];
-      try {
-        localStorage.setItem('published_sessions', JSON.stringify(normalized));
-        window.dispatchEvent(new Event('published-sessions-updated'));
-      } catch (error) {
-        console.error('Failed to persist published sessions', error);
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  
+  // Dynamic metrics state - now loaded from API
+  const [completedSessions, setCompletedSessions] = useState([]); // Array of completed session IDs
+  const [sessionCompletions, setSessionCompletions] = useState([]); // Full completion records for feedback, etc.
+  const [activeSessions, setActiveSessions] = useState(0);
+  const [totalSessionsStarted, setTotalSessionsStarted] = useState(0);
+  const [certificatesEarned, setCertificatesEarned] = useState(0);
+  const [sessionCertifications, setSessionCertifications] = useState({});
+  const [publishedSessions, setPublishedSessions] = useState([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+  const [completionsLoading, setCompletionsLoading] = useState(true);
+  
+  // Track started sessions
+  const [startedSessions, setStartedSessions] = useState(new Set());
+  
+  // Function to load sessions (reusable)
+  const loadSessions = async () => {
+    try {
+      setSessionsLoading(true);
+      // Load all published and scheduled sessions
+      const allSessions = await sessionAPI.getAll();
+      // Only show published sessions (not scheduled) - scheduled sessions will auto-publish when start time arrives
+      const publishedOnly = allSessions.filter(s => s.status === 'published');
+      const normalized = Array.isArray(publishedOnly) ? publishedOnly.map(normalizePublishedSession) : [];
+      setPublishedSessions(normalized);
+    } catch (error) {
+      console.error('Failed to load published sessions:', error);
+      setPublishedSessions([]);
+    } finally {
+      setSessionsLoading(false);
+    }
+  };
+
+  // Function to load completions (reusable)
+  const loadCompletions = async () => {
+    try {
+      setCompletionsLoading(true);
+      const userId = getUserId();
+      if (userId) {
+        const completions = await sessionCompletionAPI.getAll(parseInt(userId));
+        const completedIds = completions.map(c => c.session);
+        setCompletedSessions(completedIds);
+        setTotalSessionsStarted(completions.length);
+        setCertificatesEarned(completions.filter(c => c.passed).length);
+        setSessionCompletions(completions);
       }
-      return normalized;
-    });
+    } catch (error) {
+      console.error('Failed to load completed sessions:', error);
+      setCompletedSessions([]);
+      setSessionCompletions([]);
+    } finally {
+      setCompletionsLoading(false);
+    }
+  };
+
+  // Load published sessions from API on mount
+  useEffect(() => {
+    loadSessions();
   }, []);
+
+  // Load completed sessions from API on mount
+  useEffect(() => {
+    loadCompletions();
+  }, [getUserId]);
+
+  // Reload data when switching to tabs that need fresh data
+  useEffect(() => {
+    if (activeTab === 'dashboard' || activeTab === 'my-courses' || activeTab === 'course-library') {
+      loadSessions();
+      loadCompletions();
+    }
+  }, [activeTab]);
   
-  // Profile data
+  // Profile data - will be loaded from API
   const [profileData, setProfileData] = useState({
-    firstName: 'Luke',
-    lastName: 'Wilson',
-    phone: '+1 (555) 123-4567',
-    department: 'Engineering',
-    jobRole: 'Senior Developer',
-    reportingManager: 'Sarah Johnson',
-    email: 'luke.wilson@company.com'
+    firstName: '',
+    lastName: '',
+    phone: '',
+    department: '',
+    jobRole: '',
+    reportingManager: '',
+    email: '',
+    keyskills: []
   });
+  const [profileLoading, setProfileLoading] = useState(true);
+  
+  // Load employee profile from API
+  useEffect(() => {
+    const loadEmployeeProfile = async () => {
+      try {
+        setProfileLoading(true);
+        const userId = getUserId();
+        const userEmail = getUserEmail();
+        
+        if (userId) {
+          try {
+            // The backend employee_detail accepts User ID and returns EmployeeProfile
+            const employeeData = await employeeAPI.getById(parseInt(userId));
+            setProfileData({
+              firstName: employeeData.firstName || employeeData.user?.first_name || '',
+              lastName: employeeData.lastName || employeeData.user?.last_name || '',
+              phone: employeeData.phone || employeeData.user?.phone_number || '',
+              department: employeeData.department || employeeData.user?.department || '',
+              jobRole: employeeData.jobRole || employeeData.job_role || '',
+              reportingManager: employeeData.reportingManager || employeeData.reporting_manager || '',
+              email: employeeData.email || employeeData.user?.email || userEmail || '',
+              keyskills: employeeData.keyskills || []
+            });
+      } catch (error) {
+            console.error('Failed to load employee profile:', error);
+            // Fallback: try to get from all employees list
+            try {
+              const allEmployees = await employeeAPI.getAll();
+              const employeeData = allEmployees.find(emp => 
+                emp.user?.id === parseInt(userId) || emp.email === userEmail
+              );
+              if (employeeData) {
+                setProfileData({
+                  firstName: employeeData.firstName || employeeData.user?.first_name || '',
+                  lastName: employeeData.lastName || employeeData.user?.last_name || '',
+                  phone: employeeData.phone || employeeData.user?.phone_number || '',
+                  department: employeeData.department || employeeData.user?.department || '',
+                  jobRole: employeeData.jobRole || employeeData.job_role || '',
+                  reportingManager: employeeData.reportingManager || employeeData.reporting_manager || '',
+                  email: employeeData.email || employeeData.user?.email || userEmail || '',
+                  keyskills: employeeData.keyskills || []
+                });
+              } else if (userEmail) {
+                setProfileData(prev => ({ ...prev, email: userEmail }));
+              }
+            } catch (fallbackError) {
+              console.error('Fallback also failed:', fallbackError);
+              if (userEmail) {
+                setProfileData(prev => ({ ...prev, email: userEmail }));
+              }
+            }
+          }
+        } else if (userEmail) {
+          // If no userId, try to get from email
+          setProfileData(prev => ({ ...prev, email: userEmail }));
+        }
+      } catch (error) {
+        console.error('Error loading profile:', error);
+      } finally {
+        setProfileLoading(false);
+      }
+    };
+    
+    loadEmployeeProfile();
+  }, [getUserId, getUserEmail]);
 
   // Notifications
   const [notifications, setNotifications] = useState([
@@ -246,65 +379,7 @@ const EmployeeDashboard = () => {
     return Boolean(sessionCertifications && sessionCertifications[sessionId]);
   };
 
-  useEffect(() => {
-    const syncSessionCertifications = () => {
-      try {
-        const stored = localStorage.getItem('session_certifications');
-        setSessionCertifications(stored ? JSON.parse(stored) : {});
-      } catch (error) {
-        console.error('Failed to sync session certifications', error);
-      }
-    };
-
-    window.addEventListener('session-certifications-updated', syncSessionCertifications);
-    window.addEventListener('storage', syncSessionCertifications);
-
-    return () => {
-      window.removeEventListener('session-certifications-updated', syncSessionCertifications);
-      window.removeEventListener('storage', syncSessionCertifications);
-    };
-  }, []);
-
-  useEffect(() => {
-    const syncPublished = () => {
-      console.log('Employee dashboard: Syncing published sessions...');
-      const loaded = loadPublishedSessions();
-      console.log('Employee dashboard: Published sessions updated', loaded.length, 'sessions');
-      console.log('Sessions status breakdown:', loaded.map(s => ({ 
-        title: s.title, 
-        isLocked: s.isLocked, 
-        status: s.status 
-      })));
-      setPublishedSessions(loaded);
-    };
-
-    // Initial load
-    syncPublished();
-
-    // Listen for updates
-    window.addEventListener('published-sessions-updated', syncPublished);
-    const handleStorage = (event) => {
-      if (event.key === 'published_sessions') {
-        console.log('Employee dashboard: Storage event detected for published_sessions');
-        syncPublished();
-      }
-    };
-    window.addEventListener('storage', handleStorage);
-
-    return () => {
-      window.removeEventListener('published-sessions-updated', syncPublished);
-      window.removeEventListener('storage', handleStorage);
-    };
-  }, []);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('employee_completed_sessions', JSON.stringify(completedSessions));
-      window.dispatchEvent(new Event('employee-completions-updated'));
-    } catch (error) {
-      console.error('Failed to persist employee completed sessions', error);
-    }
-  }, [completedSessions]);
+  // Removed localStorage sync hooks - now using API
 
   useEffect(() => {
     if (!publishedSessions.length) return;
@@ -362,25 +437,11 @@ const EmployeeDashboard = () => {
     });
 
     if (changed) {
-      persistPublishedSessions(updatedSessions);
+      setPublishedSessions(updatedSessions);
     }
-  }, [publishedSessions, completedSessions, persistPublishedSessions]);
-
-  useEffect(() => {
-    const earnedCount = completedSessions.reduce((count, sessionId) => {
-      return sessionCertifications && sessionCertifications[sessionId] ? count + 1 : count;
-    }, 0);
-    setCertificatesEarned(earnedCount);
-  }, [completedSessions, sessionCertifications]);
-
-  useEffect(() => {
-    const total = publishedSessions.length;
-    setTotalSessionsStarted(total);
-    const activeCount = publishedSessions.filter(
-      session => !session.isLocked && !completedSessions.includes(session.id)
-    ).length;
-    setActiveSessions(activeCount);
   }, [publishedSessions, completedSessions]);
+
+  // Removed duplicate useEffect hooks - metrics are now calculated from API data
 
   useEffect(() => {
     setSelectedSession((prev) => {
@@ -435,10 +496,46 @@ const EmployeeDashboard = () => {
     [enrichedSessions]
   );
 
-  const openSessionsList = useMemo(
-    () => enrichedSessions.filter(session => session.status !== 'locked'),
-    [enrichedSessions]
-  );
+  // Recommended sessions based on employee skills
+  const recommendedSessionsList = useMemo(() => {
+    const employeeSkillsRaw = profileData.keyskills || [];
+    const employeeSkills = employeeSkillsRaw
+      .map(skill => (skill || '').toString().toLowerCase().trim())
+      .filter(Boolean);
+    
+    if (employeeSkills.length === 0) {
+      return [];
+    }
+    
+    // Filter sessions that match employee skills and are not locked or completed
+    return enrichedSessions.filter(session => {
+      if (session.status === 'locked' || session.completed) return false;
+      if (!session.skills || session.skills.length === 0) return false;
+      // Check if session has any matching skills
+      const sessionSkills = (session.skills || [])
+        .map(skill => (skill || '').toString().toLowerCase().trim())
+        .filter(Boolean);
+      return sessionSkills.some(skill => employeeSkills.includes(skill));
+    });
+  }, [enrichedSessions, profileData.keyskills]);
+  
+  // Sessions that have been started by the employee
+  const startedSessionsList = useMemo(() => {
+    return enrichedSessions.filter(session => {
+      // Include if started, not completed, and not locked
+      return startedSessions.has(session.id) && !session.completed && !session.isLocked;
+    });
+  }, [enrichedSessions, startedSessions]);
+  
+  // Combined list for "My Sessions" - show all enriched sessions so completed sessions appear as well,
+  // and mark which ones are recommended based on skills
+  const mySessionsList = useMemo(() => {
+    const recommendedIds = new Set(recommendedSessionsList.map(s => s.id));
+    return enrichedSessions.map(session => ({
+      ...session,
+      isRecommended: recommendedIds.has(session.id),
+    }));
+  }, [enrichedSessions, recommendedSessionsList]);
 
   const getPrimarySessionDate = useCallback((session) => {
     if (!session) return null;
@@ -524,35 +621,21 @@ const EmployeeDashboard = () => {
     }
   ];
 
-  const latestSession = useMemo(() => {
-    const latestPublished = [...enrichedSessions].sort(
-      (a, b) => (b.scheduledDateObj || new Date(b.createdAt || '')).getTime() - (a.scheduledDateObj || new Date(a.createdAt || '')).getTime()
-    )[0];
-
-    if (latestPublished) {
-      return {
-        id: latestPublished.id,
-        title: latestPublished.title || 'Latest Session',
-        instructor: latestPublished.instructor || 'HR Team',
-        date: latestPublished.date || (latestPublished.scheduledDateObj ? latestPublished.scheduledDateObj.toLocaleDateString() : 'TBD'),
-        time: latestPublished.time || (latestPublished.scheduledDateObj ? latestPublished.scheduledDateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'TBD'),
-        duration: latestPublished.duration || '60 minutes',
-        status: latestPublished.status || 'in-progress',
-        description: latestPublished.description || 'Stay tuned for more details.'
-      };
-    }
-
-    return {
-      id: null,
-      title: 'No sessions available yet',
-      instructor: 'HR Team',
-      date: 'TBD',
-      time: 'TBD',
-      duration: 'TBD',
-      status: 'info',
-      description: 'Once new sessions are published, they will appear here.'
-    };
-  }, [enrichedSessions]);
+  const latestSessions = useMemo(() => {
+    // Get sessions sorted by publishedAt or createdAt (most recent first)
+    const sorted = [...publishedSessions].sort((a, b) => {
+      const dateA = a.publishedAt ? new Date(a.publishedAt) : new Date(a.createdAt || 0);
+      const dateB = b.publishedAt ? new Date(b.publishedAt) : new Date(b.createdAt || 0);
+      return dateB.getTime() - dateA.getTime();
+    });
+    
+    // Return top 3 most recently published sessions
+    return sorted.slice(0, 3).map(session => ({
+      ...session,
+      instructor: session.instructor || 'HR Team',
+      duration: session.duration || '60 minutes'
+    }));
+  }, [publishedSessions]);
 
   const recentActivity = useMemo(() => {
     if (!enrichedSessions.length) return [];
@@ -593,7 +676,10 @@ const EmployeeDashboard = () => {
   };
 
   const handleProfileClick = (event) => {
-    setProfileAnchorEl(event.currentTarget);
+    setActiveTab('profile');
+    setShowProfile(false);
+    setShowEditProfile(false);
+    setShowPasswordManager(false);
   };
 
   const handleProfileClose = () => {
@@ -617,17 +703,102 @@ const EmployeeDashboard = () => {
     setProfileAnchorEl(null);
   };
 
+  const handleManagePasswords = () => {
+    setShowPasswordManager(true);
+    setSettingsAnchorEl(null);
+  };
+
+  const handleClosePasswordManager = () => {
+    setShowPasswordManager(false);
+    setPasswordData({
+      currentPassword: '',
+      newPassword: '',
+      confirmPassword: ''
+    });
+    // Stay on profile page
+  };
+
+  const handlePasswordReset = async () => {
+    if (!passwordData.currentPassword || !passwordData.newPassword || !passwordData.confirmPassword) {
+      alert('Please fill in all fields');
+      return;
+    }
+
+    if (passwordData.newPassword !== passwordData.confirmPassword) {
+      alert('New passwords do not match');
+      return;
+    }
+
+    if (passwordData.newPassword.length < 8) {
+      alert('Password must be at least 8 characters long');
+      return;
+    }
+
+    try {
+      const token = getAuthToken();
+      if (!token) {
+        alert('Not authenticated. Please login again.');
+        return;
+      }
+      
+      const response = await fetch('http://localhost:8000/api/auth/reset-password/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Token ${token}`
+        },
+        body: JSON.stringify({
+          current_password: passwordData.currentPassword,
+          new_password: passwordData.newPassword,
+          confirm_password: passwordData.confirmPassword
+        })
+      });
+
+      const data = await response.json();
+      
+      if (response.ok) {
+        alert('Password updated successfully!');
+        setPasswordData({
+          currentPassword: '',
+          newPassword: '',
+          confirmPassword: ''
+        });
+        setShowPasswordManager(false);
+      } else {
+        alert(data.error || 'Failed to update password');
+      }
+    } catch (error) {
+      console.error('Password reset error:', error);
+      alert('An error occurred while updating password');
+    }
+  };
+
   const handleEditProfile = () => {
     setShowEditProfile(true);
     setShowProfile(false);
+    setShowPasswordManager(false);
+  };
+  
+  const handleChangePassword = () => {
+    setShowPasswordManager(true);
+    setShowEditProfile(false);
+    setShowProfile(false);
+  };
+  
+  const handleCloseProfile = () => {
+    setActiveTab('dashboard');
+    setShowProfile(false);
+    setShowEditProfile(false);
+    setShowPasswordManager(false);
   };
 
   const handleProfileSave = () => {
     setShowEditProfile(false);
     setShowProfile(true);
+    setShowPasswordManager(false);
   };
 
-  const handleSessionComplete = (session) => {
+  const handleSessionComplete = async (session) => {
     if (!session || !session.id) return;
     const sessionId = session.id;
     const alreadyCompleted = completedSessions.includes(sessionId);
@@ -635,29 +806,38 @@ const EmployeeDashboard = () => {
     const score = session.score ?? session.lastCompletionScore ?? null;
     const feedback = session.feedback ?? session.lastFeedback ?? null;
 
-    if (!alreadyCompleted) {
-      setCompletedSessions(prev => [...prev, sessionId]);
-      setActiveSessions(prev => Math.max(0, prev - 1));
+    try {
+      const userId = getUserId();
+      if (userId && !alreadyCompleted) {
+        // Create completion record via API
+        const created = await sessionCompletionAPI.create({
+          employee: parseInt(userId),
+          session: sessionId,
+          score: score,
+          passed: score !== null && score >= 70, // Assuming 70 is passing
+          feedback: feedback
+        });
+        
+        // Update local state
+        setCompletedSessions(prev => [...prev, sessionId]);
+        setSessionCompletions(prev => [...prev, created]);
+        setTotalSessionsStarted(prev => prev + 1);
+        if (score !== null && score >= 70) {
+          setCertificatesEarned(prev => prev + 1);
+        }
+        setActiveSessions(prev => Math.max(0, prev - 1));
+      }
+    } catch (error) {
+      console.error('Failed to save session completion:', error);
     }
-
-    persistPublishedSessions(prev => prev.map(s => {
-      if (s.id !== sessionId) return s;
-      return normalizePublishedSession({
-        ...s,
-        status: 'completed',
-        isLocked: false,
-        approvalExpiresAt: null,
-        lockedAt: null,
-        completedAt: completionDate,
-        lastCompletionScore: score,
-        lastFeedback: feedback
-      });
-    }));
   };
 
   const handleSessionStart = (sessionId) => {
     if (!sessionId) return;
-    persistPublishedSessions(prev => prev.map(session => {
+    // Track that this session has been started
+    setStartedSessions(prev => new Set([...prev, sessionId]));
+    // Update local state only - no API call needed for starting
+    setPublishedSessions(prev => prev.map(session => {
       if (session.id !== sessionId) return session;
       if (session.status === 'locked') return session;
       return normalizePublishedSession({
@@ -673,12 +853,20 @@ const EmployeeDashboard = () => {
     setActiveTab('my-courses');
   };
 
-  const handleSessionClick = (session) => {
-    // Directly start the session without intermediate screen
+  const handleSessionClick = (session, source = 'my-courses') => {
+    if (!session) return;
     const details = getSessionDetails(session);
     if (!details) return;
-    setSelectedSession(details);
-    setCurrentView('session-content'); // Go directly to content view
+
+    // Attach feedback from completion if available
+    const completion = sessionCompletions.find(c => c.session === details.id);
+    const sessionWithFeedback = completion?.feedback
+      ? { ...details, feedback: completion.feedback }
+      : details;
+
+    setSelectedSession(sessionWithFeedback);
+    setSessionDetailSource(source);
+    setCurrentView('session-detail'); // First show session detail page
   };
 
   const handleBackToCourses = () => {
@@ -686,8 +874,21 @@ const EmployeeDashboard = () => {
     setActiveTab('my-courses');
   };
 
+  const handleBackFromSessionDetail = () => {
+    setCurrentView(null);
+    setActiveTab(sessionDetailSource === 'course-library' ? 'course-library' : 'my-courses');
+  };
+
   const handleGetStarted = (session) => {
     if (!session) return;
+    // If session is already completed, do not allow starting again
+    if (completedSessions.includes(session.id)) {
+      return;
+    }
+    // Track that this session has been started
+    if (session.id) {
+      setStartedSessions(prev => new Set([...prev, session.id]));
+    }
     const details = getSessionDetails(session);
     if (!details) return;
     setCurrentView('session-content');
@@ -705,6 +906,52 @@ const EmployeeDashboard = () => {
     }
     setCurrentView('my-courses');
     setActiveTab('my-courses');
+  };
+
+  const handleSessionFeedbackUpdate = async (feedbackData) => {
+    if (!selectedSession || !selectedSession.id) return;
+    const userId = getUserId();
+    if (!userId) return;
+
+    const sessionId = selectedSession.id;
+    try {
+      // Find existing completion for this session
+      const existing = sessionCompletions.find(c => c.session === sessionId);
+      let updated;
+
+      if (existing) {
+        updated = await sessionCompletionAPI.update(existing.id, {
+          ...existing,
+          feedback: feedbackData,
+        });
+
+        setSessionCompletions(prev =>
+          prev.map(c => (c.id === existing.id ? updated : c))
+        );
+      } else {
+        // Create a completion with feedback if none exists yet
+        updated = await sessionCompletionAPI.create({
+          employee: parseInt(userId),
+          session: sessionId,
+          score: null,
+          passed: false,
+          feedback: feedbackData,
+        });
+
+        setSessionCompletions(prev => [...prev, updated]);
+        if (!completedSessions.includes(sessionId)) {
+          setCompletedSessions(prev => [...prev, sessionId]);
+          setTotalSessionsStarted(prev => prev + 1);
+        }
+      }
+
+      // Update selected session with latest feedback
+      setSelectedSession(prev =>
+        prev ? { ...prev, feedback: updated.feedback } : prev
+      );
+    } catch (error) {
+      console.error('Failed to update session feedback:', error);
+    }
   };
 
   const handleNotificationAction = (notificationId, action) => {
@@ -781,61 +1028,105 @@ const EmployeeDashboard = () => {
         ))}
       </Grid>
 
-      {/* Latest Session */}
+      {/* Latest Sessions */}
       <Box mb={4}>
         <Typography variant="h5" fontWeight="bold" gutterBottom>
-          Latest Session
+          Latest Sessions
         </Typography>
-        <Card sx={{ p: 3 }}>
-          <Grid container spacing={3} alignItems="center">
-            <Grid item xs={12} md={8}>
-              <Typography variant="h6" fontWeight="bold" gutterBottom>
-                {latestSession.title}
+        {latestSessions.length === 0 ? (
+          <Card sx={{ p: 3, textAlign: 'center' }}>
+            <Typography variant="body2" color="text.secondary">
+              No sessions available yet. Once new sessions are published, they will appear here.
               </Typography>
-              <Typography variant="body2" color="text.secondary" mb={2}>
-                {latestSession.description}
+          </Card>
+        ) : (
+          <Grid container spacing={3}>
+            {latestSessions.map((session) => {
+              const details = getSessionDetails(session);
+              return (
+                <Grid item xs={12} md={4} key={session.id}>
+                  <Card 
+                    sx={{ 
+                      p: 2, 
+                      height: '100%',
+                      cursor: 'pointer',
+                      '&:hover': {
+                        boxShadow: 4,
+                        transition: 'box-shadow 0.2s'
+                      }
+                    }}
+                    onClick={() => {
+                      if (details) {
+                        setSelectedSession(details);
+                        setCurrentView('session-detail');
+                      }
+                    }}
+                  >
+                    <Typography variant="h6" fontWeight="bold" gutterBottom sx={{ 
+                      display: '-webkit-box',
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: 'vertical',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      minHeight: '3.5em'
+                    }}>
+                      {session.title || 'Untitled Session'}
               </Typography>
-              <Box display="flex" gap={2} mb={2}>
+                    {session.description && (
+                      <Typography variant="body2" color="text.secondary" mb={2} sx={{
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        minHeight: '2.5em'
+                      }}>
+                        {session.description}
+                      </Typography>
+                    )}
+                    <Box display="flex" flexWrap="wrap" gap={1} mb={2}>
+                      {session.skills && session.skills.length > 0 && (
+                        session.skills.slice(0, 2).map((skill, idx) => (
                 <Chip 
-                  label={`Instructor: ${latestSession.instructor}`} 
+                            key={idx}
+                            label={skill}
+                  size="small" 
+                            sx={{
+                              backgroundColor: '#e8f5e9',
+                              color: '#2e7d32',
+                              fontSize: '0.7rem',
+                              height: '24px'
+                            }}
+                          />
+                        ))
+                      )}
+                    </Box>
+                    <Box display="flex" gap={1} flexWrap="wrap">
+                <Chip 
+                        label={session.instructor || 'HR Team'} 
                   size="small" 
                   variant="outlined" 
                 />
+                      {session.publishedAt && (
                 <Chip 
-                  label={`${latestSession.date} at ${latestSession.time}`} 
+                          label={new Date(session.publishedAt).toLocaleDateString()} 
                   size="small" 
                   variant="outlined" 
                 />
-                <Chip 
-                  label={latestSession.duration} 
-                  size="small" 
-                  variant="outlined" 
-                />
+                      )}
               </Box>
+                  </Card>
             </Grid>
-            <Grid item xs={12} md={4} textAlign="right">
-              <Button
-                variant="contained"
-                startIcon={<PlayIcon />}
-                onClick={handleJoinSession}
-                sx={{ 
-                  backgroundColor: '#114417DB', 
-                  '&:hover': { backgroundColor: '#0a2f0e' },
-                  px: 4,
-                  py: 1.5
-                }}
-              >
-                Join Session
-              </Button>
+              );
+            })}
             </Grid>
-          </Grid>
-        </Card>
+        )}
       </Box>
 
       <Grid container spacing={3}>
         {/* Recent Activity */}
-        <Grid item xs={12} md={8}>
-          <ActivityCard>
+        <Grid item xs={12} md={6}>
+          <ActivityCard sx={{ height: '100%' }}>
             <Typography variant="h6" fontWeight="bold" gutterBottom>
               Recent Activity
             </Typography>
@@ -861,38 +1152,86 @@ const EmployeeDashboard = () => {
           </ActivityCard>
         </Grid>
 
-        {/* Quick Actions */}
-        <Grid item xs={12} md={4}>
-          <ActivityCard>
+        {/* Recommended Sessions */}
+        <Grid item xs={12} md={6}>
+          <ActivityCard sx={{ height: '100%' }}>
             <Typography variant="h6" fontWeight="bold" gutterBottom>
-              Quick Actions
+              Recommended Sessions
             </Typography>
-            <Box display="flex" flexDirection="column" gap={2}>
-              <Button
-                variant="outlined"
-                startIcon={<SchoolIcon />}
-                onClick={() => setActiveTab('my-courses')}
-                fullWidth
-              >
-                View My Sessions
-              </Button>
-              <Button
-                variant="outlined"
-                startIcon={<LibraryIcon />}
-                onClick={() => setActiveTab('course-library')}
-                fullWidth
-              >
-                Browse Session Library
-              </Button>
-              <Button
-                variant="outlined"
-                startIcon={<ReportsIcon />}
-                onClick={() => setActiveTab('reports')}
-                fullWidth
-              >
-                View Reports
-              </Button>
+            {(() => {
+              // Get employee skills
+              const employeeSkills = (profileData.keyskills || [])
+                .map(skill => (skill || '').toString().toLowerCase().trim())
+                .filter(Boolean);
+              
+              // Find sessions that match employee skills
+              const recommendedSessions = publishedSessions
+                .filter(session => {
+                  if (!session.skills || session.skills.length === 0) return false;
+                  if (employeeSkills.length === 0) return false;
+                  // Check if session has any matching skills (case-insensitive)
+                  const sessionSkills = (session.skills || [])
+                    .map(skill => (skill || '').toString().toLowerCase().trim())
+                    .filter(Boolean);
+                  return sessionSkills.some(skill => employeeSkills.includes(skill));
+                })
+                .filter(session => !completedSessions.includes(session.id))
+                .slice(0, 5); // Limit to 5 recommendations
+              
+              if (recommendedSessions.length === 0) {
+                return (
+                  <Typography variant="body2" color="text.secondary">
+                    {employeeSkills.length === 0 
+                      ? 'Complete your profile with skills to get personalized session recommendations.'
+                      : 'No sessions match your skills at the moment. Check back later for new recommendations.'}
+                  </Typography>
+                );
+              }
+              
+              return (
+                <List>
+                  {recommendedSessions.map((session) => (
+                    <ListItem 
+                      key={session.id} 
+                      sx={{ px: 0, cursor: 'pointer' }}
+                      onClick={() => {
+                        const details = getSessionDetails(session);
+                        if (details) {
+                          setSelectedSession(details);
+                          setCurrentView('session-detail');
+                        }
+                      }}
+                    >
+                      <ListItemIcon>
+                        <SchoolIcon sx={{ color: '#114417DB' }} />
+                      </ListItemIcon>
+                      <ListItemText
+                        primary={session.title || 'Untitled Session'}
+                        secondary={
+                          <Box>
+                            <Typography variant="body2" color="text.secondary" component="span">
+                              {session.skills?.filter(skill => employeeSkills.includes(skill)).slice(0, 2).join(', ')}
+                            </Typography>
+                            {session.description && (
+                              <Typography variant="body2" color="text.secondary" sx={{ 
+                                display: '-webkit-box',
+                                WebkitLineClamp: 1,
+                                WebkitBoxOrient: 'vertical',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                mt: 0.5
+                              }}>
+                                {session.description}
+                              </Typography>
+                            )}
             </Box>
+                        }
+                      />
+                    </ListItem>
+                  ))}
+                </List>
+              );
+            })()}
           </ActivityCard>
         </Grid>
       </Grid>
@@ -901,155 +1240,221 @@ const EmployeeDashboard = () => {
 
   const renderProfile = () => (
     <Box p={3}>
-      <Box mb={4}>
-        <Button
-          startIcon={<ArrowBackIcon />}
-          onClick={() => setShowProfile(false)}
-          sx={{ mb: 2 }}
-        >
-          Back to Dashboard
-        </Button>
-        <Typography variant="h4" fontWeight="bold" gutterBottom>
-          Profile Information
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={4}>
+        <Typography variant="h4" fontWeight="bold">
+          Employee Profile
         </Typography>
+        <IconButton 
+          onClick={handleCloseProfile}
+          sx={{ border: '1px solid rgba(0, 0, 0, 0.23)', '&:hover': { borderColor: 'rgba(0, 0, 0, 0.87)' } }}
+        >
+          <CloseIcon />
+        </IconButton>
       </Box>
 
       <Card sx={{ p: 3 }}>
         <Grid container spacing={3}>
-          <Grid item xs={12} md={6}>
-            <Box display="flex" alignItems="center" mb={3}>
-              <Avatar sx={{ width: 80, height: 80, mr: 3, fontSize: '2rem' }}>
-                {profileData.firstName[0]}{profileData.lastName[0]}
-              </Avatar>
-              <Box>
-                <Typography variant="h5" fontWeight="bold">
-                  {profileData.firstName} {profileData.lastName}
+          <Grid item xs={12} sm={6}>
+            <Typography variant="body1" color="text.secondary">First Name:</Typography>
+            <Typography variant="h6">{profileData.firstName}</Typography>
+          </Grid>
+          <Grid item xs={12} sm={6}>
+            <Typography variant="body1" color="text.secondary">Last Name:</Typography>
+            <Typography variant="h6">{profileData.lastName}</Typography>
+          </Grid>
+          <Grid item xs={12} sm={6}>
+            <Typography variant="body1" color="text.secondary">Email:</Typography>
+            <Typography variant="h6">{profileData.email}</Typography>
+        </Grid>
+          <Grid item xs={12} sm={6}>
+            <Typography variant="body1" color="text.secondary">Phone Number:</Typography>
+            <Typography variant="h6">{profileData.phone}</Typography>
+          </Grid>
+          <Grid item xs={12} sm={6}>
+            <Typography variant="body1" color="text.secondary">Department:</Typography>
+            <Typography variant="h6">{profileData.department}</Typography>
+          </Grid>
+          <Grid item xs={12} sm={6}>
+            <Typography variant="body1" color="text.secondary">Job Role:</Typography>
+            <Typography variant="h6">{profileData.jobRole}</Typography>
+          </Grid>
+          <Grid item xs={12} sm={6}>
+            <Typography variant="body1" color="text.secondary">Reporting Manager:</Typography>
+            <Typography variant="h6">{profileData.reportingManager}</Typography>
+          </Grid>
+          {profileData.keyskills && profileData.keyskills.length > 0 && (
+            <Grid item xs={12}>
+              <Typography variant="body1" color="text.secondary" gutterBottom>
+                Skills:
                 </Typography>
-                <Typography variant="body1" color="text.secondary">
-                  {profileData.jobRole}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  {profileData.department}
-                </Typography>
-              </Box>
+              <Box display="flex" flexWrap="wrap" gap={1}>
+                {profileData.keyskills.map((skill, idx) => (
+                  <Chip
+                    key={idx}
+                    label={skill}
+                    size="small"
+                    sx={{
+                      backgroundColor: '#e8f5e9',
+                      color: '#2e7d32',
+                      fontSize: '0.75rem'
+                    }}
+                  />
+                ))}
             </Box>
           </Grid>
-          <Grid item xs={12} md={6} textAlign="right">
+          )}
+        </Grid>
+      </Card>
+      
+      {/* Action Buttons */}
+      <Box display="flex" gap={2} mt={3} justifyContent="center">
             <Button
               variant="contained"
               startIcon={<EditIcon />}
               onClick={handleEditProfile}
-              sx={{ backgroundColor: '#114417DB', '&:hover': { backgroundColor: '#0a2f0e' } }}
-            >
-              Edit Profile
+          sx={{
+            backgroundColor: '#114417DB',
+            '&:hover': { backgroundColor: '#0a2f0e' },
+            minWidth: 200
+          }}
+        >
+          Edit
             </Button>
-          </Grid>
-        </Grid>
+        <Button
+          variant="outlined"
+          startIcon={<LockIcon />}
+          onClick={handleChangePassword}
+          sx={{
+            borderColor: '#114417DB',
+            color: '#114417DB',
+            '&:hover': { borderColor: '#0a2f0e', backgroundColor: 'rgba(17, 68, 23, 0.08)' },
+            minWidth: 200
+          }}
+        >
+          Change Password
+        </Button>
+              </Box>
+            </Box>
+  );
 
-        <Divider sx={{ my: 3 }} />
+  const renderPasswordManager = () => (
+    <Box p={3}>
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={4}>
+        <Typography variant="h4" fontWeight="bold">
+          Manage Passwords
+                </Typography>
+        <IconButton 
+          onClick={handleClosePasswordManager}
+          sx={{ border: '1px solid rgba(0, 0, 0, 0.23)', '&:hover': { borderColor: 'rgba(0, 0, 0, 0.87)' } }}
+        >
+          <CloseIcon />
+        </IconButton>
+              </Box>
 
-        <Grid container spacing={3}>
+      <Grid container spacing={3}>
+        {/* Reset Password */}
           <Grid item xs={12} md={6}>
-            <Box display="flex" alignItems="center" mb={2}>
-              <PersonIcon sx={{ mr: 2, color: '#6b7280' }} />
-              <Box>
-                <Typography variant="body2" color="text.secondary">
-                  First Name
+          <Card sx={{ p: 3 }}>
+            <Typography variant="h6" fontWeight="bold" gutterBottom>
+              Reset Password
                 </Typography>
-                <Typography variant="body1" fontWeight="medium">
-                  {profileData.firstName}
-                </Typography>
+            <Box mt={3}>
+              <TextField
+                label="Current Password"
+                type={showCurrentPassword ? 'text' : 'password'}
+                value={passwordData.currentPassword}
+                onChange={(e) => setPasswordData(prev => ({ ...prev, currentPassword: e.target.value }))}
+                fullWidth
+                margin="normal"
+                InputProps={{
+                  endAdornment: (
+                    <IconButton
+                      onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                      edge="end"
+                    >
+                      {showCurrentPassword ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                    </IconButton>
+                  ),
+                }}
+              />
+              <TextField
+                label="New Password"
+                type={showNewPassword ? 'text' : 'password'}
+                value={passwordData.newPassword}
+                onChange={(e) => setPasswordData(prev => ({ ...prev, newPassword: e.target.value }))}
+                fullWidth
+                margin="normal"
+                helperText="Minimum 6 characters"
+                InputProps={{
+                  endAdornment: (
+                    <IconButton
+                      onClick={() => setShowNewPassword(!showNewPassword)}
+                      edge="end"
+                    >
+                      {showNewPassword ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                    </IconButton>
+                  ),
+                }}
+              />
+              <TextField
+                label="Confirm New Password"
+                type={showConfirmPassword ? 'text' : 'password'}
+                value={passwordData.confirmPassword}
+                onChange={(e) => setPasswordData(prev => ({ ...prev, confirmPassword: e.target.value }))}
+                fullWidth
+                margin="normal"
+                InputProps={{
+                  endAdornment: (
+                    <IconButton
+                      onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                      edge="end"
+                    >
+                      {showConfirmPassword ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                    </IconButton>
+                  ),
+                }}
+              />
+              <Button
+                variant="contained"
+                fullWidth
+                onClick={handlePasswordReset}
+                sx={{ mt: 3, backgroundColor: '#3b82f6', '&:hover': { backgroundColor: '#2563eb' } }}
+              >
+                Reset Password
+              </Button>
               </Box>
-            </Box>
+          </Card>
           </Grid>
-          <Grid item xs={12} md={6}>
-            <Box display="flex" alignItems="center" mb={2}>
-              <PersonIcon sx={{ mr: 2, color: '#6b7280' }} />
-              <Box>
-                <Typography variant="body2" color="text.secondary">
-                  Last Name
-                </Typography>
-                <Typography variant="body1" fontWeight="medium">
-                  {profileData.lastName}
-                </Typography>
-              </Box>
-            </Box>
           </Grid>
-          <Grid item xs={12} md={6}>
-            <Box display="flex" alignItems="center" mb={2}>
-              <PhoneIcon sx={{ mr: 2, color: '#6b7280' }} />
-              <Box>
-                <Typography variant="body2" color="text.secondary">
-                  Phone Number
-                </Typography>
-                <Typography variant="body1" fontWeight="medium">
-                  {profileData.phone}
-                </Typography>
-              </Box>
-            </Box>
-          </Grid>
-          <Grid item xs={12} md={6}>
-            <Box display="flex" alignItems="center" mb={2}>
-              <WorkIcon sx={{ mr: 2, color: '#6b7280' }} />
-              <Box>
-                <Typography variant="body2" color="text.secondary">
-                  Department
-                </Typography>
-                <Typography variant="body1" fontWeight="medium">
-                  {profileData.department}
-                </Typography>
-              </Box>
-            </Box>
-          </Grid>
-          <Grid item xs={12} md={6}>
-            <Box display="flex" alignItems="center" mb={2}>
-              <WorkIcon sx={{ mr: 2, color: '#6b7280' }} />
-              <Box>
-                <Typography variant="body2" color="text.secondary">
-                  Job Role
-                </Typography>
-                <Typography variant="body1" fontWeight="medium">
-                  {profileData.jobRole}
-                </Typography>
-              </Box>
-            </Box>
-          </Grid>
-          <Grid item xs={12} md={6}>
-            <Box display="flex" alignItems="center" mb={2}>
-              <SupervisorIcon sx={{ mr: 2, color: '#6b7280' }} />
-              <Box>
-                <Typography variant="body2" color="text.secondary">
-                  Reporting Manager
-                </Typography>
-                <Typography variant="body1" fontWeight="medium">
-                  {profileData.reportingManager}
-                </Typography>
-              </Box>
-            </Box>
-          </Grid>
-        </Grid>
-      </Card>
     </Box>
   );
 
   const renderEditProfile = () => (
     <Box p={3}>
-      <Box mb={4}>
-        <Button
-          startIcon={<ArrowBackIcon />}
-          onClick={() => setShowEditProfile(false)}
-          sx={{ mb: 2 }}
-        >
-          Back to Profile
-        </Button>
-        <Typography variant="h4" fontWeight="bold" gutterBottom>
-          Edit Profile
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={4}>
+        <Typography variant="h4" fontWeight="bold">
+          Edit Employee Profile
         </Typography>
+        <Box display="flex" gap={2}>
+        <Button
+            variant="contained" 
+            onClick={handleProfileSave}
+            sx={{ backgroundColor: '#114417DB', '&:hover': { backgroundColor: '#0a2f0e' } }}
+          >
+            Save Changes
+        </Button>
+          <IconButton 
+            onClick={() => setShowEditProfile(false)}
+            sx={{ border: '1px solid rgba(0, 0, 0, 0.23)', '&:hover': { borderColor: 'rgba(0, 0, 0, 0.87)' } }}
+          >
+            <CloseIcon />
+          </IconButton>
+        </Box>
       </Box>
 
       <Card sx={{ p: 3 }}>
         <Grid container spacing={3}>
-          <Grid item xs={12} md={6}>
+          <Grid item xs={12} sm={6}>
             <TextField
               label="First Name"
               value={profileData.firstName}
@@ -1058,7 +1463,7 @@ const EmployeeDashboard = () => {
               margin="normal"
             />
           </Grid>
-          <Grid item xs={12} md={6}>
+          <Grid item xs={12} sm={6}>
             <TextField
               label="Last Name"
               value={profileData.lastName}
@@ -1067,7 +1472,16 @@ const EmployeeDashboard = () => {
               margin="normal"
             />
           </Grid>
-          <Grid item xs={12} md={6}>
+          <Grid item xs={12} sm={6}>
+            <TextField
+              label="Email"
+              value={profileData.email}
+              onChange={(e) => setProfileData(prev => ({ ...prev, email: e.target.value }))}
+              fullWidth
+              margin="normal"
+            />
+          </Grid>
+          <Grid item xs={12} sm={6}>
             <TextField
               label="Phone Number"
               value={profileData.phone}
@@ -1076,7 +1490,7 @@ const EmployeeDashboard = () => {
               margin="normal"
             />
           </Grid>
-          <Grid item xs={12} md={6}>
+          <Grid item xs={12} sm={6}>
             <TextField
               label="Department"
               value={profileData.department}
@@ -1085,7 +1499,7 @@ const EmployeeDashboard = () => {
               margin="normal"
             />
           </Grid>
-          <Grid item xs={12} md={6}>
+          <Grid item xs={12} sm={6}>
             <TextField
               label="Job Role"
               value={profileData.jobRole}
@@ -1094,7 +1508,7 @@ const EmployeeDashboard = () => {
               margin="normal"
             />
           </Grid>
-          <Grid item xs={12} md={6}>
+          <Grid item xs={12} sm={6}>
             <TextField
               label="Reporting Manager"
               value={profileData.reportingManager}
@@ -1104,22 +1518,6 @@ const EmployeeDashboard = () => {
             />
           </Grid>
         </Grid>
-
-        <Box display="flex" gap={2} mt={4}>
-          <Button
-            variant="contained"
-            onClick={handleProfileSave}
-            sx={{ backgroundColor: '#114417DB', '&:hover': { backgroundColor: '#0a2f0e' } }}
-          >
-            Save Changes
-          </Button>
-          <Button
-            variant="outlined"
-            onClick={() => setShowEditProfile(false)}
-          >
-            Cancel
-          </Button>
-        </Box>
       </Card>
     </Box>
   );
@@ -1251,13 +1649,15 @@ const EmployeeDashboard = () => {
         </HeaderBar>
 
         {/* Content */}
-        {showProfile ? renderProfile() :
-         showEditProfile ? renderEditProfile() :
+        {activeTab === 'profile' ? (showPasswordManager ? renderPasswordManager() : (showEditProfile ? renderEditProfile() : renderProfile())) :
          currentView === 'session-detail' ? (
            <SessionDetail 
              session={selectedSession} 
-             onBack={handleBackToCourses}
+             isCompleted={selectedSession && completedSessions.includes(selectedSession.id)}
+             onBack={handleBackFromSessionDetail}
+             backLabel={sessionDetailSource === 'course-library' ? 'Back to Session Library' : 'Back to My Sessions'}
              onGetStarted={handleGetStarted}
+             onFeedbackSubmit={handleSessionFeedbackUpdate}
            />
          ) :
          currentView === 'session-content' ? (
@@ -1270,15 +1670,20 @@ const EmployeeDashboard = () => {
          activeTab === 'dashboard' ? renderDashboard() :
          activeTab === 'my-courses' ? (
            <MyCourses 
-            sessions={openSessionsList}
+            sessions={mySessionsList}
              onSessionComplete={handleSessionComplete}
              onSessionStart={handleSessionStart}
-             onSessionClick={handleSessionClick}
+             onSessionClick={(session) => handleSessionClick(session, 'my-courses')}
+             startedSessionIds={startedSessions}
+             loading={sessionsLoading || completionsLoading}
            />
          ) :
          activeTab === 'course-library' ? (
            <CourseLibrary 
-            lockedSessions={lockedSessionsList}
+            lockedSessions={enrichedSessions}
+            onSessionStart={handleSessionStart}
+            onSessionClick={(session) => handleSessionClick(session, 'course-library')}
+            loading={sessionsLoading}
            />
          ) :
          activeTab === 'reports' ? (

@@ -9,7 +9,8 @@ import {
   Chip,
   LinearProgress,
   Avatar,
-  Divider
+  Divider,
+  CircularProgress
 } from '@mui/material';
 import {
   PlayArrow as PlayIcon,
@@ -21,7 +22,7 @@ import {
   Lock as LockIcon
 } from '@mui/icons-material';
 
-const MyCourses = ({ sessions = [], onSessionComplete, onSessionStart, onSessionClick }) => {
+const MyCourses = ({ sessions = [], onSessionComplete, onSessionStart, onSessionClick, startedSessionIds = new Set(), loading = false }) => {
   const [activeTab, setActiveTab] = useState('in-progress');
 
   const sortedSessions = useMemo(
@@ -34,9 +35,16 @@ const MyCourses = ({ sessions = [], onSessionComplete, onSessionStart, onSession
     [sessions]
   );
 
-  const inProgressSessions = useMemo(
-    () => sortedSessions.filter(session => !session.completed && !session.isLocked),
+  const recommendedSessions = useMemo(
+    () => sortedSessions.filter(session => session.isRecommended),
     [sortedSessions]
+  );
+
+  const inProgressSessions = useMemo(
+    () => sortedSessions.filter(session => 
+      startedSessionIds.has(session.id) && !session.completed && !session.isLocked
+    ),
+    [sortedSessions, startedSessionIds]
   );
 
   const expiredSessions = useMemo(
@@ -120,9 +128,23 @@ const MyCourses = ({ sessions = [], onSessionComplete, onSessionStart, onSession
     <Card sx={{ height: '100%', '&:hover': { boxShadow: 4 } }}>
       <CardContent>
         <Box display="flex" justifyContent="space-between" alignItems="start" mb={2}>
-          <Typography variant="h6" fontWeight="bold" gutterBottom>
-            {session.title}
-          </Typography>
+          <Box flex={1}>
+            <Typography variant="h6" fontWeight="bold" gutterBottom>
+              {session.title}
+            </Typography>
+            {session.type && (
+              <Chip
+                label={session.type}
+                size="small"
+                sx={{ 
+                  backgroundColor: '#e3f2fd', 
+                  color: '#1976d2',
+                  fontSize: '0.7rem',
+                  mt: 0.5
+                }}
+              />
+            )}
+          </Box>
           <Chip
             label={getStatusLabel(session.status)}
             sx={{ backgroundColor: getStatusColor(session.status), color: 'white' }}
@@ -130,21 +152,39 @@ const MyCourses = ({ sessions = [], onSessionComplete, onSessionStart, onSession
           />
         </Box>
 
-        {session.description && (
-          <Typography variant="body2" color="text.secondary" mb={2}>
-            {session.description}
+        {/* Module count */}
+        <Box display="flex" alignItems="center" mb={1.5} gap={0.75}>
+          <Typography variant="body2" color="text.secondary">
+            {session.moduleCount || (session.files?.length || 0) + (session.quiz ? 1 : 0) + (session.aiContent ? 1 : 0)} modules
           </Typography>
-        )}
+        </Box>
 
-        {/* Show file count if files are available */}
-        {session.files && Array.isArray(session.files) && session.files.length > 0 && (
-          <Box mb={2}>
-            <Chip
-              label={`${session.files.length} file${session.files.length === 1 ? '' : 's'} available`}
-              size="small"
-              variant="outlined"
-              sx={{ fontSize: '0.75rem', color: '#3b82f6', borderColor: '#3b82f6' }}
-            />
+        {/* Skills */}
+        {session.skills && session.skills.length > 0 && (
+          <Box display="flex" flexWrap="wrap" gap={0.5} mb={1.5}>
+            {session.skills.slice(0, 3).map((skill, idx) => (
+              <Chip
+                key={idx}
+                label={skill}
+                size="small"
+                sx={{
+                  backgroundColor: '#e8f5e9',
+                  color: '#2e7d32',
+                  fontSize: '0.7rem'
+                }}
+              />
+            ))}
+            {session.skills.length > 3 && (
+              <Chip
+                label={`+${session.skills.length - 3}`}
+                size="small"
+                sx={{
+                  backgroundColor: '#e8f5e9',
+                  color: '#2e7d32',
+                  fontSize: '0.7rem'
+                }}
+              />
+            )}
           </Box>
         )}
 
@@ -401,24 +441,37 @@ const MyCourses = ({ sessions = [], onSessionComplete, onSessionStart, onSession
     </Grid>
   );
 
+  if (loading) {
+    return (
+      <Box p={3} display="flex" justifyContent="center" alignItems="center" minHeight="400px">
+        <Box textAlign="center">
+          <CircularProgress size={60} sx={{ color: '#114417DB', mb: 2 }} />
+          <Typography variant="body1" color="text.secondary">
+            Loading sessions...
+          </Typography>
+        </Box>
+      </Box>
+    );
+  }
+
   return (
     <Box p={3}>
       <Box mb={4}>
         <Box display="flex" gap={1}>
           <Button
-            variant={activeTab === 'all' ? 'contained' : 'outlined'}
-            onClick={() => setActiveTab('all')}
+            variant={activeTab === 'recommended' ? 'contained' : 'outlined'}
+            onClick={() => setActiveTab('recommended')}
             sx={{
-              backgroundColor: activeTab === 'all' ? '#114417DB' : 'transparent',
-              color: activeTab === 'all' ? 'white' : '#114417DB',
+              backgroundColor: activeTab === 'recommended' ? '#114417DB' : 'transparent',
+              color: activeTab === 'recommended' ? 'white' : '#114417DB',
               borderColor: '#114417DB',
               '&:hover': {
-                backgroundColor: activeTab === 'all' ? '#0a2f0e' : '#f3f4f6',
+                backgroundColor: activeTab === 'recommended' ? '#0a2f0e' : '#f3f4f6',
                 borderColor: '#114417DB',
               },
             }}
           >
-            All Sessions
+            Recommended
           </Button>
           <Button
             variant={activeTab === 'in-progress' ? 'contained' : 'outlined'}
@@ -468,10 +521,12 @@ const MyCourses = ({ sessions = [], onSessionComplete, onSessionStart, onSession
         </Box>
       </Box>
 
-      {activeTab === 'all' &&
+      {activeTab === 'recommended' &&
         renderSessionsGrid(
-          sortedSessions,
-          'Your assigned sessions will appear here once published by the HR team.',
+          recommendedSessions,
+          sessions.length === 0 
+            ? 'No recommended sessions available. Complete your profile with skills to get personalized recommendations.'
+            : 'No recommended sessions match your skills at the moment.',
           (session) => (session.completed ? renderCompletedCard(session) : renderInProgressCard(session))
         )}
 
@@ -480,6 +535,13 @@ const MyCourses = ({ sessions = [], onSessionComplete, onSessionStart, onSession
           inProgressSessions,
           'You have no sessions in progress right now.',
           renderInProgressCard
+        )}
+
+      {activeTab === 'expired' &&
+        renderSessionsGrid(
+          expiredSessions,
+          'You have no expired sessions.',
+          (session) => renderExpiredCard(session)
         )}
 
       {activeTab === 'completed' &&

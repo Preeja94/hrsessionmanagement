@@ -3,10 +3,12 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import { SessionRequestProvider } from './contexts/SessionRequestContext';
+import { AuthProvider } from './contexts/AuthContext';
 import LoginPage from './components/LoginPage';
 import EmployeeDashboard from './components/EmployeeDashboard';
 import AdminDashboard from './components/AdminDashboard';
 import EmployeeEngagement from './components/EmployeeEngagement';
+import PasswordResetPage from './components/PasswordResetPage';
 
 const theme = createTheme({
   palette: {
@@ -38,17 +40,20 @@ function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <SessionRequestProvider>
-        <Router>
-          <Routes>
-            <Route path="/" element={<Navigate to="/login" replace />} />
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/employee-dashboard" element={<EmployeeDashboard />} />
-            <Route path="/admin-dashboard" element={<AdminDashboard />} />
-            <Route path="/employee-engagement" element={<EmployeeEngagement />} />
-          </Routes>
-        </Router>
-      </SessionRequestProvider>
+      <AuthProvider>
+        <SessionRequestProvider>
+          <Router>
+            <Routes>
+              <Route path="/" element={<Navigate to="/login" replace />} />
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/reset-password" element={<PasswordResetPage />} />
+              <Route path="/employee-dashboard" element={<EmployeeDashboard />} />
+              <Route path="/admin-dashboard" element={<AdminDashboard />} />
+              <Route path="/employee-engagement" element={<EmployeeEngagement />} />
+            </Routes>
+          </Router>
+        </SessionRequestProvider>
+      </AuthProvider>
     </ThemeProvider>
   );
 }
