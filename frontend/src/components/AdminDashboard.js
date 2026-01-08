@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 import { employeeAPI, sessionAPI } from '../utils/api';
 import {
   Box,
@@ -89,6 +90,7 @@ import {
   VisibilityOff as VisibilityOffIcon,
   ExpandMore as ExpandMoreIcon,
   Lock as LockIcon,
+  Logout as LogoutIcon,
   Folder as FolderIcon,
   FolderOpen as FolderOpenIcon,
   InsertDriveFile as FileIcon,
@@ -205,6 +207,7 @@ const ActivityCard = styled(Card)(({ theme }) => ({
 
 const AdminDashboard = () => {
   const navigate = useNavigate();
+  const { logout: logoutUser } = useAuth();
   
   // Active tab state - no longer using localStorage
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -1274,6 +1277,71 @@ const AdminDashboard = () => {
   const [manageSessionView, setManageSessionView] = useState('create'); // Keep for backward compatibility, synced with manageSessionTab
   
   // Removed localStorage persistence for page state - now using component state only
+  // Validate mandatory fields when navigating to Preview step (catches all navigation paths)
+  useEffect(() => {
+    if (manageSessionTab === 'preview' && activeTab === 'manage-session') {
+      // Use a function reference that will be defined later
+      const validate = () => {
+        const resolvedSessionForm = sessionContentSnapshot?.sessionForm || sessionFormData;
+        const errors = [];
+
+        // Section 1: Validate Create New Session fields
+        if (!resolvedSessionForm.title || resolvedSessionForm.title.trim() === '') {
+          errors.push('Section 1 - Create: Session Title');
+        }
+        if (!resolvedSessionForm.type || resolvedSessionForm.type.trim() === '') {
+          errors.push('Section 1 - Create: Session Type');
+        }
+        if (!resolvedSessionForm.audience || resolvedSessionForm.audience.trim() === '') {
+          errors.push('Section 1 - Create: Participants');
+        }
+
+        // Section 2: Validate Content Creator - At least one content must be created
+        const resolvedAiContent = sessionContentSnapshot?.aiContent ?? (aiContentGenerated ? { keywords: aiKeywords } : null);
+        const resolvedFiles = sessionContentSnapshot?.files ?? mapFilesToMetadata(selectedFiles);
+        const hasAiContent = resolvedAiContent && (resolvedAiContent.keywords || resolvedAiContent.content || resolvedAiContent.title);
+        const hasFiles = resolvedFiles && resolvedFiles.length > 0;
+        const hasLiveTraining = selectedCreationMode === 'live-training';
+        const resolvedQuiz = currentQuizData?.quiz || 
+                            currentQuizData ||
+                            sessionContentSnapshot?.quiz ||
+                            null;
+        const hasQuiz = resolvedQuiz && (
+          (resolvedQuiz.questions && resolvedQuiz.questions.length > 0) ||
+          (resolvedQuiz.quiz && resolvedQuiz.quiz.questions && resolvedQuiz.quiz.questions.length > 0)
+        );
+
+        if (!hasAiContent && !hasFiles && !hasLiveTraining && !hasQuiz) {
+          errors.push('Section 2 - Content Creator: At least one content type required (AI Content, Uploaded Files, Live Training, or Assessment)');
+        }
+
+        return errors;
+      };
+
+      const validationErrors = validate();
+      if (validationErrors.length > 0) {
+        const errorMessage = `Please complete the following mandatory fields before previewing:\n${validationErrors.join('\n')}`;
+        showToast(errorMessage, 'error');
+        
+        // Navigate to the first missing section
+        if (validationErrors.some(err => err.includes('Title') || err.includes('Type') || err.includes('Participants'))) {
+          setManageSessionTab('create');
+          setManageSessionView('create');
+        } else if (validationErrors.some(err => err.includes('Content Creator'))) {
+          setManageSessionTab('content-creator');
+          setManageSessionView('content-creator');
+          setShowContentCreator(true);
+        } else if (validationErrors.some(err => err.includes('Assessment'))) {
+          setManageSessionTab('assessment');
+          setManageSessionView('assessment');
+          setShowQuizForm(true);
+        } else if (validationErrors.some(err => err.includes('Certification'))) {
+          setManageSessionTab('certification');
+          setManageSessionView('certification');
+        }
+      }
+    }
+  }, [manageSessionTab, activeTab, sessionFormData, sessionContentSnapshot, aiContentGenerated, aiKeywords, selectedFiles, selectedCreationMode, currentQuizData]);
   const [manageSessionsViewMode, setManageSessionsViewMode] = useState('list'); // 'list' or 'grid'
   const [manageSessionsSearchTerm, setManageSessionsSearchTerm] = useState('');
 
@@ -1405,6 +1473,38 @@ const AdminDashboard = () => {
     }
     
     const nextStep = getNextStep(manageSessionTab);
+    
+    // Validate mandatory fields from sections 1-4 when navigating to Preview (step 5 only)
+    if (nextStep === 'preview') {
+      const validationErrors = validateMandatoryFieldsForPreview();
+      if (validationErrors.length > 0) {
+        const errorMessage = `Please complete the following mandatory fields before previewing:\n${validationErrors.join('\n')}`;
+        showToast(errorMessage, 'error');
+        
+        // Navigate to the first missing section
+        if (validationErrors.some(err => err.includes('Title') || err.includes('Type') || err.includes('Participants'))) {
+          setManageSessionTab('create');
+          setManageSessionView('create');
+          return;
+        } else if (validationErrors.some(err => err.includes('Content Creator'))) {
+          setManageSessionTab('content-creator');
+          setManageSessionView('content-creator');
+          setShowContentCreator(true);
+          return;
+        } else if (validationErrors.some(err => err.includes('Assessment'))) {
+          setManageSessionTab('assessment');
+          setManageSessionView('assessment');
+          setShowQuizForm(true);
+          return;
+        } else if (validationErrors.some(err => err.includes('Certification'))) {
+          setManageSessionTab('certification');
+          setManageSessionView('certification');
+          return;
+        }
+        return; // Don't proceed if validation fails
+      }
+    }
+    
     setManageSessionTab(nextStep);
     setManageSessionView(nextStep);
     
@@ -1569,10 +1669,14 @@ const AdminDashboard = () => {
     setProfileAnchorEl(null);
   };
 
-  const handleLogout = () => {
-    // Handle logout logic
-    console.log('Logout clicked');
-    navigate('/login');
+  const handleLogout = async () => {
+    try {
+      await logoutUser();
+    } catch (error) {
+      console.error('Logout failed:', error);
+    } finally {
+      navigate('/login');
+    }
   };
 
   const handleClearAllSessions = () => {
@@ -7763,6 +7867,43 @@ Make the content professional, educational, and suitable for workplace training.
   };
 
   const handleSendAndPublish = async () => {
+    // First validate mandatory fields from sections 1-4
+    const validationErrors = validateMandatoryFieldsForPreview();
+    if (validationErrors.length > 0) {
+      const errorMessage = `Please complete the following mandatory fields before scheduling:\n${validationErrors.join('\n')}`;
+      showToast(errorMessage, 'error');
+      
+      // Navigate to the first missing section
+      if (validationErrors.some(err => err.includes('Title') || err.includes('Type') || err.includes('Participants'))) {
+        setManageSessionTab('create');
+        setManageSessionView('create');
+        setShowScheduleDialog(false);
+        setActiveTab('manage-session');
+        return;
+      } else if (validationErrors.some(err => err.includes('Content Creator'))) {
+        setManageSessionTab('content-creator');
+        setManageSessionView('content-creator');
+        setShowContentCreator(true);
+        setShowScheduleDialog(false);
+        setActiveTab('manage-session');
+        return;
+      } else if (validationErrors.some(err => err.includes('Assessment'))) {
+        setManageSessionTab('assessment');
+        setManageSessionView('assessment');
+        setShowQuizForm(true);
+        setShowScheduleDialog(false);
+        setActiveTab('manage-session');
+        return;
+      } else if (validationErrors.some(err => err.includes('Certification'))) {
+        setManageSessionTab('certification');
+        setManageSessionView('certification');
+        setShowScheduleDialog(false);
+        setActiveTab('manage-session');
+        return;
+      }
+      return;
+    }
+
     if (!scheduleDate || !scheduleTime) {
       showToast('Please select both date and time', 'warning');
       return;
@@ -7790,31 +7931,6 @@ Make the content professional, educational, and suitable for workplace training.
 
     if (dueDateTime <= scheduledDateTime) {
       showToast('Due date must be after the session start time.', 'warning');
-      return;
-    }
-    
-    // Check for skipped steps and prompt user to complete them
-    const stepOrder = ['create', 'content-creator', 'assessment', 'certification', 'preview', 'schedule'];
-    const skippedStepNames = {
-      'create': 'Create New Session',
-      'content-creator': 'Content Creator',
-      'assessment': 'Assessment',
-      'certification': 'Certification',
-      'preview': 'Preview',
-      'schedule': 'Schedule'
-    };
-    
-    const skippedStepsList = stepOrder.filter(step => skippedSteps.has(step));
-    if (skippedStepsList.length > 0) {
-      const skippedStepNamesList = skippedStepsList.map(step => skippedStepNames[step]).join(', ');
-      showToast(`Please complete the following skipped steps before publishing: ${skippedStepNamesList}`, 'error');
-      
-      // Navigate to the first skipped step
-      const firstSkippedStep = skippedStepsList[0];
-      setManageSessionTab(firstSkippedStep);
-      setManageSessionView(firstSkippedStep);
-      setActiveTab('manage-session');
-      setShowScheduleDialog(false);
       return;
     }
     
@@ -10276,7 +10392,44 @@ Make the content professional, educational, and suitable for workplace training.
     setShowPublishDialog(true);
   };
 
-  // Validation function for mandatory fields
+  // Validation function for mandatory fields when navigating to Preview (sections 1-4 only)
+  const validateMandatoryFieldsForPreview = () => {
+    const resolvedSessionForm = sessionContentSnapshot?.sessionForm || sessionFormData;
+    const errors = [];
+
+    // Section 1: Validate Create New Session fields
+    if (!resolvedSessionForm.title || resolvedSessionForm.title.trim() === '') {
+      errors.push('Section 1 - Create: Session Title');
+    }
+    if (!resolvedSessionForm.type || resolvedSessionForm.type.trim() === '') {
+      errors.push('Section 1 - Create: Session Type');
+    }
+    if (!resolvedSessionForm.audience || resolvedSessionForm.audience.trim() === '') {
+      errors.push('Section 1 - Create: Participants');
+    }
+
+    // Section 2: Validate Content Creator - At least one content must be created
+    const resolvedAiContent = sessionContentSnapshot?.aiContent ?? (aiContentGenerated ? { keywords: aiKeywords } : null);
+    const resolvedFiles = sessionContentSnapshot?.files ?? mapFilesToMetadata(selectedFiles);
+    const hasAiContent = resolvedAiContent && (resolvedAiContent.keywords || resolvedAiContent.content || resolvedAiContent.title);
+    const hasFiles = resolvedFiles && resolvedFiles.length > 0;
+    const hasLiveTraining = selectedCreationMode === 'live-training';
+    const resolvedQuiz = currentQuizData?.quiz || 
+                        currentQuizData ||
+                        sessionContentSnapshot?.quiz ||
+                        null;
+    const hasQuiz = resolvedQuiz && (
+      (resolvedQuiz.questions && resolvedQuiz.questions.length > 0) ||
+      (resolvedQuiz.quiz && resolvedQuiz.quiz.questions && resolvedQuiz.quiz.questions.length > 0)
+    );
+
+    if (!hasAiContent && !hasFiles && !hasLiveTraining && !hasQuiz) {
+      errors.push('Section 2 - Content Creator: At least one content type required (AI Content, Uploaded Files, Live Training, or Assessment)');
+    }
+    return errors;
+  };
+
+  // Validation function for mandatory fields (includes Schedule for publishing)
   const validateMandatoryFields = (sessionData = null) => {
     const resolvedSessionForm = sessionData?.sessionForm || sessionContentSnapshot?.sessionForm || sessionFormData;
     const errors = [];
@@ -11563,6 +11716,19 @@ Make the content professional, educational, and suitable for workplace training.
           }}
         >
           Change Password
+        </Button>
+        <Button
+          variant="outlined"
+          startIcon={<LogoutIcon />}
+          onClick={handleLogout}
+          sx={{
+            borderColor: '#ef4444',
+            color: '#ef4444',
+            '&:hover': { borderColor: '#dc2626', backgroundColor: 'rgba(239, 68, 68, 0.08)' },
+            minWidth: 200
+          }}
+        >
+          Logout
         </Button>
       </Box>
     </Box>

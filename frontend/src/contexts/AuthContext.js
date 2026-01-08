@@ -37,13 +37,23 @@ export const AuthProvider = ({ children }) => {
     sessionStorage.setItem('userData', JSON.stringify(userData));
   };
 
-  const logout = () => {
-    setAuthTokenState(null);
-    setAPIToken(null); // Clear from api.js
-    setUser(null);
-    setIsAuthenticated(false);
-    sessionStorage.removeItem('authToken');
-    sessionStorage.removeItem('userData');
+  const logout = async () => {
+    try {
+      // Call backend to blacklist token
+      const { authAPI } = await import('../utils/api');
+      await authAPI.logout();
+    } catch (error) {
+      console.error('Logout API call failed:', error);
+      // Continue with logout even if API call fails
+    } finally {
+      // Clear frontend state regardless of API call result
+      setAuthTokenState(null);
+      setAPIToken(null); // Clear from api.js
+      setUser(null);
+      setIsAuthenticated(false);
+      sessionStorage.removeItem('authToken');
+      sessionStorage.removeItem('userData');
+    }
   };
 
   const getUserId = () => {
