@@ -853,20 +853,35 @@ const EmployeeDashboard = () => {
     setActiveTab('my-courses');
   };
 
-  const handleSessionClick = (session, source = 'my-courses') => {
+  const handleSessionClick = async (session, source = 'my-courses') => {
     if (!session) return;
-    const details = getSessionDetails(session);
-    if (!details) return;
+    
+    try {
+      const fullSession = await sessionAPI.getById(session.id);
+      const normalized = normalizePublishedSession(fullSession);
+      // Attach feedback from completion if available
+      const completion = sessionCompletions.find(c => c.session === normalized.id);
+      const sessionWithFeedback = completion?.feedback
+        ? { ...normalized, feedback: completion.feedback }
+        : normalized;
 
-    // Attach feedback from completion if available
-    const completion = sessionCompletions.find(c => c.session === details.id);
-    const sessionWithFeedback = completion?.feedback
-      ? { ...details, feedback: completion.feedback }
-      : details;
-
-    setSelectedSession(sessionWithFeedback);
-    setSessionDetailSource(source);
-    setCurrentView('session-detail'); // First show session detail page
+      setSelectedSession(sessionWithFeedback);
+      setSessionDetailSource(source);
+      setCurrentView('session-detail'); // First show session detail page
+    } catch (error) {
+      console.error('Failed to load session details:', error);
+      // Fallback to local session data if API call fails
+      const details = getSessionDetails(session);
+      if (details) {
+        const completion = sessionCompletions.find(c => c.session === details.id);
+        const sessionWithFeedback = completion?.feedback
+          ? { ...details, feedback: completion.feedback }
+          : details;
+        setSelectedSession(sessionWithFeedback);
+        setSessionDetailSource(source);
+        setCurrentView('session-detail');
+      }
+    }
   };
 
   const handleBackToCourses = () => {
@@ -879,7 +894,7 @@ const EmployeeDashboard = () => {
     setActiveTab(sessionDetailSource === 'course-library' ? 'course-library' : 'my-courses');
   };
 
-  const handleGetStarted = (session) => {
+  const handleGetStarted = async (session) => {
     if (!session) return;
     // If session is already completed, do not allow starting again
     if (completedSessions.includes(session.id)) {
@@ -889,10 +904,22 @@ const EmployeeDashboard = () => {
     if (session.id) {
       setStartedSessions(prev => new Set([...prev, session.id]));
     }
-    const details = getSessionDetails(session);
-    if (!details) return;
-    setCurrentView('session-content');
-    setSelectedSession(details);
+    
+    try {
+      // Fetch full session details from API to get files, quiz, etc.
+      const fullSession = await sessionAPI.getById(session.id);
+      const normalized = normalizePublishedSession(fullSession);
+      setCurrentView('session-content');
+      setSelectedSession(normalized);
+    } catch (error) {
+      console.error('Failed to load session details:', error);
+      // Fallback to local session data if API call fails
+      const details = getSessionDetails(session);
+      if (details) {
+        setCurrentView('session-content');
+        setSelectedSession(details);
+      }
+    }
   };
 
   const handleSessionCompleteFlow = ({ session, score, feedback }) => {

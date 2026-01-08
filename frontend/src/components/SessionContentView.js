@@ -38,10 +38,10 @@ const SessionContentView = ({ session, onComplete, onBack }) => {
     session?.hasCertification
   );
 
-  const allContentItems = useMemo(
-    () => buildSessionContentItems(session),
-    [session]
-  );
+  const allContentItems = useMemo(() => {    
+    const items = buildSessionContentItems(session);
+    return items;
+  }, [session]);
 
   const assessmentItem = useMemo(
     () => allContentItems.find(item => item.type === 'assessment'),
