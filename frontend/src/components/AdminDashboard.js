@@ -1442,8 +1442,31 @@ const AdminDashboard = () => {
       } : null;
       
       // Build session object for scheduling
-      const currentSession = {
-        id: Date.now(),
+      const sessionId = sessionFormData?.draftId || null;
+      // Try to find existing session in arrays to get the real database ID
+      let existingSessionForScheduling = null;
+      if (sessionId) {
+        // Check if it's a database ID (numeric, typically small) or temporary ID (timestamp, large)
+        const isNumericId = typeof sessionId === 'number' || (typeof sessionId === 'string' && /^\d+$/.test(sessionId) && sessionId.length < 12);
+        if (isNumericId) {
+          // It's a database ID, try to find it
+          existingSessionForScheduling = draftSessions.find(d => d.id === sessionId) ||
+                                         savedSessions.find(s => s.id === sessionId) ||
+                                         publishedSessions.find(s => s.id === sessionId);
+        }
+      }
+      
+      // If not found by ID, try to find by title
+      if (!existingSessionForScheduling) {
+        const sessionTitle = resolvedSessionForm.title || 'Untitled Session';
+        existingSessionForScheduling = draftSessions.find(d => d.title === sessionTitle) ||
+                                       savedSessions.find(s => s.title === sessionTitle) ||
+                                       publishedSessions.find(s => s.title === sessionTitle);
+      }
+      
+      // Use existing session if found, otherwise create new object (but don't use Date.now() for ID)
+      const currentSession = existingSessionForScheduling || {
+        id: sessionId, // Use draftId if available, otherwise null (will be found by title in handleSendAndPublish)
         title: resolvedSessionForm.title || 'Untitled Session',
         description: resolvedSessionForm.description || '',
         type: resolvedSessionForm.type || 'compliance',
@@ -2280,25 +2303,110 @@ Make the content professional, educational, and suitable for workplace training.
       
       // Save to API - update if draft exists, create if new
       let savedSession;
+      // Check if sessionId is a database ID (numeric, typically small) or temporary ID (timestamp, large)
+      const isNumericId = sessionId && (typeof sessionId === 'number' || (typeof sessionId === 'string' && /^\d+$/.test(sessionId) && sessionId.length < 12));
+      // Find existing session in all arrays
+      let existingSession = null;
       if (sessionId) {
-        // Try to find existing session by ID
-        const existingSession = draftSessions.find(d => d.id === sessionId) || 
-                                savedSessions.find(s => s.id === sessionId);
-        if (existingSession && existingSession.id) {
+        existingSession = draftSessions.find(d => d.id === sessionId) || 
+                         savedSessions.find(s => s.id === sessionId) ||
+                         publishedSessions.find(s => s.id === sessionId);
+        // If not found by ID and it's a temporary ID, try to find by title
+        if (!existingSession && !isNumericId) {
+          const resolvedSessionForm = sessionContentSnapshot?.sessionForm || sessionFormData;
+          const sessionTitle = resolvedSessionForm.title || quizData.title;
+          if (sessionTitle) {
+            existingSession = draftSessions.find(s => s.title === sessionTitle) ||
+                             savedSessions.find(s => s.title === sessionTitle) ||
+                             publishedSessions.find(s => s.title === sessionTitle);
+          }
+        }
+      } else {
+        // No ID, try to find by title
+        const resolvedSessionForm = sessionContentSnapshot?.sessionForm || sessionFormData;
+        const sessionTitle = resolvedSessionForm.title || quizData.title;
+        if (sessionTitle) {
+          existingSession = draftSessions.find(s => s.title === sessionTitle) ||
+                           savedSessions.find(s => s.title === sessionTitle) ||
+                           publishedSessions.find(s => s.title === sessionTitle);
+        }
+      }
+      
+      if (existingSession && existingSession.id) {
+        // Check if the ID is a database ID (numeric) - if not, it might be a temporary ID
+        const existingIdIsNumeric = typeof existingSession.id === 'number' || (typeof existingSession.id === 'string' && /^\d+$/.test(existingSession.id) && existingSession.id.length < 12);
+        
+        if (existingIdIsNumeric) {
           // Update existing session using its database ID
-          savedSession = await sessionAPI.update(existingSession.id, sessionData);
-        } else {
-          // Try to update with the sessionId (might be a database ID)
           try {
-            savedSession = await sessionAPI.update(sessionId, sessionData);
+            savedSession = await sessionAPI.update(existingSession.id, sessionData);
           } catch (updateError) {
-            // If update fails, create new session
-            console.log('Update failed, creating new session:', updateError);
+            console.error('Failed to update session by ID, trying to find in backend:', updateError);
+            // If update fails, try to find the session in the backend by fetching all and matching by title
+            try {
+              const allSessions = await sessionAPI.getAll();
+              const resolvedSessionForm = sessionContentSnapshot?.sessionForm || sessionFormData;
+              const sessionTitle = resolvedSessionForm.title || quizData.title;
+              const backendSession = allSessions.find(s => 
+                s.title === sessionTitle && (s.status === 'draft' || s.status === 'published' || s.status === 'scheduled')
+              );
+              if (backendSession && backendSession.id) {
+                savedSession = await sessionAPI.update(backendSession.id, sessionData);
+              } else {
+                throw new Error('Session not found in backend');
+              }
+            } catch (retryError) {
+              console.error('Retry update failed, creating new session:', retryError);
+              savedSession = await sessionAPI.create(sessionData);
+            }
+          }
+        } else {
+          // Temporary ID - find by title in backend
+          try {
+            const allSessions = await sessionAPI.getAll();
+            const resolvedSessionForm = sessionContentSnapshot?.sessionForm || sessionFormData;
+            const sessionTitle = resolvedSessionForm.title || quizData.title;
+            const backendSession = allSessions.find(s => 
+              s.title === sessionTitle && (s.status === 'draft' || s.status === 'published' || s.status === 'scheduled')
+            );
+            if (backendSession && backendSession.id) {
+              savedSession = await sessionAPI.update(backendSession.id, sessionData);
+            } else {
+              // No matching session found - create new one
+              console.log('No matching session in backend, creating new session');
+              savedSession = await sessionAPI.create(sessionData);
+            }
+          } catch (error) {
+            console.error('Failed to find session in backend:', error);
+            savedSession = await sessionAPI.create(sessionData);
+          }
+        }
+      } else if (sessionId && isNumericId) {
+        // We have a numeric ID but didn't find it locally - try to update directly (might be a database ID)
+        try {
+          savedSession = await sessionAPI.update(sessionId, sessionData);
+        } catch (updateError) {
+          console.error('Failed to update with numeric ID, trying to find by title:', updateError);
+          // If update fails, try to find by title
+          try {
+            const allSessions = await sessionAPI.getAll();
+            const resolvedSessionForm = sessionContentSnapshot?.sessionForm || sessionFormData;
+            const sessionTitle = resolvedSessionForm.title || quizData.title;
+            const backendSession = allSessions.find(s => 
+              s.title === sessionTitle && (s.status === 'draft' || s.status === 'published' || s.status === 'scheduled')
+            );
+            if (backendSession && backendSession.id) {
+              savedSession = await sessionAPI.update(backendSession.id, sessionData);
+            } else {
+              savedSession = await sessionAPI.create(sessionData);
+            }
+          } catch (retryError) {
+            console.error('Retry failed, creating new session:', retryError);
             savedSession = await sessionAPI.create(sessionData);
           }
         }
       } else {
-        // Create new session
+        // No existing session found - create new one
         savedSession = await sessionAPI.create(sessionData);
       }
       
@@ -2497,7 +2605,11 @@ Make the content professional, educational, and suitable for workplace training.
       const resolvedSessionForm = sessionContentSnapshot?.sessionForm || sessionFormData;
       const resolvedAiContent = sessionContentSnapshot?.aiContent ?? (aiContentGenerated ? { keywords: aiKeywords } : null);
       const resolvedFiles = sessionContentSnapshot?.files ?? mapFilesToMetadata(selectedFiles);
-      const resolvedQuiz = currentQuizData?.quiz || currentQuizData || null;
+      // Get quiz data from multiple sources - prioritize currentQuizData, then check sessionContentSnapshot
+      const resolvedQuiz = currentQuizData?.quiz || 
+                          currentQuizData || 
+                          sessionContentSnapshot?.quiz || 
+                          null;
       const resolvedCreationMode = sessionContentSnapshot?.creationMode ?? selectedCreationMode;
       
       const sessionData = {
@@ -2514,26 +2626,85 @@ Make the content professional, educational, and suitable for workplace training.
       
       // Save to API - update if draft exists (by ID or by title match), create if new
       let savedSession;
-      // First try to find by ID
-      let existingDraft = draftSessions.find(d => d.id === existingDraftId);
-      // If not found by ID, try to find by title (in case ID changed)
+      // Check if existingDraftId is a database ID (numeric, typically small) or temporary ID (timestamp, large)
+      const isNumericId = typeof existingDraftId === 'number' || (typeof existingDraftId === 'string' && /^\d+$/.test(existingDraftId) && existingDraftId.length < 12);
+      
+      // First try to find by ID in all arrays (draft, saved, published)
+      let existingDraft = draftSessions.find(d => d.id === existingDraftId) ||
+                         savedSessions.find(s => s.id === existingDraftId) ||
+                         publishedSessions.find(s => s.id === existingDraftId);
+      // If not found by ID and it's a temporary ID, or if not found at all, try to find by title
       if (!existingDraft && draftTitle) {
-        existingDraft = draftSessions.find(d => d.title === draftTitle && d.status === 'draft');
-      }
-      // Also check savedSessions for any existing session with this title
-      if (!existingDraft && draftTitle) {
-        existingDraft = savedSessions.find(s => s.title === draftTitle && (s.status === 'draft' || s.status === 'scheduled'));
+        existingDraft = draftSessions.find(d => d.title === draftTitle) ||
+                        savedSessions.find(s => s.title === draftTitle) ||
+                        publishedSessions.find(s => s.title === draftTitle);
       }
       
       if (existingDraft && existingDraft.id) {
-        // Update existing session using its database ID
-        savedSession = await sessionAPI.update(existingDraft.id, sessionData);
-        // Update draftId with the actual ID from server
-        if (savedSession.id) {
-          setSessionFormData(prev => ({ ...prev, draftId: savedSession.id }));
+        // Check if the ID is a database ID (numeric) - if not, it might be a temporary ID
+        const existingIdIsNumeric = typeof existingDraft.id === 'number' || (typeof existingDraft.id === 'string' && /^\d+$/.test(existingDraft.id) && existingDraft.id.length < 12);
+        
+        if (existingIdIsNumeric) {
+          // Update existing session using its database ID
+          try {
+            savedSession = await sessionAPI.update(existingDraft.id, sessionData);
+            // Update draftId with the actual ID from server
+            if (savedSession.id) {
+              setSessionFormData(prev => ({ ...prev, draftId: savedSession.id }));
+            }
+          } catch (updateError) {
+            console.error('Failed to update session by ID, trying to find in backend:', updateError);
+            // If update fails, try to fetch all sessions and find by title
+            try {
+              const allSessions = await sessionAPI.getAll();
+              const backendSession = allSessions.find(s => 
+                s.title === draftTitle && (s.status === 'draft' || s.status === 'scheduled' || s.status === 'published')
+              );
+              if (backendSession && backendSession.id) {
+                savedSession = await sessionAPI.update(backendSession.id, sessionData);
+                if (savedSession.id) {
+                  setSessionFormData(prev => ({ ...prev, draftId: savedSession.id }));
+                }
+              } else {
+                throw new Error('Session not found in backend');
+              }
+            } catch (retryError) {
+              console.error('Retry update failed, creating new session:', retryError);
+              savedSession = await sessionAPI.create(sessionData);
+              if (savedSession.id) {
+                setSessionFormData(prev => ({ ...prev, draftId: savedSession.id }));
+              }
+            }
+          }
+        } else {
+          // Temporary ID - try to find by title in backend
+          try {
+            const allSessions = await sessionAPI.getAll();
+            const backendSession = allSessions.find(s => 
+              s.title === draftTitle && (s.status === 'draft' || s.status === 'scheduled' || s.status === 'published')
+            );
+            if (backendSession && backendSession.id) {
+              savedSession = await sessionAPI.update(backendSession.id, sessionData);
+              if (savedSession.id) {
+                setSessionFormData(prev => ({ ...prev, draftId: savedSession.id }));
+              }
+            } else {
+              // Create new session
+              savedSession = await sessionAPI.create(sessionData);
+              if (savedSession.id) {
+                setSessionFormData(prev => ({ ...prev, draftId: savedSession.id }));
+              }
+            }
+          } catch (error) {
+            console.error('Failed to find session in backend, creating new:', error);
+            savedSession = await sessionAPI.create(sessionData);
+            if (savedSession.id) {
+              setSessionFormData(prev => ({ ...prev, draftId: savedSession.id }));
+            }
+          }
         }
       } else {
-        // Create new session
+        // No existing session found - create new one
         savedSession = await sessionAPI.create(sessionData);
         // Update draftId with the actual ID from server
         if (savedSession.id) {
@@ -7714,26 +7885,146 @@ Make the content professional, educational, and suitable for workplace training.
       
       // Save to API - update if draft exists, create if new
       let savedSession;
+      // Check if sessionId is a database ID (numeric, typically small) or temporary ID (timestamp, large)
+      const isNumericId = sessionId && (typeof sessionId === 'number' || (typeof sessionId === 'string' && /^\d+$/.test(sessionId) && sessionId.length < 12));
+      // Find existing session in all arrays
+      let existingSession = null;
       if (sessionId) {
-        // Try to find existing session by ID
-        const existingSession = draftSessions.find(d => d.id === sessionId) || 
-                                savedSessions.find(s => s.id === sessionId);
-        if (existingSession && existingSession.id) {
-          // Update existing session using its database ID
-          savedSession = await sessionAPI.update(existingSession.id, sessionData);
-        } else {
-          // Try to update with the sessionId (might be a database ID)
-          try {
-            savedSession = await sessionAPI.update(sessionId, sessionData);
-          } catch (updateError) {
-            // If update fails, create new session
-            console.log('Update failed, creating new session:', updateError);
-            savedSession = await sessionAPI.create(sessionData);
+        existingSession = draftSessions.find(d => d.id === sessionId) || 
+                         savedSessions.find(s => s.id === sessionId) ||
+                         publishedSessions.find(s => s.id === sessionId);
+        // If not found by ID and it's a temporary ID, try to find by title
+        if (!existingSession && !isNumericId) {
+          const sessionTitle = resolvedSessionForm.title || selectedSessionForScheduling?.title;
+          if (sessionTitle) {
+            existingSession = draftSessions.find(s => s.title === sessionTitle) ||
+                             savedSessions.find(s => s.title === sessionTitle) ||
+                             publishedSessions.find(s => s.title === sessionTitle);
           }
         }
       } else {
-        // Create new session
-        savedSession = await sessionAPI.create(sessionData);
+        // No ID, try to find by title
+        const sessionTitle = resolvedSessionForm.title || selectedSessionForScheduling?.title;
+        if (sessionTitle) {
+          existingSession = draftSessions.find(s => s.title === sessionTitle) ||
+                           savedSessions.find(s => s.title === sessionTitle) ||
+                           publishedSessions.find(s => s.title === sessionTitle);
+        }
+      }
+      if (existingSession && existingSession.id) {
+        // Check if the ID is a database ID (numeric) - if not, it might be a temporary ID
+        const existingIdIsNumeric = typeof existingSession.id === 'number' || (typeof existingSession.id === 'string' && /^\d+$/.test(existingSession.id) && existingSession.id.length < 12);
+        
+        if (existingIdIsNumeric) {
+          // Update existing session using its database ID
+          try {
+            savedSession = await sessionAPI.update(existingSession.id, sessionData);
+          } catch (updateError) {
+            console.error('Failed to update session by ID, trying to find in backend:', updateError);
+            // If update fails, try to find the session in the backend by fetching all and matching by title
+            try {
+              const allSessions = await sessionAPI.getAll();
+              const sessionTitle = resolvedSessionForm.title || selectedSessionForScheduling?.title;
+              const backendSession = allSessions.find(s => 
+                s.title === sessionTitle && (s.status === 'draft' || s.status === 'published' || s.status === 'scheduled')
+              );
+              if (backendSession && backendSession.id) {
+                savedSession = await sessionAPI.update(backendSession.id, sessionData);
+              } else {
+                throw new Error('Session not found in backend');
+              }
+            } catch (retryError) {
+              console.error('Retry update failed, creating new session:', retryError);
+              savedSession = await sessionAPI.create(sessionData);
+            }
+          }
+        } else {
+          // Temporary ID - find by title in backend
+          try {
+            const allSessions = await sessionAPI.getAll();
+            const sessionTitle = resolvedSessionForm.title || selectedSessionForScheduling?.title;
+            const backendSession = allSessions.find(s => 
+              s.title === sessionTitle && (s.status === 'draft' || s.status === 'published' || s.status === 'scheduled')
+            );
+            if (backendSession && backendSession.id) {
+              savedSession = await sessionAPI.update(backendSession.id, sessionData);
+            } else {
+              // No matching session found - create new one
+              console.log('No matching session in backend, creating new session');
+              savedSession = await sessionAPI.create(sessionData);
+            }
+          } catch (error) {
+            console.error('Failed to find session in backend:', error);
+            savedSession = await sessionAPI.create(sessionData);
+          }
+        }
+      } else if (sessionId && isNumericId) {
+        // We have a numeric ID but didn't find it locally - try to find by title first before attempting update
+        // This avoids unnecessary PUT requests that will fail
+        try {
+          const allSessions = await sessionAPI.getAll();
+          const sessionTitle = resolvedSessionForm.title || selectedSessionForScheduling?.title;
+          const backendSession = allSessions.find(s => 
+            s.title === sessionTitle && (s.status === 'draft' || s.status === 'published' || s.status === 'scheduled')
+          );
+          if (backendSession && backendSession.id) {
+            // Use the database ID from backend
+            savedSession = await sessionAPI.update(backendSession.id, sessionData);
+          } else {
+            // Try to update with the numeric ID (might be a valid database ID)
+            try {
+              savedSession = await sessionAPI.update(sessionId, sessionData);
+            } catch (updateError) {
+              console.error('Failed to update with numeric ID, creating new session:', updateError);
+              savedSession = await sessionAPI.create(sessionData);
+            }
+          }
+        } catch (error) {
+          console.error('Failed to check backend, trying direct update:', error);
+          // Last resort: try direct update
+          try {
+            savedSession = await sessionAPI.update(sessionId, sessionData);
+          } catch (updateError) {
+            console.error('Direct update also failed, creating new session:', updateError);
+            savedSession = await sessionAPI.create(sessionData);
+          }
+        }
+      } else if (sessionId && !isNumericId) {
+        // We have a temporary ID - don't try to update with it, find by title instead
+        try {
+          const allSessions = await sessionAPI.getAll();
+          const sessionTitle = resolvedSessionForm.title || selectedSessionForScheduling?.title;
+          const backendSession = allSessions.find(s => 
+            s.title === sessionTitle && (s.status === 'draft' || s.status === 'published' || s.status === 'scheduled')
+          );
+          if (backendSession && backendSession.id) {
+            savedSession = await sessionAPI.update(backendSession.id, sessionData);
+          } else {
+            // No matching session found - create new one
+            console.log('No matching session in backend, creating new session');
+            savedSession = await sessionAPI.create(sessionData);
+          }
+        } catch (error) {
+          console.error('Failed to find session in backend:', error);
+          savedSession = await sessionAPI.create(sessionData);
+        }
+      } else {
+        // No sessionId at all - try to find by title, otherwise create new
+        try {
+          const allSessions = await sessionAPI.getAll();
+          const sessionTitle = resolvedSessionForm.title || selectedSessionForScheduling?.title;
+          const backendSession = allSessions.find(s => 
+            s.title === sessionTitle && (s.status === 'draft' || s.status === 'published' || s.status === 'scheduled')
+          );
+          if (backendSession && backendSession.id) {
+            savedSession = await sessionAPI.update(backendSession.id, sessionData);
+          } else {
+            savedSession = await sessionAPI.create(sessionData);
+          }
+        } catch (error) {
+          console.error('Failed to check backend for existing session:', error);
+          savedSession = await sessionAPI.create(sessionData);
+        }
       }
       
       // Update sessionFormData with the saved session ID
@@ -10007,7 +10298,16 @@ Make the content professional, educational, and suitable for workplace training.
     const hasAiContent = resolvedAiContent && (resolvedAiContent.keywords || resolvedAiContent.content || resolvedAiContent.title);
     const hasFiles = resolvedFiles && resolvedFiles.length > 0;
     const hasLiveTraining = sessionData?.creationMode === 'live-training' || selectedCreationMode === 'live-training';
-    const hasQuiz = sessionData?.quiz || currentQuizData?.quiz;
+    // Check quiz from multiple sources - sessionData, currentQuizData, or sessionContentSnapshot
+    const resolvedQuiz = sessionData?.quiz || 
+                        currentQuizData?.quiz || 
+                        currentQuizData ||
+                        sessionContentSnapshot?.quiz ||
+                        null;
+    const hasQuiz = resolvedQuiz && (
+      (resolvedQuiz.questions && resolvedQuiz.questions.length > 0) ||
+      (resolvedQuiz.quiz && resolvedQuiz.quiz.questions && resolvedQuiz.quiz.questions.length > 0)
+    );
 
     if (!hasAiContent && !hasFiles && !hasLiveTraining && !hasQuiz) {
       errors.push('Content Creator (at least one content type required: AI Content, Uploaded Files, Live Training, or Assessment)');
@@ -10023,7 +10323,7 @@ Make the content professional, educational, and suitable for workplace training.
     return errors;
   };
 
-  const handlePublishNow = () => {
+  const handlePublishNow = async () => {
     // Validate all mandatory fields before publishing
     const validationErrors = validateMandatoryFields(sessionToPublish);
     if (validationErrors.length > 0) {
@@ -10053,61 +10353,177 @@ Make the content professional, educational, and suitable for workplace training.
       return;
     }
 
-    const publishedSession = {
-      ...sessionToPublish,
-      title: publishCourseData.courseTitle,
-      description: publishCourseData.description || sessionToPublish?.description || '',
-      skills: publishCourseData.skills,
-      courseImage: publishCourseData.courseImage,
-      status: 'published',
-      publishedAt: new Date().toISOString(),
-      scheduledDate: sessionToPublish?.scheduledDate || null,
-      scheduledTime: sessionToPublish?.scheduledTime || null,
-      scheduledDateTime: sessionToPublish?.scheduledDateTime || null,
-      dueDate: sessionToPublish?.dueDate || null,
-      dueTime: sessionToPublish?.dueTime || null,
-      dueDateTime: sessionToPublish?.dueDateTime || null,
-      isLocked: sessionToPublish?.isLocked ?? false,
-      approvalExpiresAt: sessionToPublish?.approvalExpiresAt || null,
-      lastApprovalDate: sessionToPublish?.lastApprovalDate || null,
-      // Explicitly preserve files, quiz, and content
-      files: sessionToPublish?.files || sessionToPublish?.resumeState?.selectedFiles || [],
-      quiz: sessionToPublish?.quiz || null,
-      aiContent: sessionToPublish?.aiContent || null,
-      creationMode: sessionToPublish?.creationMode || null,
-      instructor: sessionToPublish?.instructor || 'HR Team',
-      duration: sessionToPublish?.duration || '60 minutes',
-      type: sessionToPublish?.type || 'compliance',
-      audience: sessionToPublish?.audience || 'all'
-    };
+    try {
+      setIsLoading(true);
+      // Prepare session data for API - update existing record if it has an ID
+      const sessionData = {
+        title: publishCourseData.courseTitle,
+        description: publishCourseData.description || sessionToPublish?.description || '',
+        type: mapSessionTypeToBackend(sessionToPublish?.type) || 'General',
+        skills: publishCourseData.skills || sessionToPublish?.skills || [],
+        files: sessionToPublish?.files || sessionToPublish?.resumeState?.selectedFiles || [],
+        quiz: sessionToPublish?.quiz || 
+              currentQuizData?.quiz || 
+              currentQuizData || 
+              null,
+        ai_content: sessionToPublish?.aiContent || null,
+        creation_mode: sessionToPublish?.creationMode || null,
+        status: 'published',
+        published_at: new Date().toISOString(),
+        scheduled_date: sessionToPublish?.scheduledDate || null,
+        scheduled_time: sessionToPublish?.scheduledTime || null,
+        scheduled_datetime: sessionToPublish?.scheduledDateTime || null,
+        due_date: sessionToPublish?.dueDate || null,
+        due_time: sessionToPublish?.dueTime || null,
+        due_datetime: sessionToPublish?.dueDateTime || null,
+      };
 
-    // Move from draft/assessment to published
-    if (sessionToPublish.status === 'draft' || !sessionToPublish.status) {
-      setDraftSessions(prev => prev.filter(s => s.id !== sessionToPublish.id));
-    } else if (sessionToPublish.status === 'saved') {
-      setSavedAssessments(prev => prev.filter(s => s.id !== sessionToPublish.id));
+      // Find existing session by checking all possible sources
+      // First try by ID if available
+      let existingSession = null;
+      const sessionId = sessionToPublish?.id;
+      
+      if (sessionId) {
+        // Check if it's a database ID (numeric, typically small) or temporary ID (timestamp, large)
+        const isNumericId = typeof sessionId === 'number' || (typeof sessionId === 'string' && /^\d+$/.test(sessionId) && sessionId.length < 12);
+        
+        // Try to find in all arrays
+        existingSession = draftSessions.find(s => s.id === sessionId) || 
+                         savedSessions.find(s => s.id === sessionId) ||
+                         publishedSessions.find(s => s.id === sessionId);
+        
+        // If not found by ID and it's a temporary ID, try to find by title
+        if (!existingSession && !isNumericId && publishCourseData.courseTitle) {
+          existingSession = draftSessions.find(s => s.title === publishCourseData.courseTitle) ||
+                           savedSessions.find(s => s.title === publishCourseData.courseTitle) ||
+                           publishedSessions.find(s => s.title === publishCourseData.courseTitle);
+        }
+      } else if (publishCourseData.courseTitle) {
+        // No ID, try to find by title in all arrays
+        existingSession = draftSessions.find(s => s.title === publishCourseData.courseTitle) ||
+                         savedSessions.find(s => s.title === publishCourseData.courseTitle) ||
+                         publishedSessions.find(s => s.title === publishCourseData.courseTitle);
+      }
+      
+      let savedSession;
+      if (existingSession && existingSession.id) {
+        // Check if the ID is a database ID (numeric) - if not, it might be a temporary ID
+        const existingIdIsNumeric = typeof existingSession.id === 'number' || (typeof existingSession.id === 'string' && /^\d+$/.test(existingSession.id) && existingSession.id.length < 12);
+        
+        if (existingIdIsNumeric) {
+          // Use the database ID from the found session
+          try {
+            savedSession = await sessionAPI.update(existingSession.id, sessionData);
+          } catch (updateError) {
+            console.error('Failed to update session by ID:', updateError);
+            // If update fails, try to find the session in the backend by fetching all and matching by title
+            try {
+              const allSessions = await sessionAPI.getAll();
+              const backendSession = allSessions.find(s => 
+                s.title === publishCourseData.courseTitle && (s.status === 'draft' || s.status === 'published' || s.status === 'scheduled')
+              );
+              if (backendSession && backendSession.id) {
+                savedSession = await sessionAPI.update(backendSession.id, sessionData);
+              } else {
+                throw new Error('Session not found in backend');
+              }
+            } catch (retryError) {
+              console.error('Retry update also failed:', retryError);
+              showToast(`Failed to publish session: ${retryError.message}`, 'error');
+              setIsLoading(false);
+              return;
+            }
+          }
+        } else {
+          // Temporary ID - find by title in backend
+          try {
+            const allSessions = await sessionAPI.getAll();
+            const backendSession = allSessions.find(s => 
+              s.title === publishCourseData.courseTitle && (s.status === 'draft' || s.status === 'published' || s.status === 'scheduled')
+            );
+            if (backendSession && backendSession.id) {
+              savedSession = await sessionAPI.update(backendSession.id, sessionData);
+            } else {
+              // No matching session found - create new one
+              console.log('No matching session in backend, creating new session');
+              savedSession = await sessionAPI.create(sessionData);
+            }
+          } catch (error) {
+            console.error('Failed to find session in backend:', error);
+            showToast(`Failed to publish session: ${error.message}`, 'error');
+            setIsLoading(false);
+            return;
+          }
+        }
+      } else if (publishCourseData.courseTitle) {
+        // No existing session found in local state, but we have a title - check backend
+        try {
+          const allSessions = await sessionAPI.getAll();
+          const backendSession = allSessions.find(s => 
+            s.title === publishCourseData.courseTitle && (s.status === 'draft' || s.status === 'published' || s.status === 'scheduled')
+          );
+          if (backendSession && backendSession.id) {
+            savedSession = await sessionAPI.update(backendSession.id, sessionData);
+          } else {
+            // No matching session found - create new one
+            savedSession = await sessionAPI.create(sessionData);
+          }
+        } catch (error) {
+          console.error('Failed to check backend for existing session:', error);
+          // If backend check fails, create new session
+          savedSession = await sessionAPI.create(sessionData);
+        }
+      } else {
+        // No existing session found and no title - create new one
+        savedSession = await sessionAPI.create(sessionData);
+      }
+
+      // Update local state - remove from drafts and add to published
+      const normalized = normalizePublishedSession(savedSession);
+      
+      // Remove from drafts if it was a draft
+      if (sessionToPublish.status === 'draft' || !sessionToPublish.status) {
+        setDraftSessions(prev => prev.filter(s => s.id !== savedSession.id));
+      } else if (sessionToPublish.status === 'saved') {
+        setSavedAssessments(prev => prev.filter(s => s.id !== savedSession.id));
+      }
+
+      // Update published sessions - replace if exists, add if new
+      setPublishedSessions(prev => {
+        const filtered = prev.filter(s => s.id !== savedSession.id);
+        return [normalized, ...filtered];
+      });
+
+      // Also update savedSessions
+      setSavedSessions(prev => {
+        const filtered = prev.filter(s => s.id !== savedSession.id);
+        return [normalized, ...filtered];
+      });
+      
+      // Log activity
+      addActivity(
+        `Session published: ${publishCourseData.courseTitle}`,
+        'Admin',
+        'published',
+        'session_published'
+      );
+      
+      setShowPublishDialog(false);
+      setSessionToPublish(null);
+      
+      // Navigate to Schedule step in manage section
+      setActiveTab('manage-session');
+      setManageSessionTab('schedule');
+      setSelectedSessionForScheduling(normalized);
+      setShowScheduleDialog(true);
+      
+      showToast('Session published successfully! Please schedule the session.', 'success');
+    } catch (error) {
+      console.error('Failed to publish session:', error);
+      showToast(`Failed to publish session: ${error.message}`, 'error');
+    } finally {
+      setIsLoading(false);
     }
-
-    setPublishedSessions(prev => [normalizePublishedSession(publishedSession), ...prev]);
-    
-    // Log activity
-    addActivity(
-      `Session published: ${publishCourseData.courseTitle}`,
-      'Admin',
-      'published',
-      'session_published'
-    );
-    
-    setShowPublishDialog(false);
-    setSessionToPublish(null);
-    
-    // Navigate to Schedule step in manage section
-    setActiveTab('manage-session');
-    setManageSessionTab('schedule');
-    setSelectedSessionForScheduling(publishedSession);
-    setShowScheduleDialog(true);
-    
-    showToast('Session published successfully! Please schedule the session.', 'success');
   };
 
   const handleSaveForLater = () => {
