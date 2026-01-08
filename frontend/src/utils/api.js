@@ -139,5 +139,12 @@ export const sessionCompletionAPI = {
   }),
 };
 
+// Auth API
+export const authAPI = {
+  logout: () => apiRequest('/auth/logout/', {
+    method: 'POST',
+  }),
+};
+
 export default apiRequest;
 

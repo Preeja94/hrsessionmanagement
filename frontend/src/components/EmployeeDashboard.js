@@ -175,7 +175,7 @@ const ActivityCard = styled(Card)(({ theme }) => ({
 
 const EmployeeDashboard = () => {
   const navigate = useNavigate();
-  const { getUserId, getUserEmail } = useAuth();
+  const { getUserId, getUserEmail, logout: logoutUser } = useAuth();
   const [activeTab, setActiveTab] = useState('dashboard');
   const [profileAnchorEl, setProfileAnchorEl] = useState(null);
   const [settingsAnchorEl, setSettingsAnchorEl] = useState(null);
@@ -694,8 +694,14 @@ const EmployeeDashboard = () => {
     setNotificationAnchorEl(null);
   };
 
-  const handleLogout = () => {
-    navigate('/login');
+  const handleLogout = async () => {
+    try {
+      await logoutUser();
+    } catch (error) {
+      console.error('Logout failed:', error);
+    } finally {
+      navigate('/login');
+    }
   };
 
   const handleViewProfile = () => {
@@ -1359,6 +1365,19 @@ const EmployeeDashboard = () => {
           }}
         >
           Change Password
+        </Button>
+        <Button
+          variant="outlined"
+          startIcon={<LogoutIcon />}
+          onClick={handleLogout}
+          sx={{
+            borderColor: '#ef4444',
+            color: '#ef4444',
+            '&:hover': { borderColor: '#dc2626', backgroundColor: 'rgba(239, 68, 68, 0.08)' },
+            minWidth: 200
+          }}
+        >
+          Logout
         </Button>
               </Box>
             </Box>
