@@ -52,18 +52,11 @@ class Session(models.Model):
         ('deleted', 'Deleted'),
     ]
     
-    SESSION_TYPE_CHOICES = [
-        ('Technical Training', 'Technical Training'),
-        ('Employee Wellbeing', 'Employee Wellbeing'),
-        ('Leadership Development', 'Leadership Development'),
-        ('Compliance', 'Compliance'),
-        ('General', 'General'),
-    ]
-    
     title = models.CharField(max_length=200)
     description = models.TextField(null=True, blank=True)
-    type = models.CharField(max_length=50, choices=SESSION_TYPE_CHOICES, default='General')
+    type = models.CharField(max_length=100, default='Not specified')  # Increased max_length and removed choices constraint
     status = models.CharField(max_length=20, choices=SESSION_STATUS_CHOICES, default='draft')
+    audience = models.CharField(max_length=100, null=True, blank=True)  # Participants/audience field
     
     # Content fields
     creation_mode = models.CharField(max_length=50, null=True, blank=True)  # powerpoint, word, video, etc.
