@@ -128,21 +128,43 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
 
   useEffect(() => {
     if (existingQuizData) {
-      setFormTitle(existingQuizData.title || 'Questionnaire Form');
+      const quizTitle = existingQuizData.title || 'Questionnaire Form';
+      setFormTitle(quizTitle);
       setFormDescription(existingQuizData.description || '');
       if (existingQuizData.assessmentInfo) {
         const criteriaValue =
-          existingQuizData.assessmentInfo.criteriaDescription ||
-          existingQuizData.assessmentInfo.criteria ||
+          existingQuizData.assessmentInfo.criteriaDescription ??
+          existingQuizData.assessmentInfo.criteria ??
+          existingQuizData.assessmentInfo.description ??
           '';
         setAssessmentInfo({
-          quizTitle: existingQuizData.assessmentInfo.quizTitle || '',
-          passingScore: existingQuizData.assessmentInfo.passingScore || '',
-          maxAttempts: existingQuizData.assessmentInfo.maxAttempts || '',
-          criteriaDescription: criteriaValue,
-          criteria: criteriaValue
+          quizTitle: existingQuizData.assessmentInfo.quizTitle ?? quizTitle ?? '',
+          passingScore: existingQuizData.assessmentInfo.passingScore !== undefined && existingQuizData.assessmentInfo.passingScore !== null 
+            ? String(existingQuizData.assessmentInfo.passingScore) 
+            : '',
+          maxAttempts: existingQuizData.assessmentInfo.maxAttempts !== undefined && existingQuizData.assessmentInfo.maxAttempts !== null 
+            ? String(existingQuizData.assessmentInfo.maxAttempts) 
+            : '',
+          criteriaDescription: criteriaValue !== undefined && criteriaValue !== null ? String(criteriaValue) : '',
+          criteria: criteriaValue !== undefined && criteriaValue !== null ? String(criteriaValue) : ''
+        });
+        console.log('Setting assessmentInfo from existingQuizData:', {
+          quizTitle: existingQuizData.assessmentInfo.quizTitle,
+          passingScore: existingQuizData.assessmentInfo.passingScore,
+          maxAttempts: existingQuizData.assessmentInfo.maxAttempts,
+          criteriaDescription: criteriaValue
+        });
+      } else {
+        // If assessmentInfo doesn't exist, create one with quiz title
+        setAssessmentInfo({
+          quizTitle: quizTitle,
+          passingScore: '',
+          maxAttempts: '',
+          criteriaDescription: '',
+          criteria: ''
         });
       }
+      
       if (existingQuizData.questions && Array.isArray(existingQuizData.questions) && existingQuizData.questions.length > 0) {
         const normalizedQuestions = existingQuizData.questions.map((q, index) => ({
           id: q.id || index + 1,
@@ -163,7 +185,37 @@ const InteractiveQuiz = ({ onSave, onCancel, onSaveDraft, onPreview, onPublish, 
         }));
         setQuestions(normalizedQuestions);
         setSelectedQuestion(0);
+      } else {
+        // Reset to default question if no questions exist
+        setQuestions([{
+          id: 1,
+          text: 'Untitled Question',
+          type: 'multiple-choice',
+          options: ['Option 1'],
+          required: false,
+          hasImage: false,
+          correctAnswer: 0,
+          correctAnswers: []
+        }]);
+        setSelectedQuestion(0);
       }
+      
+      console.log('=== InteractiveQuiz useEffect triggered ===');
+      console.log('existingQuizData:', existingQuizData);
+      console.log('existingQuizData.assessmentInfo:', existingQuizData.assessmentInfo);
+      console.log('Quiz title:', quizTitle);
+      console.log('Assessment info values:', {
+        quizTitle: existingQuizData.assessmentInfo?.quizTitle,
+        passingScore: existingQuizData.assessmentInfo?.passingScore,
+        maxAttempts: existingQuizData.assessmentInfo?.maxAttempts,
+        criteriaDescription: existingQuizData.assessmentInfo?.criteriaDescription
+      });
+      console.log('Questions:', existingQuizData.questions);
+      console.log('Current assessmentInfo state will be set to:', existingQuizData.assessmentInfo ? {
+        quizTitle: existingQuizData.assessmentInfo.quizTitle ?? quizTitle ?? '',
+        passingScore: existingQuizData.assessmentInfo.passingScore !== undefined && existingQuizData.assessmentInfo.passingScore !== null ? String(existingQuizData.assessmentInfo.passingScore) : '',
+        maxAttempts: existingQuizData.assessmentInfo.maxAttempts !== undefined && existingQuizData.assessmentInfo.maxAttempts !== null ? String(existingQuizData.assessmentInfo.maxAttempts) : '',
+      } : 'No assessmentInfo');
     }
   }, [existingQuizData]);
 
