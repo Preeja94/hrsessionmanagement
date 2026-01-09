@@ -88,7 +88,7 @@ class SessionSerializer(serializers.ModelSerializer):
                   'files', 'ai_content', 'ai_keywords', 'quiz', 'assessment_info',
                   'scheduled_date', 'scheduled_time', 'scheduled_datetime',
                   'due_date', 'due_time', 'due_datetime', 'certification',
-                  'has_certificate', 'skills', 'created_by', 'created_by_name',
+                  'has_certificate', 'skills', 'audience', 'created_by', 'created_by_name',
                   'created_at', 'updated_at', 'published_at', 'saved_at']
         read_only_fields = ['id', 'created_at', 'updated_at', 'created_by_name']
 

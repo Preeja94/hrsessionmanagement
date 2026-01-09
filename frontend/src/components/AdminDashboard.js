@@ -89,6 +89,7 @@ import {
   Visibility as VisibilityIcon,
   VisibilityOff as VisibilityOffIcon,
   ExpandMore as ExpandMoreIcon,
+  ExpandLess as ExpandLessIcon,
   Lock as LockIcon,
   Logout as LogoutIcon,
   Folder as FolderIcon,
@@ -699,7 +700,27 @@ const AdminDashboard = () => {
     approvalExpiresAt: session.approvalExpiresAt || null,
     lastApprovalDate: session.lastApprovalDate || null,
     lockedAt: session.lockedAt || null,
-    moduleCount: calculateModuleCount(session) // Add module count
+    moduleCount: calculateModuleCount(session), // Add module count
+    // Normalize content fields (handle both camelCase and snake_case from backend)
+    // Files: ensure it's always an array, even if empty
+    files: Array.isArray(session.files) ? session.files : (session.files ? [session.files] : []),
+    // AI Content: handle both formats
+    aiContent: session.aiContent || session.ai_content || null,
+    // Creation Mode: handle both formats
+    creationMode: session.creationMode || session.creation_mode || null,
+    // Quiz: can be stored in different formats, preserve the structure
+    quiz: session.quiz || null,
+    // Questions: check both root level and nested in quiz
+    questions: session.questions || session.quiz?.questions || session.quiz?.quiz?.questions || null,
+    // Assessment Info: handle both formats
+    assessmentInfo: session.assessmentInfo || session.assessment_info || null,
+    // Certification fields: handle both formats
+    certificate: session.certificate || session.certification || null,
+    certification: session.certification || session.certificate || null,
+    hasCertificate: session.hasCertificate !== undefined ? session.hasCertificate : (session.has_certificate !== undefined ? session.has_certificate : false),
+    // Audience/Participants: normalize this field
+    audience: session.audience || session.participants || null,
+    participants: session.participants || session.audience || null
   });
 
   // Sessions are now loaded from API
@@ -1342,6 +1363,48 @@ const AdminDashboard = () => {
       }
     }
   }, [manageSessionTab, activeTab, sessionFormData, sessionContentSnapshot, aiContentGenerated, aiKeywords, selectedFiles, selectedCreationMode, currentQuizData]);
+  
+  // IMPORTANT: Restore quiz data when navigating to assessment tab if currentQuizData is missing or has wrong structure
+  useEffect(() => {
+    if (manageSessionTab === 'assessment' && activeTab === 'manage-session') {
+      const hasWrongStructure = currentQuizData && 
+        (currentQuizData.aiContent !== undefined || currentQuizData.creationMode !== undefined || currentQuizData.files || currentQuizData.timestamp !== undefined) &&
+        !currentQuizData.title && !currentQuizData.assessmentInfo && (!currentQuizData.questions || currentQuizData.questions.length === 0);
+      
+      const isMissingQuizData = !currentQuizData || (!currentQuizData.title && !currentQuizData.assessmentInfo && (!currentQuizData.questions || currentQuizData.questions.length === 0));
+      
+      if (hasWrongStructure || isMissingQuizData) {
+        console.log('=== useEffect: Restoring quiz data for assessment tab ===');
+        console.log('currentQuizData:', currentQuizData);
+        console.log('sessionContentSnapshot.quiz:', sessionContentSnapshot?.quiz);
+        
+        if (sessionContentSnapshot?.quiz && typeof sessionContentSnapshot.quiz === 'object') {
+          const restoredQuiz = sessionContentSnapshot.quiz;
+          const restoredAssessmentInfo = sessionContentSnapshot.assessmentInfo || sessionContentSnapshot.assessment_info || null;
+          
+          // Check if restoredQuiz has quiz structure (not sessionContentSnapshot structure)
+          const hasValidQuizStructure = restoredQuiz.title || restoredQuiz.assessmentInfo || (restoredQuiz.questions && Array.isArray(restoredQuiz.questions) && restoredQuiz.questions.length > 0);
+          
+          if (hasValidQuizStructure) {
+            const quizDataToRestore = {
+              title: restoredQuiz.title || 'Questionnaire Form',
+              description: restoredQuiz.description || '',
+              questions: Array.isArray(restoredQuiz.questions) ? restoredQuiz.questions : [],
+              assessmentInfo: restoredAssessmentInfo || restoredQuiz.assessmentInfo || {
+                quizTitle: restoredQuiz.title || 'Questionnaire Form',
+                passingScore: '',
+                maxAttempts: '',
+                criteriaDescription: ''
+              }
+            };
+            console.log('Restoring currentQuizData from sessionContentSnapshot.quiz:', quizDataToRestore);
+            setCurrentQuizData(quizDataToRestore);
+          }
+        }
+      }
+    }
+  }, [manageSessionTab, activeTab, currentQuizData, sessionContentSnapshot]);
+  
   const [manageSessionsViewMode, setManageSessionsViewMode] = useState('list'); // 'list' or 'grid'
   const [manageSessionsSearchTerm, setManageSessionsSearchTerm] = useState('');
 
@@ -1387,6 +1450,30 @@ const AdminDashboard = () => {
 
   const handleManageSessionTabChange = (newTab) => {
     console.log('handleManageSessionTabChange called with tab:', newTab);
+    
+    // Save current state before switching tabs
+    // Update sessionContentSnapshot with current quiz data and assessment info
+    if (manageSessionTab === 'assessment' && currentQuizData) {
+      setSessionContentSnapshot(prev => ({
+        ...prev,
+        quiz: currentQuizData.quiz || currentQuizData || prev?.quiz || null,
+        assessmentInfo: currentQuizData.assessmentInfo || prev?.assessmentInfo || null,
+        sessionForm: {
+          ...(prev?.sessionForm || {}),
+          ...sessionFormData // Preserve form data including audience/participants
+        }
+      }));
+    }
+    
+    // Preserve form data including audience/participants when switching tabs
+    setSessionContentSnapshot(prev => ({
+      ...prev,
+      sessionForm: {
+        ...(prev?.sessionForm || {}),
+        ...sessionFormData // Always preserve current form data
+      }
+    }));
+    
     setManageSessionTab(newTab);
     setManageSessionView(newTab);
     // Reset content creator related states when switching tabs
@@ -1396,6 +1483,120 @@ const AdminDashboard = () => {
     }
     if (newTab !== 'assessment') {
       setShowQuizForm(false);
+    }
+    
+    // Restore quiz data when returning to assessment tab
+    if (newTab === 'assessment') {
+      // IMPORTANT: Check currentQuizData first (it's already properly formatted from handleLoadSessionForEdit)
+      // Check if currentQuizData has quiz structure (title, questions, assessmentInfo) - not just other properties
+      const hasQuizStructure = currentQuizData && 
+        (currentQuizData.title || currentQuizData.assessmentInfo || 
+         (currentQuizData.questions && Array.isArray(currentQuizData.questions) && currentQuizData.questions.length > 0)) &&
+        // Make sure it's not just sessionContentSnapshot structure (which has aiContent, creationMode, files, timestamp)
+        !(currentQuizData.aiContent || currentQuizData.creationMode || currentQuizData.files || currentQuizData.timestamp);
+      
+      if (hasQuizStructure) {
+        console.log('Using existing currentQuizData when navigating to assessment:', currentQuizData);
+        // currentQuizData is already set correctly, don't overwrite it
+        // Just ensure it has a new reference to trigger InteractiveQuiz useEffect
+        setCurrentQuizData({ ...currentQuizData, _restoredAt: Date.now() });
+      } else if (sessionContentSnapshot?.quiz || sessionContentSnapshot?.assessmentInfo) {
+        // Fall back to sessionContentSnapshot only if currentQuizData doesn't exist
+        console.log('Restoring quiz from sessionContentSnapshot:', {
+          quiz: sessionContentSnapshot.quiz,
+          assessmentInfo: sessionContentSnapshot.assessmentInfo
+        });
+        const quizToRestore = sessionContentSnapshot.quiz;
+        const assessmentInfoToRestore = sessionContentSnapshot.assessmentInfo || sessionContentSnapshot.assessment_info;
+        
+        // Parse assessmentInfo if it's a string
+        let parsedAssessmentInfo = assessmentInfoToRestore;
+        if (assessmentInfoToRestore && typeof assessmentInfoToRestore === 'string') {
+          try {
+            parsedAssessmentInfo = JSON.parse(assessmentInfoToRestore);
+          } catch (e) {
+            console.error('Error parsing assessmentInfo:', e);
+          }
+        }
+        
+        // Create properly formatted quiz object that InteractiveQuiz expects
+        // Handle both cases: quizToRestore might be the full quiz object or just have quiz nested
+        if (quizToRestore) {
+          // Check if quizToRestore has the structure we expect (title, questions, assessmentInfo)
+          // or if it's the raw API response structure (with quiz nested inside)
+          const quizTitle = quizToRestore.title || quizToRestore.quiz?.title || parsedAssessmentInfo?.quizTitle || 'Questionnaire Form';
+          const quizQuestions = quizToRestore.questions || quizToRestore.quiz?.questions || [];
+          const quizDescription = quizToRestore.description || quizToRestore.quiz?.description || '';
+          
+          // Use parsedAssessmentInfo if available, otherwise try to extract from quizToRestore
+          let finalAssessmentInfo = parsedAssessmentInfo;
+          if (!finalAssessmentInfo && quizToRestore.assessmentInfo) {
+            finalAssessmentInfo = typeof quizToRestore.assessmentInfo === 'string' 
+              ? JSON.parse(quizToRestore.assessmentInfo) 
+              : quizToRestore.assessmentInfo;
+          }
+          if (!finalAssessmentInfo && quizToRestore.quiz?.assessmentInfo) {
+            finalAssessmentInfo = typeof quizToRestore.quiz.assessmentInfo === 'string'
+              ? JSON.parse(quizToRestore.quiz.assessmentInfo)
+              : quizToRestore.quiz.assessmentInfo;
+          }
+          
+          const restoredQuiz = {
+            title: quizTitle,
+            description: quizDescription,
+            questions: quizQuestions,
+            assessmentInfo: finalAssessmentInfo || {
+              quizTitle: quizTitle,
+              passingScore: '',
+              maxAttempts: '',
+              criteriaDescription: ''
+            }
+          };
+          console.log('Restored quiz data from sessionContentSnapshot:', restoredQuiz);
+          console.log('quizToRestore was:', quizToRestore);
+          // Use timestamp to force new reference
+          setCurrentQuizData({ ...restoredQuiz, _restoredAt: Date.now() });
+        } else if (parsedAssessmentInfo) {
+          // If only assessmentInfo exists, create minimal quiz structure
+          setCurrentQuizData({
+            title: parsedAssessmentInfo.quizTitle || 'Questionnaire Form',
+            assessmentInfo: parsedAssessmentInfo,
+            questions: [],
+            _restoredAt: Date.now()
+          });
+        }
+      }
+      
+      // Show quiz form when navigating to assessment
+      setShowQuizForm(true);
+    }
+    
+    // Restore form data when returning to create tab
+    if (newTab === 'create' && sessionContentSnapshot?.sessionForm) {
+      setSessionFormData(prev => ({
+        ...prev,
+        ...sessionContentSnapshot.sessionForm,
+        draftId: prev.draftId || sessionContentSnapshot.sessionForm.draftId // Preserve draftId
+      }));
+    }
+    
+    // Save certification data when switching to preview tab
+    if (newTab === 'preview' && (selectedTemplate || defaultTemplateId || certificateFields)) {
+      const certificationData = certificateFields && Object.keys(certificateFields).length > 0 ? {
+        fields: certificateFields,
+        template: selectedMenuTemplate || selectedTemplate || defaultTemplateId || null
+      } : null;
+      
+      if (certificationData) {
+        setSessionContentSnapshot(prev => ({
+          ...prev,
+          certification: certificationData,
+          sessionForm: {
+            ...(prev?.sessionForm || {}),
+            ...sessionFormData
+          }
+        }));
+      }
     }
   };
 
@@ -1421,6 +1622,28 @@ const AdminDashboard = () => {
 
   // Handler for Previous button - moves to previous step
   const handlePreviousStep = () => {
+    // Save current state before navigating
+    if (manageSessionTab === 'assessment' && currentQuizData) {
+      setSessionContentSnapshot(prev => ({
+        ...prev,
+        quiz: currentQuizData.quiz || currentQuizData || prev?.quiz || null,
+        assessmentInfo: currentQuizData.assessmentInfo || prev?.assessmentInfo || null,
+        sessionForm: {
+          ...(prev?.sessionForm || {}),
+          ...sessionFormData // Preserve form data including audience/participants
+        }
+      }));
+    }
+    
+    // Preserve form data including audience/participants
+    setSessionContentSnapshot(prev => ({
+      ...prev,
+      sessionForm: {
+        ...(prev?.sessionForm || {}),
+        ...sessionFormData // Always preserve current form data
+      }
+    }));
+    
     // Auto-save progress before navigating
     handleSaveAsDraft();
     
@@ -1432,6 +1655,14 @@ const AdminDashboard = () => {
     if (previousStep === 'create') {
       setShowContentCreator(false);
       setContentCreatorView('main');
+      // Restore form data when returning to create tab
+      if (sessionContentSnapshot?.sessionForm) {
+        setSessionFormData(prev => ({
+          ...prev,
+          ...sessionContentSnapshot.sessionForm,
+          draftId: prev.draftId || sessionContentSnapshot.sessionForm.draftId
+        }));
+      }
     } else if (previousStep === 'content-creator') {
       setShowContentCreator(true);
       setContentCreatorView('main');
@@ -1443,6 +1674,41 @@ const AdminDashboard = () => {
       setShowQuizForm(true);
       setManageSessionTab('assessment');
       setManageSessionView('assessment');
+      
+      // Always restore quiz data when returning to assessment tab
+      if (sessionContentSnapshot?.quiz || sessionContentSnapshot?.assessmentInfo) {
+        const quizToRestore = sessionContentSnapshot.quiz || currentQuizData;
+        const assessmentInfoToRestore = sessionContentSnapshot.assessmentInfo || sessionContentSnapshot.assessment_info;
+        
+        // Parse assessmentInfo if it's a string
+        let parsedAssessmentInfo = assessmentInfoToRestore;
+        if (assessmentInfoToRestore && typeof assessmentInfoToRestore === 'string') {
+          try {
+            parsedAssessmentInfo = JSON.parse(assessmentInfoToRestore);
+          } catch (e) {
+            console.error('Error parsing assessmentInfo:', e);
+          }
+        }
+        
+        // Create new object reference to force InteractiveQuiz to reload
+        if (quizToRestore) {
+          const restoredQuiz = {
+            ...(typeof quizToRestore === 'object' ? quizToRestore : {}),
+            title: quizToRestore.title || quizToRestore.quiz?.title || 'Questionnaire Form',
+            description: quizToRestore.description || quizToRestore.quiz?.description || '',
+            questions: quizToRestore.questions || quizToRestore.quiz?.questions || [],
+            assessmentInfo: parsedAssessmentInfo || quizToRestore.assessmentInfo || {}
+          };
+          setCurrentQuizData({ ...restoredQuiz, _restoredAt: Date.now() });
+        } else if (parsedAssessmentInfo) {
+          setCurrentQuizData({
+            title: parsedAssessmentInfo.quizTitle || 'Questionnaire Form',
+            assessmentInfo: parsedAssessmentInfo,
+            questions: [],
+            _restoredAt: Date.now()
+          });
+        }
+      }
     }
   };
 
@@ -1465,7 +1731,34 @@ const AdminDashboard = () => {
         // Mark assessment as skipped
         setSkippedSteps(prev => new Set([...prev, 'assessment']));
       }
+      // Save current quiz data and assessment info to sessionContentSnapshot before proceeding
+      if (currentQuizData) {
+        setSessionContentSnapshot(prev => ({
+          ...prev,
+          quiz: currentQuizData.quiz || currentQuizData || prev?.quiz || null,
+          assessmentInfo: currentQuizData.assessmentInfo || prev?.assessmentInfo || null,
+          sessionForm: {
+            ...(prev?.sessionForm || {}),
+            ...sessionFormData // Preserve form data including audience/participants
+          }
+        }));
+      }
       // Save draft with current quiz data (even if empty)
+      handleSaveAsDraft();
+    } else if (manageSessionTab === 'certification') {
+      // Save certification data to sessionContentSnapshot before proceeding
+      const certificationData = certificateFields && Object.keys(certificateFields).length > 0 ? {
+        fields: certificateFields,
+        template: selectedMenuTemplate || defaultTemplateId || null
+      } : null;
+      
+      setSessionContentSnapshot(prev => ({
+        ...prev,
+        certification: certificationData,
+        sessionForm: { ...(prev?.sessionForm || {}), ...sessionFormData }
+      }));
+      
+      // Auto-save progress before navigating
       handleSaveAsDraft();
     } else {
       // Auto-save progress before navigating (saves as one draft)
@@ -1514,7 +1807,42 @@ const AdminDashboard = () => {
       setContentCreatorView('main');
     } else if (nextStep === 'assessment') {
       setShowContentCreator(false);
-      setShowQuizForm(false);
+      setShowQuizForm(true);
+      
+      // Always restore quiz data when navigating forward to assessment tab
+      if (sessionContentSnapshot?.quiz || sessionContentSnapshot?.assessmentInfo) {
+        const quizToRestore = sessionContentSnapshot.quiz || currentQuizData;
+        const assessmentInfoToRestore = sessionContentSnapshot.assessmentInfo || sessionContentSnapshot.assessment_info;
+        
+        // Parse assessmentInfo if it's a string
+        let parsedAssessmentInfo = assessmentInfoToRestore;
+        if (assessmentInfoToRestore && typeof assessmentInfoToRestore === 'string') {
+          try {
+            parsedAssessmentInfo = JSON.parse(assessmentInfoToRestore);
+          } catch (e) {
+            console.error('Error parsing assessmentInfo:', e);
+          }
+        }
+        
+        // Create new object reference to force InteractiveQuiz to reload
+        if (quizToRestore) {
+          const restoredQuiz = {
+            ...(typeof quizToRestore === 'object' ? quizToRestore : {}),
+            title: quizToRestore.title || quizToRestore.quiz?.title || 'Questionnaire Form',
+            description: quizToRestore.description || quizToRestore.quiz?.description || '',
+            questions: quizToRestore.questions || quizToRestore.quiz?.questions || [],
+            assessmentInfo: parsedAssessmentInfo || quizToRestore.assessmentInfo || {}
+          };
+          setCurrentQuizData({ ...restoredQuiz, _restoredAt: Date.now() });
+        } else if (parsedAssessmentInfo) {
+          setCurrentQuizData({
+            title: parsedAssessmentInfo.quizTitle || 'Questionnaire Form',
+            assessmentInfo: parsedAssessmentInfo,
+            questions: [],
+            _restoredAt: Date.now()
+          });
+        }
+      }
     } else if (nextStep === 'certification') {
       setShowContentCreator(false);
       setShowQuizForm(false);
@@ -1629,7 +1957,42 @@ const AdminDashboard = () => {
       setShowContentCreator(true);
     } else if (nextStep === 'assessment') {
       setShowContentCreator(false);
-      setShowQuizForm(false);
+      setShowQuizForm(true);
+      
+      // Always restore quiz data when navigating forward to assessment tab
+      if (sessionContentSnapshot?.quiz || sessionContentSnapshot?.assessmentInfo) {
+        const quizToRestore = sessionContentSnapshot.quiz || currentQuizData;
+        const assessmentInfoToRestore = sessionContentSnapshot.assessmentInfo || sessionContentSnapshot.assessment_info;
+        
+        // Parse assessmentInfo if it's a string
+        let parsedAssessmentInfo = assessmentInfoToRestore;
+        if (assessmentInfoToRestore && typeof assessmentInfoToRestore === 'string') {
+          try {
+            parsedAssessmentInfo = JSON.parse(assessmentInfoToRestore);
+          } catch (e) {
+            console.error('Error parsing assessmentInfo:', e);
+          }
+        }
+        
+        // Create new object reference to force InteractiveQuiz to reload
+        if (quizToRestore) {
+          const restoredQuiz = {
+            ...(typeof quizToRestore === 'object' ? quizToRestore : {}),
+            title: quizToRestore.title || quizToRestore.quiz?.title || 'Questionnaire Form',
+            description: quizToRestore.description || quizToRestore.quiz?.description || '',
+            questions: quizToRestore.questions || quizToRestore.quiz?.questions || [],
+            assessmentInfo: parsedAssessmentInfo || quizToRestore.assessmentInfo || {}
+          };
+          setCurrentQuizData({ ...restoredQuiz, _restoredAt: Date.now() });
+        } else if (parsedAssessmentInfo) {
+          setCurrentQuizData({
+            title: parsedAssessmentInfo.quizTitle || 'Questionnaire Form',
+            assessmentInfo: parsedAssessmentInfo,
+            questions: [],
+            _restoredAt: Date.now()
+          });
+        }
+      }
     } else if (nextStep === 'certification') {
       setShowContentCreator(false);
       setShowQuizForm(false);
@@ -1675,7 +2038,7 @@ const AdminDashboard = () => {
     } catch (error) {
       console.error('Logout failed:', error);
     } finally {
-      navigate('/login');
+    navigate('/login');
     }
   };
 
@@ -1904,19 +2267,10 @@ const AdminDashboard = () => {
   }, [employees]);
 
   // Map frontend session type values to backend values
-  const mapSessionTypeToBackend = (frontendType) => {
-    const typeMap = {
-      'compliance': 'Compliance',
-      'learning': 'Technical Training',
-      'engagement': 'Employee Wellbeing',
-      'performance': 'Leadership Development',
-      'culture': 'General',
-      'dei': 'General',
-      'safety': 'General',
-      'security': 'General',
-      'live-training': 'General'
-    };
-    return typeMap[frontendType] || frontendType || 'General';
+  // Helper function to get UI label for session type (for display only)
+  // Since we now store the label directly, this just returns the value as-is
+  const getSessionTypeLabel = (typeValue) => {
+    return typeValue || 'Not specified';
   };
 
   const handleSessionFormChange = (field, value) => {
@@ -2281,6 +2635,34 @@ Make the content professional, educational, and suitable for workplace training.
     setManageSessionView('assessment');
     // Reset showQuizForm since we're using manageSessionTab for navigation
     setShowQuizForm(false);
+    
+    // CRITICAL FIX: If we're editing an existing session and currentQuizData already has valid quiz structure,
+    // DON'T overwrite it with the wrong structure. Preserve the existing quiz data.
+    const hasValidQuizData = currentQuizData && 
+      (currentQuizData.title || currentQuizData.assessmentInfo || 
+       (currentQuizData.questions && Array.isArray(currentQuizData.questions) && currentQuizData.questions.length > 0)) &&
+      // Make sure it's not the wrong structure (with aiContent, creationMode, files, timestamp)
+      !(currentQuizData.aiContent !== undefined || currentQuizData.creationMode !== undefined || currentQuizData.files || currentQuizData.timestamp !== undefined);
+    
+    if (hasValidQuizData) {
+      console.log('Preserving existing quiz data when navigating to assessment tab:', currentQuizData);
+      // Just update sessionContentSnapshot with current session data, but don't overwrite currentQuizData
+      const contentMetadata = mapFilesToMetadata(selectedFiles);
+      setSessionContentSnapshot(prev => ({
+        ...prev,
+        aiContent: prev?.aiContent || (aiContentGenerated ? { keywords: aiKeywords } : null),
+        creationMode: prev?.creationMode || selectedCreationMode,
+        files: contentMetadata,
+        sessionForm: { ...(prev?.sessionForm || {}), ...sessionFormData },
+        // CRITICAL: Preserve existing quiz and assessmentInfo in sessionContentSnapshot
+        quiz: prev?.quiz || currentQuizData,
+        assessmentInfo: prev?.assessmentInfo || currentQuizData?.assessmentInfo
+      }));
+      console.log('Navigation set: activeTab=manage-session, manageSessionTab=assessment (preserved quiz data)');
+      return; // Exit early to preserve quiz data
+    }
+    
+    // Only proceed with the old logic if we don't have valid quiz data (new session creation)
     // Store current session data for quiz
     const contentMetadata = mapFilesToMetadata(selectedFiles);
     const snapshot = {
@@ -2342,19 +2724,33 @@ Make the content professional, educational, and suitable for workplace training.
     const resolvedCreationMode = sessionContentSnapshot?.creationMode ?? currentQuizData?.creationMode ?? selectedCreationMode;
     const resolvedFiles = sessionContentSnapshot?.files ?? mapFilesToMetadata(currentQuizData?.files || selectedFiles);
 
+    // Store quiz data in sessionContentSnapshot as well for handleSaveAsDraft to access
+    // IMPORTANT: Always save assessment info to sessionContentSnapshot
     setSessionContentSnapshot(prev => ({
+      ...prev,
+      quiz: quizData.quiz || quizData, // Store quiz data here too
+      assessmentInfo: quizData.assessmentInfo || prev?.assessmentInfo || null, // Always preserve assessment info
       aiContent: resolvedAiContent,
       creationMode: resolvedCreationMode,
       files: resolvedFiles,
       sessionForm: { ...(prev?.sessionForm || {}), ...sessionFormData },
     }));
 
-    // Update currentQuizData
+    // Update currentQuizData - this is the primary source for quiz data
+    // IMPORTANT: Only include quiz structure properties, not sessionContentSnapshot properties
+    // Preserve the structure that InteractiveQuiz expects
     setCurrentQuizData({
-      ...quizData,
-      aiContent: resolvedAiContent,
-      creationMode: resolvedCreationMode,
-      files: resolvedFiles,
+      title: quizData.title || quizData.quiz?.title || 'Questionnaire Form',
+      description: quizData.description || quizData.quiz?.description || '',
+      questions: quizData.questions || quizData.quiz?.questions || [],
+      assessmentInfo: quizData.assessmentInfo || quizData.quiz?.assessmentInfo || {
+        quizTitle: quizData.title || quizData.quiz?.title || 'Questionnaire Form',
+        passingScore: '',
+        maxAttempts: '',
+        criteriaDescription: ''
+      }
+      // DO NOT include aiContent, creationMode, files here - those belong in sessionContentSnapshot
+      // InteractiveQuiz only needs title, description, questions, assessmentInfo
     });
     
     // Use the universal save as draft function
@@ -2392,15 +2788,25 @@ Make the content professional, educational, and suitable for workplace training.
       const resolvedQuiz = quizData?.quiz || quizData || null;
       const resolvedCreationMode = sessionContentSnapshot?.creationMode ?? selectedCreationMode;
       
+      // Get certification data if available
+      const resolvedCertification = sessionContentSnapshot?.certification || 
+                                   (certificateFields && Object.keys(certificateFields).length > 0 ? {
+                                     fields: certificateFields,
+                                     template: selectedMenuTemplate || defaultTemplateId || null
+                                   } : null);
+      
       const sessionData = {
         title: resolvedSessionForm.title || quizData.title || 'Untitled Session',
-        type: mapSessionTypeToBackend(resolvedSessionForm.type) || 'General',
+        type: resolvedSessionForm.type || 'Not specified',
         description: resolvedSessionForm.description || quizData.description || '',
         skills: resolvedSessionForm.skills || [],
         files: resolvedFiles,
         quiz: resolvedQuiz,
         ai_content: resolvedAiContent,
         creation_mode: resolvedCreationMode,
+        audience: resolvedSessionForm.audience || null, // Add audience field
+        certification: resolvedCertification, // Add certification data
+        has_certificate: !!(resolvedCertification && (resolvedCertification.fields || resolvedCertification.template)), // Add has_certificate flag
         status: 'published',
         published_at: new Date().toISOString()
       };
@@ -2436,14 +2842,14 @@ Make the content professional, educational, and suitable for workplace training.
         }
       }
       
-      if (existingSession && existingSession.id) {
+        if (existingSession && existingSession.id) {
         // Check if the ID is a database ID (numeric) - if not, it might be a temporary ID
         const existingIdIsNumeric = typeof existingSession.id === 'number' || (typeof existingSession.id === 'string' && /^\d+$/.test(existingSession.id) && existingSession.id.length < 12);
         
         if (existingIdIsNumeric) {
           // Update existing session using its database ID
           try {
-            savedSession = await sessionAPI.update(existingSession.id, sessionData);
+          savedSession = await sessionAPI.update(existingSession.id, sessionData);
           } catch (updateError) {
             console.error('Failed to update session by ID, trying to find in backend:', updateError);
             // If update fails, try to find the session in the backend by fetching all and matching by title
@@ -2456,7 +2862,7 @@ Make the content professional, educational, and suitable for workplace training.
               );
               if (backendSession && backendSession.id) {
                 savedSession = await sessionAPI.update(backendSession.id, sessionData);
-              } else {
+        } else {
                 throw new Error('Session not found in backend');
               }
             } catch (retryError) {
@@ -2487,9 +2893,9 @@ Make the content professional, educational, and suitable for workplace training.
         }
       } else if (sessionId && isNumericId) {
         // We have a numeric ID but didn't find it locally - try to update directly (might be a database ID)
-        try {
-          savedSession = await sessionAPI.update(sessionId, sessionData);
-        } catch (updateError) {
+          try {
+            savedSession = await sessionAPI.update(sessionId, sessionData);
+          } catch (updateError) {
           console.error('Failed to update with numeric ID, trying to find by title:', updateError);
           // If update fails, try to find by title
           try {
@@ -2519,19 +2925,29 @@ Make the content professional, educational, and suitable for workplace training.
         setSessionFormData(prev => ({ ...prev, draftId: savedSession.id }));
       }
       
-      // Remove from drafts (use savedSession.id to ensure we remove the correct one)
-      setDraftSessions(prev => prev.filter(s => s.id !== savedSession.id));
-      
-      // Add to published sessions
+      // IMPORTANT: Use status from backend response, not what we sent
+      // Normalize the response to ensure status is correct
       const normalized = normalizePublishedSession(savedSession);
+      
+      // Ensure we use the status from the backend response
+      if (normalized.status && normalized.status !== 'draft') {
+        // Remove from drafts if it's now published/scheduled
+        setDraftSessions(prev => prev.filter(s => s.id !== normalized.id));
+      }
+      
+      // Add/update in published sessions (always use status from backend)
       setPublishedSessions(prev => {
-        const filtered = prev.filter(s => s.id !== savedSession.id);
-        return [normalized, ...filtered];
+        const filtered = prev.filter(s => s.id !== normalized.id);
+        // Only add to published if status is published or scheduled (not draft)
+        if (normalized.status === 'published' || normalized.status === 'scheduled') {
+          return [normalized, ...filtered];
+        }
+        return filtered; // Don't add drafts to published
       });
       
-      // Also update savedSessions
+      // Update savedSessions with status from backend
       setSavedSessions(prev => {
-        const filtered = prev.filter(s => s.id !== savedSession.id);
+        const filtered = prev.filter(s => s.id !== normalized.id);
         return [normalized, ...filtered];
       });
     
@@ -2706,25 +3122,79 @@ Make the content professional, educational, and suitable for workplace training.
       }
       
       // Build session data for API
-      const resolvedSessionForm = sessionContentSnapshot?.sessionForm || sessionFormData;
+      // Prioritize current sessionFormData over sessionContentSnapshot to ensure latest values are used
+      const snapshotForm = sessionContentSnapshot?.sessionForm || {};
+      const resolvedSessionForm = {
+        ...snapshotForm,
+        // Always prefer current sessionFormData values if they exist (not empty/undefined)
+        title: sessionFormData.title || snapshotForm.title || '',
+        type: sessionFormData.type && sessionFormData.type !== 'Not specified' ? sessionFormData.type : (snapshotForm.type || 'Not specified'),
+        audience: sessionFormData.audience && sessionFormData.audience !== 'Not specified' ? sessionFormData.audience : (snapshotForm.audience || null),
+        description: sessionFormData.description || snapshotForm.description || '',
+        skills: (sessionFormData.skills && sessionFormData.skills.length > 0) ? sessionFormData.skills : (snapshotForm.skills || [])
+      };
       const resolvedAiContent = sessionContentSnapshot?.aiContent ?? (aiContentGenerated ? { keywords: aiKeywords } : null);
       const resolvedFiles = sessionContentSnapshot?.files ?? mapFilesToMetadata(selectedFiles);
       // Get quiz data from multiple sources - prioritize currentQuizData, then check sessionContentSnapshot
-      const resolvedQuiz = currentQuizData?.quiz || 
-                          currentQuizData || 
-                          sessionContentSnapshot?.quiz || 
-                          null;
+      // If we're on the assessment step, also check if InteractiveQuiz has unsaved data
+      // Note: We can't directly access InteractiveQuiz's internal state, so we rely on currentQuizData
+      // which should be updated when user interacts with the quiz form
+      let resolvedQuiz = currentQuizData?.quiz || 
+                        currentQuizData || 
+                        sessionContentSnapshot?.quiz || 
+                        null;
+      
+      // Extract assessmentInfo from quiz data if it exists (for saving to backend assessment_info field)
+      let resolvedAssessmentInfo = null;
+      if (resolvedQuiz && resolvedQuiz.assessmentInfo) {
+        resolvedAssessmentInfo = resolvedQuiz.assessmentInfo;
+      } else if (currentQuizData && currentQuizData.assessmentInfo) {
+        resolvedAssessmentInfo = currentQuizData.assessmentInfo;
+      } else if (sessionContentSnapshot && sessionContentSnapshot.assessmentInfo) {
+        resolvedAssessmentInfo = sessionContentSnapshot.assessmentInfo;
+      }
+      
+      // If we're on assessment step and have no quiz data, check if there's existing quiz data from the session
+      // This handles the case where user is editing an existing quiz but hasn't saved it yet
+      if (manageSessionTab === 'assessment' && !resolvedQuiz) {
+        // Try to get quiz from existing session if we have a draftId
+        if (existingDraftId) {
+          const existingSession = draftSessions.find(d => d.id === existingDraftId) ||
+                                 savedSessions.find(s => s.id === existingDraftId) ||
+                                 publishedSessions.find(s => s.id === existingDraftId);
+          if (existingSession?.quiz) {
+            resolvedQuiz = existingSession.quiz;
+            // Also extract assessmentInfo from existing session
+            if (existingSession.assessmentInfo || existingSession.assessment_info) {
+              resolvedAssessmentInfo = existingSession.assessmentInfo || existingSession.assessment_info;
+            } else if (existingSession.quiz.assessmentInfo) {
+              resolvedAssessmentInfo = existingSession.quiz.assessmentInfo;
+            }
+          }
+        }
+      }
       const resolvedCreationMode = sessionContentSnapshot?.creationMode ?? selectedCreationMode;
       
+      // Get certification data if available
+      const resolvedCertification = sessionContentSnapshot?.certification || 
+                                   (certificateFields && Object.keys(certificateFields).length > 0 ? {
+                                     fields: certificateFields,
+                                     template: selectedMenuTemplate || defaultTemplateId || null
+                                   } : null);
+      
       const sessionData = {
-        title: draftTitle,
-        type: mapSessionTypeToBackend(resolvedSessionForm.type) || 'General',
+        title: resolvedSessionForm.title || draftTitle,
+        type: resolvedSessionForm.type || 'Not specified',
         description: resolvedSessionForm.description || '',
         skills: resolvedSessionForm.skills || [],
         files: resolvedFiles,
         quiz: resolvedQuiz,
+        assessment_info: resolvedAssessmentInfo, // Save assessmentInfo separately to backend assessment_info field
         ai_content: resolvedAiContent,
         creation_mode: resolvedCreationMode,
+        audience: resolvedSessionForm.audience || null, // Add audience field
+        certification: resolvedCertification, // Add certification data
+        has_certificate: !!(resolvedCertification && (resolvedCertification.fields || resolvedCertification.template)), // Add has_certificate flag
         status: 'draft'
       };
       
@@ -2749,10 +3219,10 @@ Make the content professional, educational, and suitable for workplace training.
         const existingIdIsNumeric = typeof existingDraft.id === 'number' || (typeof existingDraft.id === 'string' && /^\d+$/.test(existingDraft.id) && existingDraft.id.length < 12);
         
         if (existingIdIsNumeric) {
-          // Update existing session using its database ID
+        // Update existing session using its database ID
           try {
-            savedSession = await sessionAPI.update(existingDraft.id, sessionData);
-            // Update draftId with the actual ID from server
+        savedSession = await sessionAPI.update(existingDraft.id, sessionData);
+        // Update draftId with the actual ID from server
             if (savedSession.id) {
               setSessionFormData(prev => ({ ...prev, draftId: savedSession.id }));
             }
@@ -2789,11 +3259,11 @@ Make the content professional, educational, and suitable for workplace training.
             );
             if (backendSession && backendSession.id) {
               savedSession = await sessionAPI.update(backendSession.id, sessionData);
-              if (savedSession.id) {
-                setSessionFormData(prev => ({ ...prev, draftId: savedSession.id }));
-              }
-            } else {
-              // Create new session
+        if (savedSession.id) {
+          setSessionFormData(prev => ({ ...prev, draftId: savedSession.id }));
+        }
+      } else {
+        // Create new session
               savedSession = await sessionAPI.create(sessionData);
               if (savedSession.id) {
                 setSessionFormData(prev => ({ ...prev, draftId: savedSession.id }));
@@ -2816,15 +3286,28 @@ Make the content professional, educational, and suitable for workplace training.
         }
       }
       
-      // Update local state
+      // Update local state - IMPORTANT: Use status from backend response
       const normalized = normalizePublishedSession(savedSession);
-      setDraftSessions(prev => {
-        const filtered = prev.filter(d => d.id !== savedSession.id);
-        return [normalized, ...filtered];
-      });
       
+      // Update based on status from backend response
+      if (normalized.status === 'draft') {
+        // Keep in drafts if status is draft
+        setDraftSessions(prev => {
+          const filtered = prev.filter(d => d.id !== normalized.id);
+          return [normalized, ...filtered];
+        });
+      } else if (normalized.status === 'published' || normalized.status === 'scheduled') {
+        // Remove from drafts and add to published
+        setDraftSessions(prev => prev.filter(d => d.id !== normalized.id));
+        setPublishedSessions(prev => {
+          const filtered = prev.filter(s => s.id !== normalized.id);
+          return [normalized, ...filtered];
+        });
+      }
+      
+      // Always update savedSessions with status from backend
       setSavedSessions(prev => {
-        const filtered = prev.filter(s => s.id !== savedSession.id);
+        const filtered = prev.filter(s => s.id !== normalized.id);
         return [normalized, ...filtered];
       });
 
@@ -3065,12 +3548,15 @@ Make the content professional, educational, and suitable for workplace training.
     };
 
     setCurrentQuizData(quizWithContent);
-    setSessionContentSnapshot({
+    // Always update sessionContentSnapshot with quiz data and assessment info
+    setSessionContentSnapshot(prev => ({
+      quiz: quizWithContent.quiz || quizWithContent,
+      assessmentInfo: quizData.assessmentInfo || quizWithContent.assessmentInfo || prev?.assessmentInfo || null,
       aiContent: resolvedAiContent,
       creationMode: resolvedCreationMode,
       files: resolvedFiles,
-      sessionForm: { ...resolvedSessionForm },
-    });
+      sessionForm: { ...resolvedSessionForm, ...sessionFormData }, // Preserve current form data including audience/participants
+    }));
 
     // Save as draft immediately to ensure questions are saved
     handleSaveAsDraft();
@@ -3185,6 +3671,456 @@ Make the content professional, educational, and suitable for workplace training.
   };
 
   // Save edited session
+  // Load session data for editing - called when Edit button is clicked
+  const handleLoadSessionForEdit = async (session) => {
+    if (!session || !session.id) return;
+    
+    // Check if start date has passed
+    const startDateTime = session.scheduledDateTime 
+      ? new Date(session.scheduledDateTime)
+      : null;
+    const now = new Date();
+    
+    if (startDateTime && startDateTime <= now) {
+      showToast('Cannot edit session after start date/time', 'error');
+      return;
+    }
+    
+    try {
+      // Fetch full session details to ensure we have all data
+      // IMPORTANT: Use detail endpoint (getById) which includes quiz and assessment_info
+      // List endpoint (/auth/sessions/) excludes these fields for performance
+      console.log('=== handleLoadSessionForEdit - Fetching session details ===');
+      console.log('Fetching session with ID:', session.id);
+      console.log('Using endpoint: /auth/sessions/' + session.id + '/');
+      
+      const fullSession = await sessionAPI.getById(session.id);
+      console.log('=== handleLoadSessionForEdit - Raw API Response from detail endpoint ===');
+      console.log('fullSession:', fullSession);
+      console.log('fullSession.quiz:', fullSession.quiz);
+      console.log('fullSession.assessment_info:', fullSession.assessment_info);
+      console.log('fullSession.assessmentInfo:', fullSession.assessmentInfo);
+      
+      // Verify that we got quiz data from the detail endpoint
+      if (!fullSession.quiz && !fullSession.assessment_info && !fullSession.assessmentInfo) {
+        console.warn('WARNING: Detail endpoint response does not include quiz or assessment_info!');
+        console.warn('This might be a backend issue - the detail endpoint should include quiz and assessment_info');
+        console.warn('Full response structure:', Object.keys(fullSession));
+      }
+      
+      const normalizedSession = normalizePublishedSession(fullSession);
+      console.log('normalizedSession after normalize:', normalizedSession);
+      console.log('normalizedSession.quiz:', normalizedSession.quiz);
+      console.log('normalizedSession.assessmentInfo:', normalizedSession.assessmentInfo);
+      console.log('normalizedSession.assessment_info:', normalizedSession.assessment_info);
+      
+      // Navigate to edit mode in manage session
+      setActiveTab('manage-session');
+      setManageSessionTab('create');
+      setManageSessionView('create');
+      
+      // Load session form data
+      setSessionFormData({
+        title: normalizedSession.title || '',
+        type: normalizedSession.type || '',
+        audience: normalizedSession.audience || normalizedSession.participants || '',
+        description: normalizedSession.description || '',
+        skills: normalizedSession.skills || [],
+        draftId: normalizedSession.id // Keep track of session ID for updates
+      });
+      
+      // Load files
+      if (normalizedSession.files && Array.isArray(normalizedSession.files) && normalizedSession.files.length > 0) {
+        // Restore files from session data
+        const restoredFiles = normalizedSession.files.map((fileInfo) => {
+          return {
+            id: fileInfo.id || `${fileInfo.name}-${fileInfo.size}-${fileInfo.uploadedAt}`,
+            name: fileInfo.name,
+            size: fileInfo.size || 0,
+            type: fileInfo.type || 'application/octet-stream',
+            uploadedAt: fileInfo.uploadedAt || new Date().toISOString(),
+            dataUrl: fileInfo.dataUrl || null,
+            url: fileInfo.url || null,
+            downloadUrl: fileInfo.downloadUrl || null,
+            link: fileInfo.link || null,
+            fileObject: null
+          };
+        });
+        setSelectedFiles(restoredFiles);
+        // Save files to sessionContentSnapshot so they appear when navigating
+        setSessionContentSnapshot(prev => ({
+          ...prev,
+          files: restoredFiles,
+          sessionForm: { ...(prev?.sessionForm || {}), ...sessionFormData }
+        }));
+      } else {
+        setSelectedFiles([]);
+      }
+      
+      // Load quiz data - handle different quiz data structures
+      // InteractiveQuiz expects: { title, assessmentInfo: { quizTitle, passingScore, maxAttempts, criteriaDescription }, questions: [...] }
+      // Priority: root level assessment_info (backend field) > quiz.assessmentInfo > quiz.assessment_info
+      
+      // Debug logging
+      console.log('=== Loading Quiz Data for Edit ===');
+      console.log('normalizedSession.assessmentInfo:', normalizedSession.assessmentInfo);
+      console.log('normalizedSession.assessment_info:', normalizedSession.assessment_info);
+      console.log('normalizedSession.quiz:', normalizedSession.quiz);
+      console.log('normalizedSession.questions:', normalizedSession.questions);
+      console.log('fullSession.quiz (raw):', fullSession.quiz);
+      console.log('fullSession.assessment_info (raw):', fullSession.assessment_info);
+      
+      // Check if we have quiz data - either in normalizedSession.quiz OR in root level assessment_info
+      // The API response might have quiz data at root level assessment_info even if quiz is null
+      // IMPORTANT: Also check raw fullSession.quiz in case normalization lost it
+      const hasQuizData = normalizedSession.quiz || 
+                          fullSession.quiz ||
+                          normalizedSession.assessmentInfo || 
+                          normalizedSession.assessment_info ||
+                          fullSession.assessment_info ||
+                          (normalizedSession.questions && Array.isArray(normalizedSession.questions) && normalizedSession.questions.length > 0) ||
+                          (fullSession.quiz && fullSession.quiz.questions && Array.isArray(fullSession.quiz.questions) && fullSession.quiz.questions.length > 0);
+      
+      console.log('hasQuizData check result:', hasQuizData);
+      console.log('normalizedSession.quiz exists:', !!normalizedSession.quiz);
+      console.log('fullSession.quiz exists:', !!fullSession.quiz);
+      
+      if (hasQuizData) {
+        // Use normalizedSession.quiz if it exists, otherwise fall back to raw fullSession.quiz
+        // This handles cases where normalization might have lost the quiz data
+        const quizData = normalizedSession.quiz || fullSession.quiz || {};
+        console.log('quizData (after fallback to fullSession.quiz):', quizData);
+        console.log('quizData keys:', Object.keys(quizData));
+        console.log('quizData.assessmentInfo:', quizData.assessmentInfo);
+        console.log('quizData.assessment_info:', quizData.assessment_info);
+        
+        // Construct assessmentInfo object - check root level first (backend stores it separately)
+        let finalAssessmentInfo = null;
+        
+        // First check: root level assessment_info (backend field - highest priority)
+        if (normalizedSession.assessmentInfo || normalizedSession.assessment_info) {
+          const rootAssessmentInfo = normalizedSession.assessmentInfo || normalizedSession.assessment_info;
+          console.log('Found root level assessmentInfo:', rootAssessmentInfo);
+          try {
+            const assessmentInfoObj = typeof rootAssessmentInfo === 'string' ? JSON.parse(rootAssessmentInfo) : rootAssessmentInfo;
+            console.log('Parsed root level assessmentInfo:', assessmentInfoObj);
+            // Helper function to get value with proper fallback (preserves empty strings)
+            const getValue = (obj, ...keys) => {
+              for (const key of keys) {
+                if (obj && obj[key] !== undefined && obj[key] !== null) {
+                  return String(obj[key]);
+                }
+              }
+              return null; // Return null to indicate value not found
+            };
+            
+            // Extract values directly from assessmentInfoObj (preserve even if empty strings)
+            // Only fall back to quizData if the value is truly undefined/null
+            finalAssessmentInfo = {
+              quizTitle: getValue(assessmentInfoObj, 'quizTitle', 'quiz_title') ?? getValue(quizData, 'title', 'quizTitle') ?? '',
+              passingScore: getValue(assessmentInfoObj, 'passingScore', 'passing_score') ?? getValue(quizData, 'passingScore', 'passing_score') ?? '',
+              maxAttempts: getValue(assessmentInfoObj, 'maxAttempts', 'max_attempts') ?? getValue(quizData, 'maxAttempts', 'max_attempts') ?? '',
+              criteriaDescription: getValue(assessmentInfoObj, 'criteriaDescription', 'criteria_description', 'criteria', 'description') ?? getValue(quizData, 'criteriaDescription', 'criteria') ?? ''
+            };
+            console.log('Using root level assessmentInfo:', finalAssessmentInfo);
+            console.log('Raw assessmentInfoObj values:', {
+              quizTitle: assessmentInfoObj.quizTitle,
+              passingScore: assessmentInfoObj.passingScore,
+              maxAttempts: assessmentInfoObj.maxAttempts,
+              criteriaDescription: assessmentInfoObj.criteriaDescription
+            });
+          } catch (e) {
+            console.error('Error parsing root level assessmentInfo:', e);
+          }
+        }
+        // Second check: quiz.assessmentInfo (camelCase - inside quiz object)
+        if (!finalAssessmentInfo && quizData.assessmentInfo) {
+          try {
+            const quizAssessmentInfo = typeof quizData.assessmentInfo === 'string' ? JSON.parse(quizData.assessmentInfo) : quizData.assessmentInfo;
+            console.log('Parsed quiz.assessmentInfo:', quizAssessmentInfo);
+            finalAssessmentInfo = {
+              quizTitle: quizAssessmentInfo.quizTitle || quizAssessmentInfo.quiz_title || quizData.title || '',
+              passingScore: quizAssessmentInfo.passingScore || quizAssessmentInfo.passing_score || '',
+              maxAttempts: quizAssessmentInfo.maxAttempts || quizAssessmentInfo.max_attempts || '',
+              criteriaDescription: quizAssessmentInfo.criteriaDescription || quizAssessmentInfo.criteria_description || quizAssessmentInfo.criteria || quizAssessmentInfo.description || ''
+            };
+            console.log('Using quiz.assessmentInfo:', finalAssessmentInfo);
+          } catch (e) {
+            console.error('Error parsing quiz.assessmentInfo:', e);
+          }
+        }
+        // Third check: quiz.assessment_info (snake_case - inside quiz object)
+        if (!finalAssessmentInfo && quizData.assessment_info) {
+          try {
+            const quizAssessmentInfo = typeof quizData.assessment_info === 'string' ? JSON.parse(quizData.assessment_info) : quizData.assessment_info;
+            console.log('Parsed quiz.assessment_info:', quizAssessmentInfo);
+            finalAssessmentInfo = {
+              quizTitle: quizAssessmentInfo.quizTitle || quizAssessmentInfo.quiz_title || quizData.title || '',
+              passingScore: quizAssessmentInfo.passingScore || quizAssessmentInfo.passing_score || '',
+              maxAttempts: quizAssessmentInfo.maxAttempts || quizAssessmentInfo.max_attempts || '',
+              criteriaDescription: quizAssessmentInfo.criteriaDescription || quizAssessmentInfo.criteria_description || quizAssessmentInfo.criteria || quizAssessmentInfo.description || ''
+            };
+            console.log('Using quiz.assessment_info:', finalAssessmentInfo);
+          } catch (e) {
+            console.error('Error parsing quiz.assessment_info:', e);
+          }
+        }
+        // Fourth check: Check if assessment info fields are directly in quiz object (passingScore, maxAttempts, etc.)
+        if (!finalAssessmentInfo && (quizData.passingScore || quizData.maxAttempts || quizData.passing_score || quizData.max_attempts)) {
+          console.log('Found assessment fields directly in quiz object');
+          finalAssessmentInfo = {
+            quizTitle: quizData.quizTitle || quizData.title || '',
+            passingScore: quizData.passingScore || quizData.passing_score || '',
+            maxAttempts: quizData.maxAttempts || quizData.max_attempts || '',
+            criteriaDescription: quizData.criteriaDescription || quizData.criteria_description || quizData.criteria || quizData.description || ''
+          };
+          console.log('Using direct quiz fields:', finalAssessmentInfo);
+        }
+        
+        // Construct quiz data in the format InteractiveQuiz expects
+        // Use quizData.title for the title (from API response)
+        const quizTitle = quizData.title || quizData.quizTitle || finalAssessmentInfo?.quizTitle || 'Questionnaire Form';
+        
+        // Ensure finalAssessmentInfo exists and has all required fields
+        // IMPORTANT: If finalAssessmentInfo was set from root level assessmentInfo, preserve ALL its values
+        // Only fill in missing values, don't overwrite existing ones
+        if (!finalAssessmentInfo) {
+          finalAssessmentInfo = {
+            quizTitle: quizData.title || quizData.quizTitle || quizTitle || '',
+            passingScore: quizData.passingScore !== undefined && quizData.passingScore !== null ? String(quizData.passingScore) : (quizData.passing_score !== undefined && quizData.passing_score !== null ? String(quizData.passing_score) : ''),
+            maxAttempts: quizData.maxAttempts !== undefined && quizData.maxAttempts !== null ? String(quizData.maxAttempts) : (quizData.max_attempts !== undefined && quizData.max_attempts !== null ? String(quizData.max_attempts) : ''),
+            criteriaDescription: quizData.criteriaDescription || quizData.criteria_description || quizData.criteria || quizData.description || ''
+          };
+        } else {
+          // finalAssessmentInfo already has values from root level assessmentInfo
+          // Only fill in quizTitle if it's missing, but DON'T overwrite other values
+          if (!finalAssessmentInfo.quizTitle) {
+            finalAssessmentInfo.quizTitle = quizData.title || quizData.quizTitle || quizTitle || '';
+          }
+          // Preserve all other values from finalAssessmentInfo - they are already correct
+          // Don't overwrite passingScore, maxAttempts, or criteriaDescription
+        }
+        
+        // Get questions from the correct source
+        // Priority: quizData.questions > normalizedSession.questions > quizData.quiz?.questions
+        let quizQuestions = [];
+        if (quizData && quizData.questions && Array.isArray(quizData.questions) && quizData.questions.length > 0) {
+          quizQuestions = quizData.questions;
+        } else if (normalizedSession.questions && Array.isArray(normalizedSession.questions) && normalizedSession.questions.length > 0) {
+          quizQuestions = normalizedSession.questions;
+        } else if (quizData && quizData.quiz && quizData.quiz.questions && Array.isArray(quizData.quiz.questions) && quizData.quiz.questions.length > 0) {
+          quizQuestions = quizData.quiz.questions;
+        } else if (fullSession.quiz && fullSession.quiz.questions && Array.isArray(fullSession.quiz.questions) && fullSession.quiz.questions.length > 0) {
+          quizQuestions = fullSession.quiz.questions;
+        }
+        console.log('Extracted questions for quiz:', quizQuestions);
+        
+        const quizForEdit = {
+          title: quizData.title || quizData.quizTitle || finalAssessmentInfo?.quizTitle || quizTitle || 'Questionnaire Form',
+          description: quizData.description || normalizedSession.description || '',
+          questions: quizQuestions,
+          assessmentInfo: finalAssessmentInfo || {
+            quizTitle: quizData.title || quizData.quizTitle || quizTitle || '',
+            passingScore: '',
+            maxAttempts: '',
+            criteriaDescription: ''
+          }
+        };
+        
+        // Ensure assessmentInfo.quizTitle matches title if not set
+        if (quizForEdit.assessmentInfo && !quizForEdit.assessmentInfo.quizTitle && quizForEdit.title) {
+          quizForEdit.assessmentInfo.quizTitle = quizForEdit.title;
+        }
+        
+        console.log('=== Setting currentQuizData in handleLoadSessionForEdit ===');
+        console.log('Final quizForEdit:', quizForEdit);
+        console.log('Final quizForEdit.assessmentInfo:', quizForEdit.assessmentInfo);
+        console.log('Quiz title:', quizForEdit.title);
+        console.log('Assessment info quizTitle:', quizForEdit.assessmentInfo?.quizTitle);
+        console.log('Assessment info passingScore:', quizForEdit.assessmentInfo?.passingScore);
+        console.log('Assessment info maxAttempts:', quizForEdit.assessmentInfo?.maxAttempts);
+        console.log('Questions:', quizForEdit.questions);
+        
+        // IMPORTANT: Set currentQuizData with only the quiz structure, not extra properties
+        // Ensure we're setting exactly what InteractiveQuiz expects
+        const cleanQuizData = {
+          title: quizForEdit.title,
+          description: quizForEdit.description || '',
+          questions: quizForEdit.questions || [],
+          assessmentInfo: quizForEdit.assessmentInfo || {
+            quizTitle: quizForEdit.title || '',
+            passingScore: '',
+            maxAttempts: '',
+            criteriaDescription: ''
+          }
+        };
+        console.log('Setting currentQuizData to clean structure:', cleanQuizData);
+        
+        // IMPORTANT: Update sessionContentSnapshot FIRST, then set currentQuizData
+        // This ensures both are set with the correct structure
+        // CRITICAL: Always set quiz and assessmentInfo, even if some fields are empty
+        setSessionContentSnapshot(prev => {
+          const updated = {
+            ...prev,
+            quiz: cleanQuizData, // Use cleanQuizData directly, not currentQuizData (async state)
+            assessmentInfo: cleanQuizData.assessmentInfo || prev?.assessmentInfo || null, // Use assessmentInfo from cleanQuizData
+            files: normalizedSession.files || prev?.files || null,
+            sessionForm: { ...(prev?.sessionForm || {}), ...sessionFormData }
+          };
+          console.log('Setting sessionContentSnapshot with quiz data:', {
+            quiz: updated.quiz,
+            assessmentInfo: updated.assessmentInfo,
+            hasQuiz: !!updated.quiz,
+            hasAssessmentInfo: !!updated.assessmentInfo
+          });
+          return updated;
+        });
+        console.log('Updated sessionContentSnapshot with cleanQuizData:', cleanQuizData);
+        
+        // Now set currentQuizData - this should be the source of truth
+        setCurrentQuizData(cleanQuizData);
+        console.log('currentQuizData should now be set to:', cleanQuizData);
+      } else if (normalizedSession.questions && Array.isArray(normalizedSession.questions)) {
+        // Questions at root level - construct quiz data
+        // Check for assessmentInfo at root level
+        const rootAssessmentInfo = normalizedSession.assessmentInfo || normalizedSession.assessment_info || null;
+        let finalAssessmentInfo = null;
+        
+        if (rootAssessmentInfo) {
+          try {
+            const assessmentInfoObj = typeof rootAssessmentInfo === 'string' ? JSON.parse(rootAssessmentInfo) : rootAssessmentInfo;
+            finalAssessmentInfo = {
+              quizTitle: assessmentInfoObj.quizTitle || assessmentInfoObj.quiz_title || normalizedSession.title || '',
+              passingScore: assessmentInfoObj.passingScore || assessmentInfoObj.passing_score || '',
+              maxAttempts: assessmentInfoObj.maxAttempts || assessmentInfoObj.max_attempts || '',
+              criteriaDescription: assessmentInfoObj.criteriaDescription || assessmentInfoObj.criteria_description || assessmentInfoObj.criteria || assessmentInfoObj.description || ''
+            };
+          } catch (e) {
+            console.error('Error parsing root level assessmentInfo:', e);
+          }
+        }
+        
+        const quizForEdit = {
+          title: rootAssessmentInfo?.quizTitle || rootAssessmentInfo?.quiz_title || normalizedSession.title || 'Questionnaire Form',
+          questions: normalizedSession.questions,
+          assessmentInfo: finalAssessmentInfo || {
+            quizTitle: normalizedSession.title || 'Questionnaire Form',
+            passingScore: '',
+            maxAttempts: '',
+            criteriaDescription: ''
+          }
+        };
+        setCurrentQuizData(quizForEdit);
+        
+        // Update sessionContentSnapshot with quizForEdit directly
+        setSessionContentSnapshot(prev => ({
+          ...prev,
+          quiz: quizForEdit,
+          assessmentInfo: quizForEdit.assessmentInfo,
+          files: normalizedSession.files || prev?.files || null,
+          sessionForm: { ...(prev?.sessionForm || {}), ...sessionFormData }
+        }));
+      } else {
+        setCurrentQuizData(null);
+        // Don't clear sessionContentSnapshot.quiz here - keep existing data
+      }
+      
+      // Load AI content
+      if (normalizedSession.aiContent) {
+        setAiContentGenerated(true);
+        setAiKeywords(normalizedSession.aiContent.keywords || '');
+      } else {
+        setAiContentGenerated(false);
+        setAiKeywords('');
+      }
+      
+      // Load creation mode
+      if (normalizedSession.creationMode) {
+        setSelectedCreationMode(normalizedSession.creationMode);
+      } else {
+        setSelectedCreationMode(null);
+      }
+      
+      // Load certification data
+      if (normalizedSession.certification || normalizedSession.certificate) {
+        const certData = normalizedSession.certification || normalizedSession.certificate;
+        if (certData.fields) {
+          setCertificateFields(certData.fields);
+        }
+        if (certData.template) {
+          setDefaultTemplateId(certData.template);
+        }
+        // Also save to sessionContentSnapshot so it appears in preview
+        setSessionContentSnapshot(prev => ({
+          ...prev,
+          certification: certData,
+          sessionForm: { ...(prev?.sessionForm || {}), ...sessionFormData }
+        }));
+      }
+      
+      // Load schedule data
+      // API response has: scheduled_date, scheduled_time, due_date, due_time
+      // Normalized session has: scheduledDate, scheduledTime, dueDate, dueTime
+      console.log('=== Loading Schedule Data for Edit ===');
+      console.log('normalizedSession.scheduledDate:', normalizedSession.scheduledDate);
+      console.log('normalizedSession.scheduledTime:', normalizedSession.scheduledTime);
+      console.log('normalizedSession.dueDate:', normalizedSession.dueDate);
+      console.log('normalizedSession.dueTime:', normalizedSession.dueTime);
+      console.log('fullSession.scheduled_date:', fullSession.scheduled_date);
+      console.log('fullSession.scheduled_time:', fullSession.scheduled_time);
+      console.log('fullSession.due_date:', fullSession.due_date);
+      console.log('fullSession.due_time:', fullSession.due_time);
+      
+      // Extract schedule date - format should be YYYY-MM-DD for date input
+      const scheduledDate = normalizedSession.scheduledDate || normalizedSession.scheduled_date || fullSession.scheduled_date || '';
+      // Extract schedule time - format should be HH:MM for time input (remove seconds if present)
+      const scheduledTime = normalizedSession.scheduledTime || normalizedSession.scheduled_time || fullSession.scheduled_time || '';
+      const formattedScheduledTime = scheduledTime ? scheduledTime.substring(0, 5) : ''; // Extract HH:MM from HH:MM:SS
+      
+      // Extract due date
+      const dueDate = normalizedSession.dueDate || normalizedSession.due_date || fullSession.due_date || '';
+      // Extract due time
+      const dueTime = normalizedSession.dueTime || normalizedSession.due_time || fullSession.due_time || '';
+      const formattedDueTime = dueTime ? dueTime.substring(0, 5) : ''; // Extract HH:MM from HH:MM:SS
+      
+      console.log('Setting schedule data:', {
+        scheduledDate,
+        scheduledTime: formattedScheduledTime,
+        dueDate,
+        dueTime: formattedDueTime
+      });
+      
+      // Set schedule state variables
+      setScheduleDate(scheduledDate);
+      setScheduleTime(formattedScheduledTime);
+      setScheduleDueDate(dueDate);
+      setScheduleDueTime(formattedDueTime);
+      
+      // Always start from the first step (create) when editing to allow user to review all sections
+      // Don't auto-navigate - let user navigate through steps
+      setManageSessionTab('create');
+      setManageSessionView('create');
+      
+      // Reset showContentCreator to false when starting edit on 'create' tab
+      // It will be set to true automatically when user navigates to 'content-creator' tab
+      setShowContentCreator(false);
+      
+      // Prepare to show assessment when user navigates to it
+      if (normalizedSession.quiz || (normalizedSession.questions && Array.isArray(normalizedSession.questions))) {
+        setShowQuizForm(true); // Enable quiz form so it's ready when user navigates to assessment
+      }
+      
+      // Close the dialog and show success message
+      setShowSessionDetailsDialog(false);
+      setSelectedLibrarySession(null);
+      setSessionViewMode(null);
+      showToast('Session loaded for editing', 'success');
+    } catch (error) {
+      console.error('Failed to load session for editing:', error);
+      showToast('Failed to load session data', 'error');
+    }
+  };
+
   const handleSaveEditedSession = (session) => {
     if (!session || !session.id) return;
     
@@ -3263,13 +4199,104 @@ Make the content professional, educational, and suitable for workplace training.
   const renderSessionViewMode = (session) => {
     if (!session) return null;
     
+    // If session doesn't have complete data (like when previewing an unsaved session),
+    // merge with sessionFormData or sessionContentSnapshot
+    const resolvedSessionForm = sessionContentSnapshot?.sessionForm || sessionFormData;
+    let sessionToUse = { ...session };
+    
+    // Only merge if session is missing critical fields or has placeholder values
+    // This handles both unsaved sessions (during creation) and saved sessions with incomplete data
+    if (resolvedSessionForm) {
+      // Always use form data title if available (for new sessions)
+      if (resolvedSessionForm.title && (!session.title || session.title === 'Untitled Session')) {
+        sessionToUse.title = resolvedSessionForm.title;
+      }
+      // Use form data type if session doesn't have a valid type
+      if (resolvedSessionForm.type && resolvedSessionForm.type !== 'Not specified' && 
+          (!session.type || session.type === 'Not specified' || session.type === 'draft' || session.type === 'saved')) {
+        sessionToUse.type = resolvedSessionForm.type;
+      }
+      // Use form data audience if session doesn't have a valid audience
+      if (resolvedSessionForm.audience && resolvedSessionForm.audience !== 'Not specified' &&
+          (!session.audience || session.audience === 'Not specified' || !session.participants)) {
+        sessionToUse.audience = resolvedSessionForm.audience;
+        sessionToUse.participants = resolvedSessionForm.audience;
+      }
+      // Merge description and skills if missing
+      if (resolvedSessionForm.description && !session.description) {
+        sessionToUse.description = resolvedSessionForm.description;
+      }
+      if (resolvedSessionForm.skills && resolvedSessionForm.skills.length > 0 && (!session.skills || session.skills.length === 0)) {
+        sessionToUse.skills = resolvedSessionForm.skills;
+      }
+    }
+    
+    // Normalize session data to handle both camelCase and snake_case from backend
+    // If session is already normalized, this will just ensure all fields are present
+    const normalizedSession = normalizePublishedSession(sessionToUse);
+    
+    // Debug logging to see what data we have
+    console.log('=== Session Details Debug ===');
+    console.log('Raw session keys:', Object.keys(session));
+    console.log('Raw session audience/participants:', session.audience, session.participants);
+    console.log('Normalized session audience/participants:', normalizedSession.audience, normalizedSession.participants);
+    console.log('Files:', normalizedSession.files, 'Type:', typeof normalizedSession.files, 'IsArray:', Array.isArray(normalizedSession.files), 'Length:', normalizedSession.files?.length);
+    console.log('AI Content:', normalizedSession.aiContent);
+    console.log('Creation Mode:', normalizedSession.creationMode);
+    console.log('Quiz:', normalizedSession.quiz);
+    console.log('Quiz questions:', normalizedSession.quiz?.questions, 'Type:', typeof normalizedSession.quiz?.questions, 'Length:', normalizedSession.quiz?.questions?.length);
+    console.log('Questions (root):', normalizedSession.questions);
+    console.log('Certificate:', normalizedSession.certificate, 'Type:', typeof normalizedSession.certificate);
+    console.log('Certification:', normalizedSession.certification, 'Type:', typeof normalizedSession.certification);
+    console.log('Has Certificate:', normalizedSession.hasCertificate);
+    console.log('Assessment Info:', normalizedSession.assessmentInfo);
+    
+    // Check what the conditions evaluate to
+    const hasFiles = (normalizedSession.files && Array.isArray(normalizedSession.files) && normalizedSession.files.length > 0);
+    const hasAiContent = normalizedSession.aiContent;
+    const hasCreationMode = normalizedSession.creationMode;
+    const hasQuiz = normalizedSession.quiz && (
+      (normalizedSession.quiz.questions && Array.isArray(normalizedSession.quiz.questions) && normalizedSession.quiz.questions.length > 0) ||
+      (normalizedSession.questions && Array.isArray(normalizedSession.questions) && normalizedSession.questions.length > 0) ||
+      (normalizedSession.quiz.quiz && normalizedSession.quiz.quiz.questions && Array.isArray(normalizedSession.quiz.quiz.questions) && normalizedSession.quiz.quiz.questions.length > 0)
+    );
+    const hasAudience = !!(normalizedSession.audience || normalizedSession.participants);
+    const hasCertData = normalizedSession.certificate && typeof normalizedSession.certificate === 'object' && Object.keys(normalizedSession.certificate).length > 0;
+    const hasCertificationData = normalizedSession.certification && typeof normalizedSession.certification === 'object' && Object.keys(normalizedSession.certification).length > 0;
+    const hasCertFlag = normalizedSession.hasCertificate === true;
+    const hasCert = hasCertData || hasCertificationData || hasCertFlag;
+    
+    console.log('Stage 1 Check - title:', !!normalizedSession.title, 'type:', !!normalizedSession.type, 'audience:', hasAudience, 'RESULT:', !!(normalizedSession.title && normalizedSession.type && hasAudience));
+    console.log('Stage 2 Check - hasFiles:', hasFiles, 'hasAiContent:', hasAiContent, 'hasCreationMode:', hasCreationMode, 'hasQuiz:', hasQuiz, 'RESULT:', hasFiles || hasAiContent || hasCreationMode || hasQuiz);
+    console.log('Stage 3 Check - hasQuiz:', hasQuiz);
+    console.log('Stage 4 Check - hasCertData:', hasCertData, 'hasCertificationData:', hasCertificationData, 'hasCertFlag:', hasCertFlag, 'RESULT:', hasCert);
+    
     const steps = [
-      { label: 'Create New Session', value: 'create', completed: !!(session.title && session.type && session.audience) },
-      { label: 'Content Creator', value: 'content-creator', completed: !!(session.files?.length > 0 || session.aiContent || session.creationMode) },
-      { label: 'Checkpoint Assessment', value: 'assessment', completed: !!(session.quiz || session.questions?.length > 0) },
-      { label: 'Certification', value: 'certification', completed: !!(session.certificate) },
+      { label: 'Create New Session', value: 'create', completed: !!(normalizedSession.title && normalizedSession.type && (normalizedSession.audience || normalizedSession.participants)) },
+      { label: 'Content Creator', value: 'content-creator', completed: !!(
+        (normalizedSession.files && Array.isArray(normalizedSession.files) && normalizedSession.files.length > 0) ||
+        normalizedSession.aiContent ||
+        normalizedSession.creationMode ||
+        (normalizedSession.quiz && (
+          (normalizedSession.quiz.questions && Array.isArray(normalizedSession.quiz.questions) && normalizedSession.quiz.questions.length > 0) ||
+          (normalizedSession.questions && Array.isArray(normalizedSession.questions) && normalizedSession.questions.length > 0)
+        ))
+      ) },
+      { label: 'Checkpoint Assessment', value: 'assessment', completed: !!(
+        normalizedSession.quiz && (
+          (normalizedSession.quiz.questions && Array.isArray(normalizedSession.quiz.questions) && normalizedSession.quiz.questions.length > 0) ||
+          (normalizedSession.questions && Array.isArray(normalizedSession.questions) && normalizedSession.questions.length > 0) ||
+          (normalizedSession.quiz.quiz && normalizedSession.quiz.quiz.questions && Array.isArray(normalizedSession.quiz.quiz.questions) && normalizedSession.quiz.quiz.questions.length > 0)
+        )
+      ) },
+      { label: 'Certification', value: 'certification', completed: !!(() => {
+        const hasCertData = normalizedSession.certificate && typeof normalizedSession.certificate === 'object' && Object.keys(normalizedSession.certificate).length > 0;
+        const hasCertificationData = normalizedSession.certification && typeof normalizedSession.certification === 'object' && Object.keys(normalizedSession.certification).length > 0;
+        const hasCertFlag = normalizedSession.hasCertificate === true;
+        return hasCertData || hasCertificationData || hasCertFlag;
+      })() },
       { label: 'Preview Session', value: 'preview', completed: true },
-      { label: 'Schedule', value: 'schedule', completed: !!(session.scheduledDateTime || session.scheduledDate) }
+      { label: 'Schedule', value: 'schedule', completed: !!(normalizedSession.scheduledDateTime || normalizedSession.scheduledDate) }
     ];
     
     return (
@@ -3329,7 +4356,7 @@ Make the content professional, educational, and suitable for workplace training.
                 Title
               </Typography>
               <Typography variant="body1" fontWeight="medium">
-                {session.title || 'Untitled Session'}
+                {normalizedSession.title || 'Untitled Session'}
               </Typography>
             </Grid>
             <Grid item xs={12} sm={6}>
@@ -3337,7 +4364,7 @@ Make the content professional, educational, and suitable for workplace training.
                 Type
               </Typography>
               <Typography variant="body1" fontWeight="medium">
-                {session.type || 'Not specified'}
+                {getSessionTypeLabel(normalizedSession.type)}
               </Typography>
             </Grid>
             <Grid item xs={12} sm={6}>
@@ -3345,30 +4372,34 @@ Make the content professional, educational, and suitable for workplace training.
                 Participants
               </Typography>
               <Typography variant="body1" fontWeight="medium">
-                {session.audience === 'all' ? 'All Employees' :
-                 session.audience === 'managers' ? 'Managers Only' :
-                 session.audience === 'developers' ? 'Developers' :
-                 session.audience === 'hr' ? 'HR Team' :
-                 session.audience || 'Not specified'}
+                {(() => {
+                  const audience = normalizedSession.audience || normalizedSession.participants || '';
+                  if (audience === 'all' || audience === 'All Employees') return 'All Employees';
+                  if (audience === 'managers' || audience === 'Managers Only') return 'Managers Only';
+                  if (audience === 'developers' || audience === 'Developers') return 'Developers';
+                  if (audience === 'hr' || audience === 'HR Team') return 'HR Team';
+                  if (audience && audience.trim() !== '') return audience;
+                  return 'Not specified';
+                })()}
               </Typography>
             </Grid>
-            {session.description && (
+            {normalizedSession.description && (
               <Grid item xs={12}>
                 <Typography variant="body2" color="text.secondary" gutterBottom>
                   Description
                 </Typography>
                 <Typography variant="body1">
-                  {session.description}
+                  {normalizedSession.description}
                 </Typography>
               </Grid>
             )}
-            {session.skills && session.skills.length > 0 && (
+            {normalizedSession.skills && normalizedSession.skills.length > 0 && (
               <Grid item xs={12}>
                 <Typography variant="body2" color="text.secondary" gutterBottom>
                   Skills
                 </Typography>
                 <Box display="flex" flexWrap="wrap" gap={1}>
-                  {session.skills.map((skill, idx) => (
+                  {normalizedSession.skills.map((skill, idx) => (
                     <Chip
                       key={idx}
                       label={skill}
@@ -3387,7 +4418,19 @@ Make the content professional, educational, and suitable for workplace training.
         </Card>
 
         {/* Stage 2: Content Creator */}
-        {(session.files?.length > 0 || session.aiContent || session.creationMode) ? (
+        {(() => {
+          // Check for content in multiple possible formats (camelCase and snake_case from backend)
+          const hasFiles = (normalizedSession.files && Array.isArray(normalizedSession.files) && normalizedSession.files.length > 0);
+          const hasAiContent = normalizedSession.aiContent;
+          const hasCreationMode = normalizedSession.creationMode;
+          // Also check if quiz exists as content (assessment can be content)
+          const hasQuiz = normalizedSession.quiz && (
+            (normalizedSession.quiz.questions && Array.isArray(normalizedSession.quiz.questions) && normalizedSession.quiz.questions.length > 0) ||
+            (normalizedSession.questions && Array.isArray(normalizedSession.questions) && normalizedSession.questions.length > 0) ||
+            (normalizedSession.quiz.quiz && normalizedSession.quiz.quiz.questions && Array.isArray(normalizedSession.quiz.quiz.questions) && normalizedSession.quiz.quiz.questions.length > 0)
+          );
+          return hasFiles || hasAiContent || hasCreationMode || hasQuiz;
+        })() ? (
           <Card sx={{ p: 3, mb: 3, backgroundColor: '#ffffff', border: '1px solid #e5e7eb' }}>
             <Box display="flex" alignItems="center" gap={1} mb={2}>
               <CheckCircleIcon sx={{ color: '#114417DB' }} />
@@ -3395,13 +4438,13 @@ Make the content professional, educational, and suitable for workplace training.
                 Stage 2: Content Creator
               </Typography>
             </Box>
-            {session.files && session.files.length > 0 && (
+            {normalizedSession.files && normalizedSession.files.length > 0 && (
               <Box mb={2}>
                 <Typography variant="body2" color="text.secondary" gutterBottom>
-                  Uploaded Files ({session.files.length})
+                  Uploaded Files ({normalizedSession.files.length})
                 </Typography>
                 <List dense>
-                  {session.files.map((file, index) => {
+                  {normalizedSession.files.map((file, index) => {
                     const fileObj = typeof file === 'string' ? { name: file } : file;
                     const fileSize = fileObj.size ? (fileObj.size / 1024).toFixed(2) + ' KB' : 'Unknown size';
                     const fileType = fileObj.type || fileObj.name?.split('.').pop()?.toUpperCase() || 'Unknown';
@@ -3422,7 +4465,9 @@ Make the content professional, educational, and suitable for workplace training.
                 </List>
               </Box>
             )}
-            {session.aiContent && (
+            {normalizedSession.aiContent && (() => {
+              const aiContent = normalizedSession.aiContent || {};
+              return (
               <Box mb={2}>
                 <Typography variant="body2" color="text.secondary" gutterBottom>
                   AI Generated Content
@@ -3433,26 +4478,26 @@ Make the content professional, educational, and suitable for workplace training.
                       Keywords
                     </Typography>
                     <Typography variant="body1" fontWeight="medium">
-                      {session.aiContent.keywords || 'N/A'}
+                        {aiContent.keywords || 'N/A'}
                     </Typography>
                   </Grid>
-                  {session.aiContent.title && (
+                    {aiContent.title && (
                     <Grid item xs={12} sm={6}>
                       <Typography variant="body2" color="text.secondary" gutterBottom>
                         Title
                       </Typography>
                       <Typography variant="body1" fontWeight="medium">
-                        {session.aiContent.title}
+                          {aiContent.title}
                       </Typography>
                     </Grid>
                   )}
-                  {session.aiContent.keyPoints && session.aiContent.keyPoints.length > 0 && (
+                    {aiContent.keyPoints && aiContent.keyPoints.length > 0 && (
                     <Grid item xs={12}>
                       <Typography variant="body2" color="text.secondary" gutterBottom>
                         Key Points
                       </Typography>
                       <List dense>
-                        {session.aiContent.keyPoints.map((point, idx) => (
+                          {aiContent.keyPoints.map((point, idx) => (
                           <ListItem key={idx}>
                             <ListItemText primary={`• ${point}`} />
                           </ListItem>
@@ -3460,13 +4505,13 @@ Make the content professional, educational, and suitable for workplace training.
                       </List>
                     </Grid>
                   )}
-                  {session.aiContent.learningObjectives && session.aiContent.learningObjectives.length > 0 && (
+                    {aiContent.learningObjectives && aiContent.learningObjectives.length > 0 && (
                     <Grid item xs={12}>
                       <Typography variant="body2" color="text.secondary" gutterBottom>
                         Learning Objectives
                       </Typography>
                       <List dense>
-                        {session.aiContent.learningObjectives.map((objective, idx) => (
+                          {aiContent.learningObjectives.map((objective, idx) => (
                           <ListItem key={idx}>
                             <ListItemText primary={`• ${objective}`} />
                           </ListItem>
@@ -3474,28 +4519,29 @@ Make the content professional, educational, and suitable for workplace training.
                       </List>
                     </Grid>
                   )}
-                  {session.aiContent.content && (
+                    {aiContent.content && (
                     <Grid item xs={12}>
                       <Typography variant="body2" color="text.secondary" gutterBottom>
                         Content
                       </Typography>
                       <Box sx={{ p: 2, backgroundColor: '#f8f9fa', borderRadius: 1, maxHeight: 300, overflowY: 'auto' }}>
                         <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
-                          {session.aiContent.content}
+                            {aiContent.content}
                         </Typography>
                       </Box>
                     </Grid>
                   )}
                 </Grid>
               </Box>
-            )}
-            {session.creationMode && (
+              );
+            })()}
+            {normalizedSession.creationMode && (
               <Box>
                 <Typography variant="body2" color="text.secondary" gutterBottom>
                   Creation Mode
                 </Typography>
                 <Typography variant="body1">
-                  {session.creationMode}
+                  {normalizedSession.creationMode}
                 </Typography>
               </Box>
             )}
@@ -3515,112 +4561,156 @@ Make the content professional, educational, and suitable for workplace training.
         )}
 
         {/* Stage 3: Checkpoint Assessment */}
-        {(session.quiz || session.questions?.length > 0) ? (
-          <Card sx={{ p: 3, mb: 3, backgroundColor: '#ffffff', border: '1px solid #e5e7eb' }}>
-            <Box display="flex" alignItems="center" gap={1} mb={2}>
-              <CheckCircleIcon sx={{ color: '#114417DB' }} />
-              <Typography variant="subtitle1" fontWeight="bold" sx={{ color: '#114417DB' }}>
-                Stage 3: Checkpoint Assessment
-              </Typography>
-            </Box>
-            {session.quiz && (
-              <>
-                <Grid container spacing={2} mb={3}>
-                  {session.quiz.title && (
-                    <Grid item xs={12} sm={6}>
-                      <Typography variant="body2" color="text.secondary" gutterBottom>
-                        Assessment Title
-                      </Typography>
-                      <Typography variant="body1" fontWeight="medium">
-                        {session.quiz.title}
-                      </Typography>
-                    </Grid>
-                  )}
-                  <Grid item xs={12} sm={6}>
-                    <Typography variant="body2" color="text.secondary" gutterBottom>
-                      Total Questions
-                    </Typography>
-                    <Typography variant="body1" fontWeight="medium">
-                      {session.quiz.questions?.length || session.questions?.length || 0} questions
-                    </Typography>
-                  </Grid>
-                  {session.quiz.passingScore && (
-                    <Grid item xs={12} sm={6}>
-                      <Typography variant="body2" color="text.secondary" gutterBottom>
-                        Passing Score
-                      </Typography>
-                      <Typography variant="body1" fontWeight="medium">
-                        {session.quiz.passingScore}%
-                      </Typography>
-                    </Grid>
-                  )}
-                  {session.quiz.maxAttempts && (
-                    <Grid item xs={12} sm={6}>
-                      <Typography variant="body2" color="text.secondary" gutterBottom>
-                        Max Attempts
-                      </Typography>
-                      <Typography variant="body1" fontWeight="medium">
-                        {session.quiz.maxAttempts}
-                      </Typography>
-                    </Grid>
-                  )}
-                </Grid>
-                
-                {/* Show Questions Details */}
-                {(session.quiz.questions?.length > 0 || session.questions?.length > 0) && (
-                  <Box>
-                    <Typography variant="body2" fontWeight="bold" color="text.secondary" gutterBottom mb={2}>
-                      Questions:
-                    </Typography>
-                    {(session.quiz.questions || session.questions || []).map((question, qIndex) => (
-                      <Card key={qIndex} sx={{ p: 2, mb: 2, backgroundColor: '#f8f9fa' }}>
-                        <Typography variant="body1" fontWeight="medium" mb={1}>
-                          {qIndex + 1}. {question.question || question.text || 'Question'}
+        {(() => {
+          // Check for quiz in multiple possible formats
+          const hasQuiz = normalizedSession.quiz && (
+            (normalizedSession.quiz.questions && Array.isArray(normalizedSession.quiz.questions) && normalizedSession.quiz.questions.length > 0) ||
+            (normalizedSession.questions && Array.isArray(normalizedSession.questions) && normalizedSession.questions.length > 0) ||
+            (normalizedSession.quiz.quiz && normalizedSession.quiz.quiz.questions && Array.isArray(normalizedSession.quiz.quiz.questions) && normalizedSession.quiz.quiz.questions.length > 0)
+          );
+          return hasQuiz;
+        })() ? (() => {
+          // Parse assessment info from multiple sources
+          let assessmentInfo = null;
+          if (normalizedSession.assessmentInfo || normalizedSession.assessment_info) {
+            try {
+              const rawAssessmentInfo = normalizedSession.assessmentInfo || normalizedSession.assessment_info;
+              assessmentInfo = typeof rawAssessmentInfo === 'string' ? JSON.parse(rawAssessmentInfo) : rawAssessmentInfo;
+            } catch (e) {
+              console.error('Error parsing assessment info:', e);
+            }
+          } else if (normalizedSession.quiz?.assessmentInfo) {
+            try {
+              const quizAssessmentInfo = normalizedSession.quiz.assessmentInfo;
+              assessmentInfo = typeof quizAssessmentInfo === 'string' ? JSON.parse(quizAssessmentInfo) : quizAssessmentInfo;
+            } catch (e) {
+              console.error('Error parsing quiz assessment info:', e);
+            }
+          }
+          
+          // Get values with fallbacks
+          const passingScore = assessmentInfo?.passingScore || assessmentInfo?.passing_score || normalizedSession.quiz?.passingScore;
+          const maxAttempts = assessmentInfo?.maxAttempts || assessmentInfo?.max_attempts || normalizedSession.quiz?.maxAttempts;
+          const passingCriteria = assessmentInfo?.criteriaDescription || assessmentInfo?.criteria_description || assessmentInfo?.criteria || assessmentInfo?.description || '';
+          const quizTitle = assessmentInfo?.quizTitle || assessmentInfo?.quiz_title || normalizedSession.quiz?.title;
+          
+          return (
+            <Card sx={{ p: 3, mb: 3, backgroundColor: '#ffffff', border: '1px solid #e5e7eb' }}>
+              <Box display="flex" alignItems="center" gap={1} mb={2}>
+                <CheckCircleIcon sx={{ color: '#114417DB' }} />
+                <Typography variant="subtitle1" fontWeight="bold" sx={{ color: '#114417DB' }}>
+                  Stage 3: Checkpoint Assessment
+                </Typography>
+              </Box>
+              {normalizedSession.quiz && (
+                <>
+                  <Grid container spacing={2} mb={3}>
+                    {quizTitle && (
+                      <Grid item xs={12} sm={6}>
+                        <Typography variant="body2" color="text.secondary" gutterBottom>
+                          Assessment Title
                         </Typography>
-                        {question.options && question.options.length > 0 && (
-                          <Box ml={2} mt={1}>
-                            {question.options.map((option, oIndex) => {
-                              // Check if this option is the correct answer
-                              // Only show as correct if correctAnswer is explicitly set (not null/undefined/empty)
-                              const hasCorrectAnswer = question.correctAnswer !== null && 
-                                                       question.correctAnswer !== undefined && 
-                                                       question.correctAnswer !== '';
-                              const isCorrect = hasCorrectAnswer && (
-                                question.correctAnswer === oIndex || 
-                                question.correctAnswer === option ||
-                                (Array.isArray(question.correctAnswers) && question.correctAnswers.includes(oIndex)) ||
-                                (Array.isArray(question.correctAnswers) && question.correctAnswers.includes(option))
-                              );
-                              
-                              return (
-                                <Typography 
-                                  key={oIndex} 
-                                  variant="body2" 
-                                  sx={{ 
-                                    color: isCorrect ? '#114417DB' : 'text.primary',
-                                    fontWeight: isCorrect ? 'bold' : 'normal'
-                                  }}
-                                >
-                                  {String.fromCharCode(65 + oIndex)}. {option}
-                                  {isCorrect && ' ✓'}
-                                </Typography>
-                              );
-                            })}
-                          </Box>
-                        )}
-                        {question.type && (
-                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-                            Type: {question.type}
+                        <Typography variant="body1" fontWeight="medium">
+                          {quizTitle}
+                        </Typography>
+                      </Grid>
+                    )}
+                    <Grid item xs={12} sm={6}>
+                      <Typography variant="body2" color="text.secondary" gutterBottom>
+                        Total Questions
+                      </Typography>
+                      <Typography variant="body1" fontWeight="medium">
+                        {normalizedSession.quiz.questions?.length || normalizedSession.questions?.length || 0} questions
+                      </Typography>
+                    </Grid>
+                    {passingScore && (
+                      <Grid item xs={12} sm={6}>
+                        <Typography variant="body2" color="text.secondary" gutterBottom>
+                          Passing Score
+                        </Typography>
+                        <Typography variant="body1" fontWeight="medium">
+                          {passingScore}%
+                        </Typography>
+                      </Grid>
+                    )}
+                    {maxAttempts && (
+                      <Grid item xs={12} sm={6}>
+                        <Typography variant="body2" color="text.secondary" gutterBottom>
+                          Max Attempts
+                        </Typography>
+                        <Typography variant="body1" fontWeight="medium">
+                          {maxAttempts}
+                        </Typography>
+                      </Grid>
+                    )}
+                  </Grid>
+                  {passingCriteria && (
+                    <Box mb={3}>
+                      <Typography variant="body2" color="text.secondary" gutterBottom>
+                        Passing Criteria
+                      </Typography>
+                      <Typography variant="body1">
+                        {passingCriteria}
+                      </Typography>
+                    </Box>
+                  )}
+                  
+                  {/* Show Questions Details */}
+                  {(normalizedSession.quiz.questions?.length > 0 || normalizedSession.questions?.length > 0) && (
+                    <Box>
+                      <Typography variant="body2" fontWeight="bold" color="text.secondary" gutterBottom mb={2}>
+                        Questions:
+                      </Typography>
+                      {(normalizedSession.quiz.questions || normalizedSession.questions || []).map((question, qIndex) => (
+                        <Card key={qIndex} sx={{ p: 2, mb: 2, backgroundColor: '#f8f9fa' }}>
+                          <Typography variant="body1" fontWeight="medium" mb={1}>
+                            {qIndex + 1}. {question.question || question.text || 'Question'}
                           </Typography>
-                        )}
-                      </Card>
-                    ))}
-                  </Box>
-                )}
-              </>
-            )}
-          </Card>
-        ) : (
+                          {question.options && question.options.length > 0 && (
+                            <Box ml={2} mt={1}>
+                              {question.options.map((option, oIndex) => {
+                                // Check if this option is the correct answer
+                                // Only show as correct if correctAnswer is explicitly set (not null/undefined/empty)
+                                const hasCorrectAnswer = question.correctAnswer !== null && 
+                                                         question.correctAnswer !== undefined && 
+                                                         question.correctAnswer !== '';
+                                const isCorrect = hasCorrectAnswer && (
+                                  question.correctAnswer === oIndex || 
+                                  question.correctAnswer === option ||
+                                  (Array.isArray(question.correctAnswers) && question.correctAnswers.includes(oIndex)) ||
+                                  (Array.isArray(question.correctAnswers) && question.correctAnswers.includes(option))
+                                );
+                                
+                                return (
+                                  <Typography 
+                                    key={oIndex} 
+                                    variant="body2" 
+                                    sx={{ 
+                                      color: isCorrect ? '#114417DB' : 'text.primary',
+                                      fontWeight: isCorrect ? 'bold' : 'normal'
+                                    }}
+                                  >
+                                    {String.fromCharCode(65 + oIndex)}. {option}
+                                    {isCorrect && ' ✓'}
+                                  </Typography>
+                                );
+                              })}
+                            </Box>
+                          )}
+                          {question.type && (
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                              Type: {question.type}
+                            </Typography>
+                          )}
+                        </Card>
+                      ))}
+                    </Box>
+                  )}
+                </>
+              )}
+            </Card>
+          );
+        })() : (
           <Card sx={{ p: 3, mb: 3, backgroundColor: '#fff3cd', border: '1px solid #ffc107' }}>
             <Box display="flex" alignItems="center" gap={1} mb={2}>
               <WarningAmberIcon sx={{ color: '#ffc107' }} />
@@ -3635,7 +4725,13 @@ Make the content professional, educational, and suitable for workplace training.
         )}
 
         {/* Stage 4: Certification */}
-        {session.certificate ? (
+        {(() => {
+          // Check if certification exists - it could be an object with data or just a flag
+          const hasCertData = normalizedSession.certificate && typeof normalizedSession.certificate === 'object' && Object.keys(normalizedSession.certificate).length > 0;
+          const hasCertificationData = normalizedSession.certification && typeof normalizedSession.certification === 'object' && Object.keys(normalizedSession.certification).length > 0;
+          const hasCertFlag = normalizedSession.hasCertificate === true;
+          return hasCertData || hasCertificationData || hasCertFlag;
+        })() ? (
           <Card sx={{ p: 3, mb: 3, backgroundColor: '#ffffff', border: '1px solid #e5e7eb' }}>
             <Box display="flex" alignItems="center" gap={1} mb={2}>
               <CheckCircleIcon sx={{ color: '#114417DB' }} />
@@ -3649,26 +4745,27 @@ Make the content professional, educational, and suitable for workplace training.
                   Certificate Name
                 </Typography>
                 <Typography variant="body1" fontWeight="medium">
-                  {session.certificate.name || 'Certificate'}
+                  {(normalizedSession.certificate?.name || normalizedSession.certification?.name) || 'Certificate'}
                 </Typography>
               </Grid>
-              {session.certificate.template && (
+              {(normalizedSession.certificate?.template || normalizedSession.certification?.template) && (
                 <Grid item xs={12} sm={6}>
                   <Typography variant="body2" color="text.secondary" gutterBottom>
                     Template
                   </Typography>
                   <Typography variant="body1" fontWeight="medium">
-                    {session.certificate.template.name || 'Template'}
+                    {(normalizedSession.certificate?.template?.name || normalizedSession.certification?.template?.name) || 'Template'}
                   </Typography>
                 </Grid>
               )}
-              {session.certificate.fields && Object.keys(session.certificate.fields).length > 0 && (
+              {((normalizedSession.certificate?.fields && Object.keys(normalizedSession.certificate.fields).length > 0) ||
+                (normalizedSession.certification?.fields && Object.keys(normalizedSession.certification.fields).length > 0)) && (
                 <Grid item xs={12}>
                   <Typography variant="body2" color="text.secondary" gutterBottom>
                     Certificate Fields
                   </Typography>
                   <Box sx={{ p: 2, backgroundColor: '#f8f9fa', borderRadius: 1 }}>
-                    {Object.entries(session.certificate.fields).map(([key, value]) => (
+                    {Object.entries((normalizedSession.certificate?.fields || normalizedSession.certification?.fields || {})).map(([key, value]) => (
                       <Box key={key} mb={1}>
                         <Typography variant="body2" component="span" fontWeight="medium">
                           {key}: 
@@ -3681,6 +4778,249 @@ Make the content professional, educational, and suitable for workplace training.
                   </Box>
                 </Grid>
               )}
+              
+              {/* Certificate Template Preview */}
+              {(() => {
+                const certTemplate = normalizedSession.certificate?.template || normalizedSession.certification?.template;
+                const certFields = normalizedSession.certificate?.fields || normalizedSession.certification?.fields || {};
+                
+                // Find template by ID if it's a number, or use the template object directly
+                let template = null;
+                const certificateTemplates = [
+                  { id: 1, name: 'Certificate of Appreciation', title: 'CERTIFICATE', subtitle: 'OF APPRECIATION', design: 'gradient-border', borderColors: ['#8b5cf6', '#f59e0b'] },
+                  { id: 2, name: 'Certificate of Excellence', title: 'CERTIFICATE', subtitle: 'Meaningful Leader Certification', design: 'green-gold', borderColors: ['#10b981', '#fbbf24'], hasMedal: true },
+                  { id: 3, name: 'Certificate of Completion', title: 'CERTIFICATE', subtitle: 'OF COMPLETION', design: 'minimal', borderColors: ['#10b981'] },
+                  { id: 4, name: 'Certificate of Achievement', title: 'CERTIFICATE', subtitle: 'OF ACHIEVEMENT', design: 'gradient-vibrant', borderColors: ['#8b5cf6', '#f59e0b', '#fbbf24'], hasMedal: true },
+                  { id: 5, name: 'Certificate Vertical', title: 'CERTIFICATE', subtitle: 'OF COMPLETION', design: 'vertical-red', borderColors: ['#ef4444'] },
+                  { id: 6, name: 'Certificate Simple', title: 'CERTIFICATE', subtitle: 'Creating Power Manager for Leader', design: 'simple-white', borderColors: ['#e5e7eb'], hasMedal: true }
+                ];
+                
+                if (certTemplate) {
+                  // Try to find template by ID (could be number or string)
+                  if (typeof certTemplate === 'number') {
+                    template = certificateTemplates.find(t => t.id === certTemplate);
+                  } else if (typeof certTemplate === 'string') {
+                    // If it's a string, try to parse as number
+                    const templateId = parseInt(certTemplate, 10);
+                    if (!isNaN(templateId)) {
+                      template = certificateTemplates.find(t => t.id === templateId);
+                    }
+                  } else if (typeof certTemplate === 'object') {
+                    // If it's an object, check if it has an id property
+                    if (certTemplate.id) {
+                      template = certificateTemplates.find(t => t.id === certTemplate.id);
+                    } else if (certTemplate.name && certTemplate.design) {
+                      // Template object might already have all needed data
+                      template = certTemplate;
+                    } else if (certTemplate.name) {
+                      // Try to find by name if no id
+                      template = certificateTemplates.find(t => t.name === certTemplate.name) || certTemplate;
+                    }
+                  }
+                }
+                
+                // Show preview if we have a template OR certificate fields (even without template, show default)
+                if (template || (certFields && Object.keys(certFields).length > 0)) {
+                  // If no template found but we have fields, use first template as default
+                  if (!template) {
+                    template = certificateTemplates[0]; // Default to first template
+                  }
+                  return (
+                    <Grid item xs={12}>
+                      <Typography variant="body2" color="text.secondary" gutterBottom>
+                        Template Preview
+                      </Typography>
+                      <Card
+                        sx={{
+                          position: 'relative',
+                          border: '2px solid #8b5cf6',
+                          borderRadius: 2,
+                          overflow: 'hidden',
+                          boxShadow: '0 4px 12px rgba(139, 92, 246, 0.2)',
+                          maxWidth: '500px'
+                        }}
+                      >
+                        <Box
+                          sx={{
+                            aspectRatio: '4/3',
+                            position: 'relative',
+                            backgroundColor: '#ffffff',
+                            p: 2.5,
+                            ...(template.design === 'gradient-border' && {
+                              borderLeft: `4px solid ${template.borderColors[0]}`,
+                              borderBottom: `4px solid ${template.borderColors[1]}`,
+                            }),
+                            ...(template.design === 'green-gold' && {
+                              border: `3px solid ${template.borderColors[0]}`,
+                              '&::before': {
+                                content: '""',
+                                position: 'absolute',
+                                top: 0,
+                                left: 0,
+                                right: 0,
+                                bottom: 0,
+                                border: `2px solid ${template.borderColors[1]}`,
+                                borderStyle: 'dashed',
+                                margin: '8px'
+                              }
+                            }),
+                            ...(template.design === 'minimal' && {
+                              borderTop: `2px solid ${template.borderColors[0]}`,
+                            }),
+                            ...(template.design === 'gradient-vibrant' && {
+                              borderLeft: `4px solid ${template.borderColors[0]}`,
+                              borderBottom: `4px solid ${template.borderColors[1]}`,
+                              borderRight: `2px solid ${template.borderColors[2]}`
+                            }),
+                            ...(template.design === 'vertical-red' && {
+                              borderTop: `4px solid ${template.borderColors[0]}`,
+                              borderLeft: `4px solid ${template.borderColors[0]}`
+                            }),
+                            ...(template.design === 'simple-white' && {
+                              border: '1px solid #e5e7eb'
+                            })
+                          }}
+                        >
+                          <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', position: 'relative', zIndex: 1 }}>
+                            {/* Top Section - Certificate Heading */}
+                            <Box sx={{ textAlign: 'center', mb: 1 }}>
+                              <Typography 
+                                variant="h6" 
+                                sx={{ 
+                                  fontWeight: 'bold',
+                                  fontStyle: 'italic',
+                                  color: '#000000',
+                                  fontSize: '0.85rem',
+                                  mb: 0.5,
+                                  letterSpacing: '1px'
+                                }}
+                              >
+                                {certFields.title || template.title || 'CERTIFICATE'}
+                              </Typography>
+                              <Typography 
+                                variant="caption" 
+                                sx={{ 
+                                  color: '#000000',
+                                  fontSize: '0.6rem',
+                                  display: 'block',
+                                  mb: 2
+                                }}
+                              >
+                                {certFields.subtitle ? `-${certFields.subtitle}-` : `-${template.subtitle}-`}
+                              </Typography>
+                              
+                              {/* Decorative Line */}
+                              <Box 
+                                sx={{ 
+                                  width: '60%', 
+                                  height: '1px', 
+                                  backgroundColor: '#fbbf24', 
+                                  margin: '0 auto 1rem',
+                                  opacity: 0.6
+                                }} 
+                              />
+                              
+                              {/* Presented to */}
+                              <Typography 
+                                variant="caption" 
+                                sx={{ 
+                                  color: '#6b7280',
+                                  fontSize: '0.55rem',
+                                  display: 'block',
+                                  mb: 1
+                                }}
+                              >
+                                {certFields.recipientLabel || 'Presented to'}
+                              </Typography>
+                              
+                              {/* User Name */}
+                              <Typography 
+                                variant="h6" 
+                                sx={{ 
+                                  fontWeight: 'bold',
+                                  color: '#000000',
+                                  fontSize: '0.9rem',
+                                  mb: 1
+                                }}
+                              >
+                                {certFields.userName || 'User Name'}
+                              </Typography>
+                              
+                              {/* Description */}
+                              <Typography 
+                                variant="caption" 
+                                sx={{ 
+                                  color: '#6b7280',
+                                  fontSize: '0.5rem',
+                                  fontStyle: 'italic',
+                                  display: 'block',
+                                  mb: 1
+                                }}
+                              >
+                                {certFields.descriptionText || 'who gave the best and completed the session'}
+                              </Typography>
+                            </Box>
+                            
+                            {/* Bottom Section - Date and Authorisation */}
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', mt: 'auto' }}>
+                              {/* Left - Date of Issue */}
+                              <Box>
+                                <Typography 
+                                  variant="caption" 
+                                  sx={{ 
+                                    color: '#6b7280',
+                                    fontSize: '0.45rem',
+                                    display: 'block',
+                                    mb: 0.5
+                                  }}
+                                >
+                                  Date of Issue
+                                </Typography>
+                                <Typography 
+                                  variant="caption" 
+                                  sx={{ 
+                                    color: '#000000',
+                                    fontSize: '0.5rem',
+                                    fontWeight: 'medium'
+                                  }}
+                                >
+                                  {certFields.dateOfIssue || '01 Sept 2026'}
+                                </Typography>
+                              </Box>
+                              
+                              {/* Right - Authorised by */}
+                              <Box sx={{ textAlign: 'right' }}>
+                                <Typography 
+                                  variant="caption" 
+                                  sx={{ 
+                                    color: '#6b7280',
+                                    fontSize: '0.45rem',
+                                    display: 'block',
+                                    mb: 0.5
+                                  }}
+                                >
+                                  Authorised by
+                                </Typography>
+                                <Typography 
+                                  variant="caption" 
+                                  sx={{ 
+                                    color: '#000000',
+                                    fontSize: '0.5rem',
+                                    fontWeight: 'medium'
+                                  }}
+                                >
+                                  {certFields.authorisedBy || 'Country Head'}
+                                </Typography>
+                              </Box>
+                            </Box>
+                          </Box>
+                        </Box>
+                      </Card>
+                    </Grid>
+                  );
+                }
+                return null;
+              })()}
             </Grid>
           </Card>
         ) : (
@@ -3697,13 +5037,52 @@ Make the content professional, educational, and suitable for workplace training.
           </Card>
         )}
 
-        {/* Stage 5: Schedule */}
-        {(session.scheduledDateTime || session.scheduledDate) && (
+        {/* Stage 5: Preview Session */}
+        <Card sx={{ p: 3, mb: 3, backgroundColor: '#ffffff', border: '1px solid #e5e7eb' }}>
+          <Box display="flex" alignItems="center" gap={1} mb={2}>
+            <CheckCircleIcon sx={{ color: '#114417DB' }} />
+            <Typography variant="subtitle1" fontWeight="bold" sx={{ color: '#114417DB' }}>
+              Stage 5: Preview Session
+            </Typography>
+          </Box>
+          <Typography variant="body1" color="text.secondary">
+            This session has been previewed and is ready for scheduling. All stages have been completed.
+          </Typography>
+          <Box mt={2}>
+            <Typography variant="body2" color="text.secondary" gutterBottom>
+              Session Status
+            </Typography>
+            <Chip
+              label={normalizedSession.status || 'Draft'}
+              size="small"
+              sx={{
+                backgroundColor: normalizedSession.status === 'published' ? '#114417DB' : 
+                                 normalizedSession.status === 'scheduled' ? '#3b82f6' :
+                                 normalizedSession.status === 'draft' ? '#f59e0b' : '#6b7280',
+                color: 'white',
+                fontWeight: 'medium'
+              }}
+            />
+          </Box>
+          {normalizedSession.createdAt && (
+            <Box mt={2}>
+              <Typography variant="body2" color="text.secondary" gutterBottom>
+                Created At
+              </Typography>
+              <Typography variant="body1" fontWeight="medium">
+                {new Date(normalizedSession.createdAt).toLocaleString()}
+              </Typography>
+            </Box>
+          )}
+        </Card>
+
+        {/* Stage 6: Schedule */}
+        {(normalizedSession.scheduledDateTime || normalizedSession.scheduledDate) ? (
           <Card sx={{ p: 3, mb: 3, backgroundColor: '#ffffff', border: '1px solid #e5e7eb' }}>
             <Box display="flex" alignItems="center" gap={1} mb={2}>
               <CheckCircleIcon sx={{ color: '#114417DB' }} />
               <Typography variant="subtitle1" fontWeight="bold" sx={{ color: '#114417DB' }}>
-                Stage 5: Schedule
+                Stage 6: Schedule
               </Typography>
             </Box>
             <Grid container spacing={2}>
@@ -3712,10 +5091,10 @@ Make the content professional, educational, and suitable for workplace training.
                   Start Date & Time
                 </Typography>
                 <Typography variant="body1" fontWeight="medium">
-                  {session.scheduledDateTime 
-                    ? new Date(session.scheduledDateTime).toLocaleString()
-                    : session.scheduledDate && session.scheduledTime
-                    ? `${new Date(session.scheduledDate).toLocaleDateString()} ${session.scheduledTime}`
+                  {normalizedSession.scheduledDateTime 
+                    ? new Date(normalizedSession.scheduledDateTime).toLocaleString()
+                    : normalizedSession.scheduledDate && normalizedSession.scheduledTime
+                    ? `${new Date(normalizedSession.scheduledDate).toLocaleDateString()} ${normalizedSession.scheduledTime}`
                     : 'Not scheduled'}
                 </Typography>
               </Grid>
@@ -3724,42 +5103,48 @@ Make the content professional, educational, and suitable for workplace training.
                   End Date & Time
                 </Typography>
                 <Typography variant="body1" fontWeight="medium">
-                  {session.dueDateTime 
-                    ? new Date(session.dueDateTime).toLocaleString()
-                    : session.dueDate && session.dueTime
-                    ? `${new Date(session.dueDate).toLocaleDateString()} ${session.dueTime}`
+                  {normalizedSession.dueDateTime 
+                    ? new Date(normalizedSession.dueDateTime).toLocaleString()
+                    : normalizedSession.dueDate && normalizedSession.dueTime
+                    ? `${new Date(normalizedSession.dueDate).toLocaleDateString()} ${normalizedSession.dueTime}`
                     : 'Not set'}
                 </Typography>
               </Grid>
             </Grid>
+          </Card>
+        ) : (
+          <Card sx={{ p: 3, mb: 3, backgroundColor: '#fff3cd', border: '1px solid #ffc107' }}>
+            <Box display="flex" alignItems="center" gap={1} mb={2}>
+              <WarningAmberIcon sx={{ color: '#ffc107' }} />
+              <Typography variant="subtitle1" fontWeight="bold" sx={{ color: '#856404' }}>
+                Stage 6: Schedule (Not Scheduled)
+              </Typography>
+            </Box>
+            <Typography variant="body2" color="text.secondary">
+              This session has not been scheduled yet.
+            </Typography>
           </Card>
         )}
       </Box>
     );
   };
 
-  // Render session edit mode
+  // Render session edit mode - Show dialog with option to open in edit mode
   const renderSessionEditMode = (session) => {
     if (!session) return null;
     
     return (
       <Box>
-        <Typography variant="h6" fontWeight="bold" mb={3} sx={{ color: '#114417DB' }}>
+        <Typography variant="h6" fontWeight="bold" mb={2} sx={{ color: '#114417DB' }}>
           Edit Session
         </Typography>
-        <Typography variant="body2" color="text.secondary" mb={3}>
-          You can edit all sections of the session before the start date and time.
+        <Typography variant="body1" color="text.secondary" mb={2}>
+          Click "Open in Edit Mode" below to edit this session in the full editing interface.
+          All changes will be saved to the session.
         </Typography>
-        <Button
-          variant="contained"
-          onClick={() => handleSaveEditedSession(session)}
-          sx={{
-            backgroundColor: '#114417DB',
-            '&:hover': { backgroundColor: '#0a2f0e' }
-          }}
-        >
-          Open in Edit Mode
-        </Button>
+        <Alert severity="info" sx={{ mt: 2 }}>
+          This will open the session in the full editing interface where you can modify all aspects of the session including assessment details.
+        </Alert>
       </Box>
     );
   };
@@ -4300,7 +5685,7 @@ Make the content professional, educational, and suitable for workplace training.
     }
   };
 
-  const handleScheduleSubmit = () => {
+  const handleScheduleSubmit = async () => {
     if (!scheduleData.date || !scheduleData.startTime || !scheduleData.endTime || !selectedDepartment) {
       showToast('Please fill in all required fields and select a department', 'warning');
       return;
@@ -4340,11 +5725,11 @@ Make the content professional, educational, and suitable for workplace training.
     // Ensure session has an ID
     const sessionId = sessionToSchedule.id || Date.now();
 
-    // Update session status to scheduled and publish to employees
-    const updatedSession = normalizePublishedSession({
+    // Prepare session data for API - set status to scheduled
+    const sessionDataToSave = {
       ...sessionToSchedule,
       id: sessionId, // Ensure ID exists
-      status: 'published', // Change to published so employees can see it
+      status: 'scheduled', // Set status to scheduled when scheduling
       dateTime: `${scheduleData.date}T${scheduleData.startTime}`,
       createdAt: sessionToSchedule.createdAt || new Date().toISOString(),
       publishedAt: sessionToSchedule.publishedAt || new Date().toISOString(),
@@ -4365,23 +5750,66 @@ Make the content professional, educational, and suitable for workplace training.
       description: sessionToSchedule.description || scheduleData.description || '',
       type: sessionToSchedule.type || 'compliance',
       audience: sessionToSchedule.audience || 'all'
+    };
+
+    // Save to backend API - update if exists, create if new
+    let savedSession;
+    try {
+      if (sessionId && (typeof sessionId === 'number' || (typeof sessionId === 'string' && /^\d+$/.test(sessionId) && sessionId.length < 12))) {
+        // Database ID - try to update
+        try {
+          savedSession = await sessionAPI.update(sessionId, sessionDataToSave);
+        } catch (updateError) {
+          console.error('Failed to update session, creating new:', updateError);
+          savedSession = await sessionAPI.create(sessionDataToSave);
+        }
+      } else {
+        // Temporary ID or no ID - try to find by title, then create
+        try {
+          const allSessions = await sessionAPI.getAll();
+          const backendSession = allSessions.find(s => 
+            s.title === sessionDataToSave.title && (s.status === 'draft' || s.status === 'published' || s.status === 'scheduled')
+          );
+          if (backendSession && backendSession.id) {
+            savedSession = await sessionAPI.update(backendSession.id, sessionDataToSave);
+          } else {
+            savedSession = await sessionAPI.create(sessionDataToSave);
+          }
+        } catch (error) {
+          console.error('Failed to find/update session, creating new:', error);
+          savedSession = await sessionAPI.create(sessionDataToSave);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to save scheduled session:', error);
+      showToast('Failed to schedule session', 'error');
+      return;
+    }
+
+    // IMPORTANT: Use status from backend response, not what we sent
+    const normalized = normalizePublishedSession(savedSession);
+    
+    // Update saved sessions with status from backend
+    setSavedSessions(prev => {
+      const filtered = prev.filter(s => s.id !== normalized.id);
+      return [normalized, ...filtered];
     });
 
-    // Update saved sessions
-    setSavedSessions(prev => prev.map(session => 
-      session.id === sessionId ? updatedSession : session
-    ));
-
-    // Add/update in published sessions so employees can see it
-    // Use functional update to ensure state is properly updated
-    setPublishedSessions(prev => {
-      const filtered = prev.filter(s => s.id !== sessionId);
-      const updated = [updatedSession, ...filtered];
-      // State updated - no localStorage needed
-        console.log('Session scheduled and saved:', updatedSession.title, updatedSession.id);
-        console.log('Total published sessions:', updated.length);
-      return updated;
-    });
+    // Update based on status from backend response
+    if (normalized.status === 'scheduled' || normalized.status === 'published') {
+      // Remove from drafts and add to published/scheduled
+      setDraftSessions(prev => prev.filter(s => s.id !== normalized.id));
+      setPublishedSessions(prev => {
+        const filtered = prev.filter(s => s.id !== normalized.id);
+        return [normalized, ...filtered];
+      });
+    } else if (normalized.status === 'draft') {
+      // Keep in drafts if backend returns draft
+      setDraftSessions(prev => {
+        const filtered = prev.filter(s => s.id !== normalized.id);
+        return [normalized, ...filtered];
+      });
+    }
 
     // Log activity
     addActivity(
@@ -5874,7 +7302,8 @@ Make the content professional, educational, and suitable for workplace training.
               </DialogActions>
             </Dialog>
             
-            {/* Default 5 Action Buttons */}
+            {/* Default 5 Action Buttons - Only show if no template is selected yet */}
+            {!selectedTemplate && (
             <Box display="flex" gap={2} mt={4} justifyContent="center" flexWrap="wrap">
               <Button
                 variant="outlined"
@@ -5961,6 +7390,7 @@ Make the content professional, educational, and suitable for workplace training.
                 Next
               </Button>
             </Box>
+            )}
           </Card>
         </Box>
 
@@ -6285,111 +7715,7 @@ Make the content professional, educational, and suitable for workplace training.
               </DialogContent>
             </Dialog>
 
-            {/* All 5 Action Buttons - Only show when fields are not saved */}
-            {!fieldsSaved && (
-              <Box display="flex" gap={2} mt={4} justifyContent="center">
-                    <Button
-                      variant="outlined"
-                  startIcon={<SaveIcon />}
-                  onClick={handleSaveSession}
-                      sx={{
-                    borderColor: '#114417DB',
-                    color: '#114417DB',
-                    '&:hover': {
-                      borderColor: '#0a2f0e',
-                      backgroundColor: 'rgba(17, 68, 23, 0.08)'
-                    },
-                    textTransform: 'none',
-                    fontWeight: 600,
-                    minWidth: 150
-                  }}
-                >
-                  Save as Draft
-                </Button>
-                <Button
-                  variant="outlined"
-                  onClick={handleSkipToNextStep}
-                  sx={{
-                    borderColor: '#6b7280',
-                    color: '#6b7280',
-                    '&:hover': {
-                      borderColor: '#4b5563',
-                      backgroundColor: '#f3f4f6'
-                    },
-                    textTransform: 'none',
-                    fontWeight: 600,
-                    minWidth: 150
-                  }}
-                >
-                  Skip
-                </Button>
-                <Button
-                  variant="outlined"
-                  onClick={() => setActiveTab('course-library')}
-                  sx={{
-                    borderColor: '#ef4444',
-                    color: '#ef4444',
-                    '&:hover': {
-                      borderColor: '#dc2626',
-                      backgroundColor: '#fef2f2'
-                    },
-                    textTransform: 'none',
-                    fontWeight: 600,
-                    minWidth: 150
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                <Button
-                  variant="outlined"
-                  startIcon={<ArrowBackIcon />}
-                  onClick={() => {
-                    setSelectedTemplate(null);
-                    setFieldsSaved(false);
-                    setCertificationView('templates');
-                    // Scroll back to template selection
-                    setTimeout(() => {
-                      const templateSection = document.getElementById('template-selection-section');
-                      if (templateSection) {
-                        templateSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                      }
-                    }, 100);
-                  }}
-                  sx={{
-                    borderColor: '#6b7280',
-                    color: '#6b7280',
-                    '&:hover': {
-                      borderColor: '#4b5563',
-                      backgroundColor: '#f3f4f6'
-                    },
-                    textTransform: 'none',
-                    fontWeight: 600,
-                    minWidth: 150
-                  }}
-                >
-                  Previous
-                    </Button>
-                    <Button
-                      variant="contained"
-                  endIcon={<ArrowForwardIcon />}
-                  onClick={handleSaveFields}
-                  disabled={fieldsSaved}
-                      sx={{
-                    backgroundColor: '#114417DB',
-                    '&:hover': { backgroundColor: '#0a2f0e' },
-                    '&:disabled': {
-                      backgroundColor: '#d1d5db',
-                      color: '#9ca3af'
-                    },
-                    textTransform: 'none',
-                    fontWeight: 600,
-                    minWidth: 150
-                  }}
-                >
-                  Next
-                    </Button>
-              </Box>
-            )}
+            {/* Note: Action buttons are shown at the bottom of the page, not here */}
           </Card>
         )}
 
@@ -6459,9 +7785,13 @@ Make the content professional, educational, and suitable for workplace training.
                       sx={{ mb: 2, display: 'block' }}
                     />
               </Box>
+            </Box>
+          </Card>
+        )}
 
-              {/* Action Buttons */}
-              <Box display="flex" gap={2} mt={4} justifyContent="center">
+        {/* Single set of action buttons at the bottom - show when template is selected */}
+        {selectedTemplate && (
+          <Box display="flex" gap={2} mt={4} justifyContent="center" flexWrap="wrap">
                 <Button
                   variant="outlined"
                   startIcon={<SaveIcon />}
@@ -6517,7 +7847,7 @@ Make the content professional, educational, and suitable for workplace training.
           <Button
             variant="outlined"
                   startIcon={<ArrowBackIcon />}
-                  onClick={handleEditFields}
+              onClick={handlePreviousStep}
             sx={{
               borderColor: '#6b7280',
               color: '#6b7280',
@@ -6535,7 +7865,7 @@ Make the content professional, educational, and suitable for workplace training.
                 <Button
                   variant="contained"
                   endIcon={<ArrowForwardIcon />}
-                  onClick={handlePermissionsSave}
+              onClick={fieldsSaved ? handleNextStep : handleSaveFields}
                   sx={{
                     backgroundColor: '#114417DB',
                     '&:hover': { backgroundColor: '#0a2f0e' },
@@ -6547,8 +7877,6 @@ Make the content professional, educational, and suitable for workplace training.
                   Next
           </Button>
         </Box>
-      </Box>
-          </Card>
         )}
 
       </Box>
@@ -6591,32 +7919,21 @@ Make the content professional, educational, and suitable for workplace training.
                               if (!selected) {
                                 return <em style={{ fontStyle: 'normal', color: '#9ca3af' }}>Select</em>;
                               }
-                              const labels = {
-                                'compliance': 'Compliance Training',
-                                'learning': 'Employee Learning and Development',
-                                'engagement': 'Employee Engagement & Well-being',
-                                'performance': 'Organizational Growth & Performance',
-                                'culture': 'Company & Culture-Oriented Sessions',
-                                'dei': 'Diversity, Equity & Inclusion (DEI)',
-                                'safety': 'Workplace Safety',
-                                'security': 'Security Awareness',
-                                'live-training': 'Live Training'
-                              };
-                              return labels[selected] || selected;
+                              return selected; // Display the stored value directly (which is now the label)
                             }}
                           >
                             <MenuItem value="">
                               <em style={{ fontStyle: 'normal', color: '#9ca3af' }}>Select</em>
                             </MenuItem>
-                            <MenuItem value="compliance">Compliance Training</MenuItem>
-                            <MenuItem value="learning">Employee Learning and Development</MenuItem>
-                            <MenuItem value="engagement">Employee Engagement & Well-being</MenuItem>
-                            <MenuItem value="performance">Organizational Growth & Performance</MenuItem>
-                            <MenuItem value="culture">Company & Culture-Oriented Sessions</MenuItem>
-                            <MenuItem value="dei">Diversity, Equity & Inclusion (DEI)</MenuItem>
-                            <MenuItem value="safety">Workplace Safety</MenuItem>
-                            <MenuItem value="security">Security Awareness</MenuItem>
-                            <MenuItem value="live-training">Live Training</MenuItem>
+                            <MenuItem value="Compliance Training">Compliance Training</MenuItem>
+                            <MenuItem value="Employee Learning and Development">Employee Learning and Development</MenuItem>
+                            <MenuItem value="Employee Engagement & Well-being">Employee Engagement & Well-being</MenuItem>
+                            <MenuItem value="Organizational Growth & Performance">Organizational Growth & Performance</MenuItem>
+                            <MenuItem value="Company & Culture-Oriented Sessions">Company & Culture-Oriented Sessions</MenuItem>
+                            <MenuItem value="Diversity, Equity & Inclusion (DEI)">Diversity, Equity & Inclusion (DEI)</MenuItem>
+                            <MenuItem value="Workplace Safety">Workplace Safety</MenuItem>
+                            <MenuItem value="Security Awareness">Security Awareness</MenuItem>
+                            <MenuItem value="Live Training">Live Training</MenuItem>
                           </Select>
                         </FormControl>
             <FormControl fullWidth margin="normal" required error={false}>
@@ -7984,7 +9301,7 @@ Make the content professional, educational, and suitable for workplace training.
       const sessionData = {
         title: resolvedSessionForm.title || selectedSessionForScheduling?.title || 'Untitled Session',
         description: resolvedSessionForm.description || selectedSessionForScheduling?.description || '',
-        type: mapSessionTypeToBackend(resolvedSessionForm.type || selectedSessionForScheduling?.type) || 'General',
+        type: resolvedSessionForm.type || selectedSessionForScheduling?.type || 'Not specified',
         skills: resolvedSessionForm.skills || selectedSessionForScheduling?.skills || [],
         files: resolvedFiles,
         quiz: resolvedQuiz,
@@ -8027,14 +9344,14 @@ Make the content professional, educational, and suitable for workplace training.
                            publishedSessions.find(s => s.title === sessionTitle);
         }
       }
-      if (existingSession && existingSession.id) {
+        if (existingSession && existingSession.id) {
         // Check if the ID is a database ID (numeric) - if not, it might be a temporary ID
         const existingIdIsNumeric = typeof existingSession.id === 'number' || (typeof existingSession.id === 'string' && /^\d+$/.test(existingSession.id) && existingSession.id.length < 12);
         
         if (existingIdIsNumeric) {
           // Update existing session using its database ID
           try {
-            savedSession = await sessionAPI.update(existingSession.id, sessionData);
+          savedSession = await sessionAPI.update(existingSession.id, sessionData);
           } catch (updateError) {
             console.error('Failed to update session by ID, trying to find in backend:', updateError);
             // If update fails, try to find the session in the backend by fetching all and matching by title
@@ -8088,13 +9405,13 @@ Make the content professional, educational, and suitable for workplace training.
             savedSession = await sessionAPI.update(backendSession.id, sessionData);
           } else {
             // Try to update with the numeric ID (might be a valid database ID)
-            try {
-              savedSession = await sessionAPI.update(sessionId, sessionData);
-            } catch (updateError) {
+          try {
+            savedSession = await sessionAPI.update(sessionId, sessionData);
+          } catch (updateError) {
               console.error('Failed to update with numeric ID, creating new session:', updateError);
-              savedSession = await sessionAPI.create(sessionData);
-            }
+            savedSession = await sessionAPI.create(sessionData);
           }
+        }
         } catch (error) {
           console.error('Failed to check backend, trying direct update:', error);
           // Last resort: try direct update
@@ -8115,10 +9432,10 @@ Make the content professional, educational, and suitable for workplace training.
           );
           if (backendSession && backendSession.id) {
             savedSession = await sessionAPI.update(backendSession.id, sessionData);
-          } else {
+      } else {
             // No matching session found - create new one
             console.log('No matching session in backend, creating new session');
-            savedSession = await sessionAPI.create(sessionData);
+        savedSession = await sessionAPI.create(sessionData);
           }
         } catch (error) {
           console.error('Failed to find session in backend:', error);
@@ -9784,18 +11101,37 @@ Make the content professional, educational, and suitable for workplace training.
                 </Box>
               )}
 
-              {isAssessment && selectedAllSessionItem.assessmentInfo && (
-                <Box mb={3}>
-                  <Typography variant="body2" color="text.secondary" gutterBottom fontWeight="bold">
-                    Assessment Settings
-                  </Typography>
-                  <Box sx={{ pl: 2 }}>
-                    <Typography variant="body2">Quiz Title: {selectedAllSessionItem.assessmentInfo.quizTitle || 'N/A'}</Typography>
-                    <Typography variant="body2">Passing Score: {selectedAllSessionItem.assessmentInfo.passingScore || 'N/A'}%</Typography>
-                    <Typography variant="body2">Max Attempts: {selectedAllSessionItem.assessmentInfo.maxAttempts || 'N/A'}</Typography>
+              {(() => {
+                if (!isAssessment || !selectedAllSessionItem.assessmentInfo) return null;
+                
+                // Parse assessmentInfo if it's a string
+                let assessmentInfo = selectedAllSessionItem.assessmentInfo;
+                if (typeof assessmentInfo === 'string') {
+                  try {
+                    assessmentInfo = JSON.parse(assessmentInfo);
+                  } catch (e) {
+                    console.error('Error parsing assessmentInfo:', e);
+                    return null;
+                  }
+                }
+                const criteriaValue = assessmentInfo?.criteriaDescription || assessmentInfo?.criteria_description || assessmentInfo?.criteria || assessmentInfo?.description || '';
+                
+                return (
+                  <Box mb={3}>
+                    <Typography variant="body2" color="text.secondary" gutterBottom fontWeight="bold">
+                      Assessment Settings
+                    </Typography>
+                    <Box sx={{ pl: 2 }}>
+                      <Typography variant="body2">Quiz Title: {assessmentInfo?.quizTitle || assessmentInfo?.quiz_title || 'N/A'}</Typography>
+                      <Typography variant="body2">Passing Score: {assessmentInfo?.passingScore || assessmentInfo?.passing_score || 'N/A'}%</Typography>
+                      <Typography variant="body2">Max Attempts: {assessmentInfo?.maxAttempts || assessmentInfo?.max_attempts || 'N/A'}</Typography>
+                      {criteriaValue && (
+                        <Typography variant="body2">Passing Criteria: {criteriaValue}</Typography>
+                      )}
+                    </Box>
                   </Box>
-                </Box>
-              )}
+                );
+              })()}
 
               <Typography variant="body2" color="text.secondary" gutterBottom>
                 <strong>{isPublished ? 'Published' : 'Saved'}:</strong> {new Date(selectedAllSessionItem.publishedAt || selectedAllSessionItem.savedAt).toLocaleString()}
@@ -10000,32 +11336,58 @@ Make the content professional, educational, and suitable for workplace training.
               )}
             </Box>
             
-            {isAssessment && sessionToDisplay.assessmentInfo && (
-              <Box mb={3} p={2} sx={{ backgroundColor: '#eff6ff', borderRadius: 1 }}>
-                <Typography variant="body2" fontWeight="bold" gutterBottom>
-                  Assessment Title: {sessionToDisplay.assessmentInfo.quizTitle || sessionToDisplay.title || 'Untitled Assessment'}
-                </Typography>
-                <Box display="flex" gap={2} flexWrap="wrap" mt={1}>
-                  <Chip 
-                    label={`Passing Score: ${sessionToDisplay.assessmentInfo.passingScore || 'N/A'}%`} 
-                    size="small" 
-                    color="primary"
-                  />
-                  <Chip 
-                    label={`Max Attempts: ${sessionToDisplay.assessmentInfo.maxAttempts || 'N/A'}`} 
-                    size="small" 
-                    color="secondary"
-                  />
-                  {(sessionToDisplay.quiz?.questions || sessionToDisplay.questions) && (
+            {isAssessment && sessionToDisplay.assessmentInfo && (() => {
+              // Parse assessmentInfo if it's a string
+              let assessmentInfo = sessionToDisplay.assessmentInfo;
+              if (typeof assessmentInfo === 'string') {
+                try {
+                  assessmentInfo = JSON.parse(assessmentInfo);
+                } catch (e) {
+                  console.error('Error parsing assessmentInfo:', e);
+                }
+              }
+              const criteriaValue = assessmentInfo?.criteriaDescription || assessmentInfo?.criteria_description || assessmentInfo?.criteria || assessmentInfo?.description || '';
+              const quizTitle = assessmentInfo?.quizTitle || assessmentInfo?.quiz_title || sessionToDisplay.title || 'Untitled Assessment';
+              const passingScore = assessmentInfo?.passingScore || assessmentInfo?.passing_score || 'N/A';
+              const maxAttempts = assessmentInfo?.maxAttempts || assessmentInfo?.max_attempts || 'N/A';
+              
+              return (
+                <Box mb={3} p={2} sx={{ backgroundColor: '#eff6ff', borderRadius: 1 }}>
+                  <Typography variant="body2" fontWeight="bold" gutterBottom>
+                    Assessment Title: {quizTitle}
+                  </Typography>
+                  <Box display="flex" gap={2} flexWrap="wrap" mt={1}>
                     <Chip 
-                      label={`${(sessionToDisplay.quiz?.questions || sessionToDisplay.questions).length} Questions`} 
+                      label={`Passing Score: ${passingScore}%`} 
                       size="small" 
-                      color="success"
+                      color="primary"
                     />
+                    <Chip 
+                      label={`Max Attempts: ${maxAttempts}`} 
+                      size="small" 
+                      color="secondary"
+                    />
+                    {(sessionToDisplay.quiz?.questions || sessionToDisplay.questions) && (
+                      <Chip 
+                        label={`${(sessionToDisplay.quiz?.questions || sessionToDisplay.questions).length} Questions`} 
+                        size="small" 
+                        color="success"
+                      />
+                    )}
+                  </Box>
+                  {criteriaValue && (
+                    <Box mt={2}>
+                      <Typography variant="body2" fontWeight="medium" gutterBottom>
+                        Passing Criteria:
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {criteriaValue}
+                      </Typography>
+                    </Box>
                   )}
                 </Box>
-              </Box>
-            )}
+              );
+            })()}
 
             <Box>
               {(sessionToDisplay.quiz?.questions || sessionToDisplay.questions || []).map((question, index) => (
@@ -10510,11 +11872,11 @@ Make the content professional, educational, and suitable for workplace training.
       setIsLoading(true);
       // Prepare session data for API - update existing record if it has an ID
       const sessionData = {
-        title: publishCourseData.courseTitle,
-        description: publishCourseData.description || sessionToPublish?.description || '',
-        type: mapSessionTypeToBackend(sessionToPublish?.type) || 'General',
+      title: publishCourseData.courseTitle,
+      description: publishCourseData.description || sessionToPublish?.description || '',
+        type: sessionToPublish?.type || 'Not specified',
         skills: publishCourseData.skills || sessionToPublish?.skills || [],
-        files: sessionToPublish?.files || sessionToPublish?.resumeState?.selectedFiles || [],
+      files: sessionToPublish?.files || sessionToPublish?.resumeState?.selectedFiles || [],
         quiz: sessionToPublish?.quiz || 
               currentQuizData?.quiz || 
               currentQuizData || 
@@ -10635,11 +11997,11 @@ Make the content professional, educational, and suitable for workplace training.
       const normalized = normalizePublishedSession(savedSession);
       
       // Remove from drafts if it was a draft
-      if (sessionToPublish.status === 'draft' || !sessionToPublish.status) {
+    if (sessionToPublish.status === 'draft' || !sessionToPublish.status) {
         setDraftSessions(prev => prev.filter(s => s.id !== savedSession.id));
-      } else if (sessionToPublish.status === 'saved') {
+    } else if (sessionToPublish.status === 'saved') {
         setSavedAssessments(prev => prev.filter(s => s.id !== savedSession.id));
-      }
+    }
 
       // Update published sessions - replace if exists, add if new
       setPublishedSessions(prev => {
@@ -10652,25 +12014,25 @@ Make the content professional, educational, and suitable for workplace training.
         const filtered = prev.filter(s => s.id !== savedSession.id);
         return [normalized, ...filtered];
       });
-      
-      // Log activity
-      addActivity(
-        `Session published: ${publishCourseData.courseTitle}`,
-        'Admin',
-        'published',
-        'session_published'
-      );
-      
-      setShowPublishDialog(false);
-      setSessionToPublish(null);
-      
-      // Navigate to Schedule step in manage section
-      setActiveTab('manage-session');
-      setManageSessionTab('schedule');
+    
+    // Log activity
+    addActivity(
+      `Session published: ${publishCourseData.courseTitle}`,
+      'Admin',
+      'published',
+      'session_published'
+    );
+    
+    setShowPublishDialog(false);
+    setSessionToPublish(null);
+    
+    // Navigate to Schedule step in manage section
+    setActiveTab('manage-session');
+    setManageSessionTab('schedule');
       setSelectedSessionForScheduling(normalized);
-      setShowScheduleDialog(true);
-      
-      showToast('Session published successfully! Please schedule the session.', 'success');
+    setShowScheduleDialog(true);
+    
+    showToast('Session published successfully! Please schedule the session.', 'success');
     } catch (error) {
       console.error('Failed to publish session:', error);
       showToast(`Failed to publish session: ${error.message}`, 'error');
@@ -10753,18 +12115,62 @@ Make the content professional, educational, and suitable for workplace training.
     const resolvedSessionForm = sessionContentSnapshot?.sessionForm || sessionFormData;
     const resolvedAiContent = sessionContentSnapshot?.aiContent ?? (aiContentGenerated ? { keywords: aiKeywords } : null);
     const resolvedFiles = sessionContentSnapshot?.files ?? mapFilesToMetadata(selectedFiles);
-    const resolvedQuiz = currentQuizData?.quiz || null;
+    let resolvedQuiz = currentQuizData?.quiz || null;
+    
+    // Merge assessmentInfo from session level if available (for saved sessions)
+    if (resolvedQuiz && (sessionContentSnapshot?.assessmentInfo || sessionContentSnapshot?.assessment_info)) {
+      try {
+        const sessionAssessmentInfo = sessionContentSnapshot?.assessmentInfo || sessionContentSnapshot?.assessment_info;
+        const parsedAssessmentInfo = typeof sessionAssessmentInfo === 'string' ? JSON.parse(sessionAssessmentInfo) : sessionAssessmentInfo;
+        if (!resolvedQuiz.assessmentInfo) {
+          resolvedQuiz = { ...resolvedQuiz, assessmentInfo: {} };
+        }
+        resolvedQuiz.assessmentInfo = {
+          ...resolvedQuiz.assessmentInfo,
+          quizTitle: parsedAssessmentInfo?.quizTitle || parsedAssessmentInfo?.quiz_title || resolvedQuiz.assessmentInfo?.quizTitle || '',
+          passingScore: parsedAssessmentInfo?.passingScore || parsedAssessmentInfo?.passing_score || resolvedQuiz.assessmentInfo?.passingScore || '',
+          maxAttempts: parsedAssessmentInfo?.maxAttempts || parsedAssessmentInfo?.max_attempts || resolvedQuiz.assessmentInfo?.maxAttempts || '',
+          criteriaDescription: parsedAssessmentInfo?.criteriaDescription || parsedAssessmentInfo?.criteria_description || parsedAssessmentInfo?.criteria || parsedAssessmentInfo?.description || resolvedQuiz.assessmentInfo?.criteriaDescription || resolvedQuiz.assessmentInfo?.criteria || resolvedQuiz.assessmentInfo?.description || ''
+        };
+      } catch (e) {
+        console.error('Error merging assessment info:', e);
+      }
+    }
+    
     const resolvedCreationMode = sessionContentSnapshot?.creationMode ?? selectedCreationMode;
     
     // Get certification for this session if any
     // Check if a certificate template has been selected and configured
-    const hasCertificate = selectedTemplate && fieldsSaved;
-    const sessionCert = hasCertificate ? {
-      id: 'preview-cert',
-      name: selectedTemplate.name || 'Certificate',
-      template: selectedTemplate,
-      fields: certificateFields
-    } : null;
+    // Priority: sessionContentSnapshot > selectedTemplate + fieldsSaved > saved session data
+    const savedCertification = sessionContentSnapshot?.certification || null;
+    const hasCertificate = savedCertification || (selectedTemplate && fieldsSaved);
+    
+    let sessionCert = null;
+    if (savedCertification) {
+      // Use certification from sessionContentSnapshot (saved session data)
+      sessionCert = {
+        id: 'preview-cert',
+        name: savedCertification.name || 'Certificate',
+        template: savedCertification.template || savedCertification.templateId || defaultTemplateId || selectedMenuTemplate || selectedTemplate,
+        fields: savedCertification.fields || certificateFields
+      };
+    } else if (selectedTemplate && fieldsSaved) {
+      // Use currently selected template (new session)
+      sessionCert = {
+        id: 'preview-cert',
+        name: selectedTemplate.name || 'Certificate',
+        template: selectedTemplate,
+        fields: certificateFields
+      };
+    } else if (defaultTemplateId && certificateFields && Object.keys(certificateFields).length > 0) {
+      // Fallback: if we have a default template ID and fields, use that
+      sessionCert = {
+        id: 'preview-cert',
+        name: 'Certificate',
+        template: defaultTemplateId,
+        fields: certificateFields
+      };
+    }
     
     // Build content items for preview (excluding assessment - it's shown separately)
     const contentItems = [];
@@ -11180,83 +12586,119 @@ Make the content professional, educational, and suitable for workplace training.
         </Card>
 
         {/* Assessment Section */}
-        {resolvedQuiz && resolvedQuiz.questions && resolvedQuiz.questions.length > 0 && (
-          <Card sx={{ mb: 3, p: 3 }}>
-            <Box display="flex" alignItems="center" gap={1} mb={2}>
-              <QuizIcon sx={{ color: '#ef4444', fontSize: 28 }} />
-              <Typography variant="h6" fontWeight="bold" sx={{ color: '#114417DB' }}>
-                Assessment Details
+        {resolvedQuiz && resolvedQuiz.questions && resolvedQuiz.questions.length > 0 && (() => {
+          // Parse assessmentInfo if it's a string, and merge with any session-level assessment_info
+          let assessmentInfo = resolvedQuiz.assessmentInfo;
+          if (typeof assessmentInfo === 'string') {
+            try {
+              assessmentInfo = JSON.parse(assessmentInfo);
+            } catch (e) {
+              console.error('Error parsing assessmentInfo:', e);
+            }
+          }
+          // If still no assessmentInfo, try to get from sessionContentSnapshot
+          if (!assessmentInfo && (sessionContentSnapshot?.assessmentInfo || sessionContentSnapshot?.assessment_info)) {
+            try {
+              const sessionAssessmentInfo = sessionContentSnapshot?.assessmentInfo || sessionContentSnapshot?.assessment_info;
+              assessmentInfo = typeof sessionAssessmentInfo === 'string' ? JSON.parse(sessionAssessmentInfo) : sessionAssessmentInfo;
+            } catch (e) {
+              console.error('Error parsing session assessmentInfo:', e);
+            }
+          }
+          
+          const quizTitle = assessmentInfo?.quizTitle || assessmentInfo?.quiz_title || resolvedQuiz.title || 'Checkpoint Assessment';
+          const passingScore = assessmentInfo?.passingScore || assessmentInfo?.passing_score;
+          const maxAttempts = assessmentInfo?.maxAttempts || assessmentInfo?.max_attempts;
+          const passingCriteria = assessmentInfo?.criteriaDescription || assessmentInfo?.criteria_description || assessmentInfo?.criteria || assessmentInfo?.description || '';
+          
+          return (
+            <Card sx={{ mb: 3, p: 3 }}>
+              <Box display="flex" alignItems="center" gap={1} mb={2}>
+                <QuizIcon sx={{ color: '#ef4444', fontSize: 28 }} />
+                <Typography variant="h6" fontWeight="bold" sx={{ color: '#114417DB' }}>
+                  Assessment Details
                 </Typography>
               </Box>
-            <Grid container spacing={2} mb={2}>
-              <Grid item xs={12} md={4}>
-                <Typography variant="body2" color="text.secondary">
-                  Assessment Title
-              </Typography>
-                <Typography variant="body1" fontWeight="medium">
-                  {resolvedQuiz.title || resolvedQuiz.assessmentInfo?.quizTitle || 'Checkpoint Assessment'}
-                </Typography>
-              </Grid>
-              <Grid item xs={12} md={4}>
-                <Typography variant="body2" color="text.secondary">
-                  Total Questions
-                </Typography>
-                <Typography variant="body1" fontWeight="medium">
-                  {resolvedQuiz.questions.length}
-                          </Typography>
-              </Grid>
-              {resolvedQuiz.assessmentInfo?.passingScore && (
+              <Grid container spacing={2} mb={2}>
                 <Grid item xs={12} md={4}>
                   <Typography variant="body2" color="text.secondary">
-                    Passing Score
-                          </Typography>
-                  <Typography variant="body1" fontWeight="medium">
-                    {resolvedQuiz.assessmentInfo.passingScore}%
+                    Assessment Title
                   </Typography>
+                  <Typography variant="body1" fontWeight="medium">
+                    {quizTitle}
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} md={4}>
+                  <Typography variant="body2" color="text.secondary">
+                    Total Questions
+                  </Typography>
+                  <Typography variant="body1" fontWeight="medium">
+                    {resolvedQuiz.questions.length}
+                  </Typography>
+                </Grid>
+                {passingScore && (
+                  <Grid item xs={12} md={4}>
+                    <Typography variant="body2" color="text.secondary">
+                      Passing Score
+                    </Typography>
+                    <Typography variant="body1" fontWeight="medium">
+                      {passingScore}%
+                    </Typography>
                   </Grid>
-              )}
-              {resolvedQuiz.assessmentInfo?.maxAttempts && (
-                <Grid item xs={12} md={4}>
-                  <Typography variant="body2" color="text.secondary">
-                    Max Attempts
-                  </Typography>
-                  <Typography variant="body1" fontWeight="medium">
-                    {resolvedQuiz.assessmentInfo.maxAttempts}
-                  </Typography>
+                )}
+                {maxAttempts && (
+                  <Grid item xs={12} md={4}>
+                    <Typography variant="body2" color="text.secondary">
+                      Max Attempts
+                    </Typography>
+                    <Typography variant="body1" fontWeight="medium">
+                      {maxAttempts}
+                    </Typography>
+                  </Grid>
+                )}
               </Grid>
-            )}
-            </Grid>
-            <Divider sx={{ my: 2 }} />
-            <Typography variant="subtitle2" fontWeight="bold" mb={1}>
-              Questions Preview
+              {passingCriteria && (
+                <Box mt={2}>
+                  <Typography variant="body2" color="text.secondary" mb={1}>
+                    Passing Criteria
+                  </Typography>
+                  <Typography variant="body1">
+                    {passingCriteria}
+                  </Typography>
+                </Box>
+              )}
+              <Divider sx={{ my: 2 }} />
+              <Typography variant="subtitle2" fontWeight="bold" mb={1}>
+                Questions Preview
               </Typography>
               <Box>
-              {resolvedQuiz.questions.slice(0, 3).map((question, idx) => (
-                <Card key={idx} sx={{ mb: 1, p: 2, backgroundColor: '#f9fafb' }}>
-                  <Typography variant="body2" fontWeight="medium" mb={1}>
-                    {idx + 1}. {question.text || question.question || 'Question'}
-                </Typography>
-                  {question.options && question.options.length > 0 && (
-                    <List dense>
-                      {question.options.map((option, optIdx) => (
-                        <ListItem key={optIdx} sx={{ py: 0.25 }}>
-                          <Typography variant="body2" color="text.secondary">
-                            {String.fromCharCode(65 + optIdx)}. {option}
-                          </Typography>
-                        </ListItem>
-                      ))}
-                    </List>
-                  )}
-                </Card>
-              ))}
-              {resolvedQuiz.questions.length > 3 && (
-                <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic', mt: 1 }}>
-                  ... and {resolvedQuiz.questions.length - 3} more question{resolvedQuiz.questions.length - 3 === 1 ? '' : 's'}
-                </Typography>
-              )}
-            </Box>
-          </Card>
-        )}
+                {resolvedQuiz.questions.slice(0, 3).map((question, idx) => (
+                  <Card key={idx} sx={{ mb: 1, p: 2, backgroundColor: '#f9fafb' }}>
+                    <Typography variant="body2" fontWeight="medium" mb={1}>
+                      {idx + 1}. {question.text || question.question || 'Question'}
+                    </Typography>
+                    {question.options && question.options.length > 0 && (
+                      <List dense>
+                        {question.options.map((option, optIdx) => (
+                          <ListItem key={optIdx} sx={{ py: 0.25 }}>
+                            <Typography variant="body2" color="text.secondary">
+                              {String.fromCharCode(65 + optIdx)}. {option}
+                            </Typography>
+                          </ListItem>
+                        ))}
+                      </List>
+                    )}
+                  </Card>
+                ))}
+                {resolvedQuiz.questions.length > 3 && (
+                  <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic', mt: 1 }}>
+                    ... and {resolvedQuiz.questions.length - 3} more question{resolvedQuiz.questions.length - 3 === 1 ? '' : 's'}
+                  </Typography>
+                )}
+              </Box>
+            </Card>
+          );
+        })()}
 
         {/* Certification Section */}
         {sessionCert && (
@@ -11307,6 +12749,250 @@ Make the content professional, educational, and suitable for workplace training.
                 </>
               )}
             </Grid>
+            
+            {/* Certificate Template Preview */}
+            {(() => {
+              const certTemplate = sessionCert.template;
+              const certFields = sessionCert.fields || {};
+              
+              // Find template by ID if it's a number, or use the template object directly
+              let template = null;
+              const certificateTemplates = [
+                { id: 1, name: 'Certificate of Appreciation', title: 'CERTIFICATE', subtitle: 'OF APPRECIATION', design: 'gradient-border', borderColors: ['#8b5cf6', '#f59e0b'] },
+                { id: 2, name: 'Certificate of Excellence', title: 'CERTIFICATE', subtitle: 'Meaningful Leader Certification', design: 'green-gold', borderColors: ['#10b981', '#fbbf24'], hasMedal: true },
+                { id: 3, name: 'Certificate of Completion', title: 'CERTIFICATE', subtitle: 'OF COMPLETION', design: 'minimal', borderColors: ['#10b981'] },
+                { id: 4, name: 'Certificate of Achievement', title: 'CERTIFICATE', subtitle: 'OF ACHIEVEMENT', design: 'gradient-vibrant', borderColors: ['#8b5cf6', '#f59e0b', '#fbbf24'], hasMedal: true },
+                { id: 5, name: 'Certificate Vertical', title: 'CERTIFICATE', subtitle: 'OF COMPLETION', design: 'vertical-red', borderColors: ['#ef4444'] },
+                { id: 6, name: 'Certificate Simple', title: 'CERTIFICATE', subtitle: 'Creating Power Manager for Leader', design: 'simple-white', borderColors: ['#e5e7eb'], hasMedal: true }
+              ];
+              
+              if (certTemplate) {
+                // Try to find template by ID (could be number or string)
+                if (typeof certTemplate === 'number') {
+                  template = certificateTemplates.find(t => t.id === certTemplate);
+                } else if (typeof certTemplate === 'string') {
+                  // If it's a string, try to parse as number
+                  const templateId = parseInt(certTemplate, 10);
+                  if (!isNaN(templateId)) {
+                    template = certificateTemplates.find(t => t.id === templateId);
+                  }
+                } else if (typeof certTemplate === 'object') {
+                  // If it's an object, check if it has an id property
+                  if (certTemplate.id) {
+                    template = certificateTemplates.find(t => t.id === certTemplate.id);
+                  } else if (certTemplate.name && certTemplate.design) {
+                    // Template object might already have all needed data
+                    template = certTemplate;
+                  } else if (certTemplate.name) {
+                    // Try to find by name if no id
+                    template = certificateTemplates.find(t => t.name === certTemplate.name) || certTemplate;
+                  }
+                }
+              }
+              
+              // Show preview if we have a template OR certificate fields (even without template, show default)
+              if (template || (certFields && Object.keys(certFields).length > 0)) {
+                // If no template found but we have fields, use first template as default
+                if (!template) {
+                  template = certificateTemplates[0]; // Default to first template
+                }
+                
+                return (
+                  <Grid item xs={12} sx={{ mt: 2 }}>
+                    <Typography variant="body2" color="text.secondary" gutterBottom>
+                      Template Preview
+                    </Typography>
+                    <Card
+                      sx={{
+                        position: 'relative',
+                        border: '2px solid #8b5cf6',
+                        borderRadius: 2,
+                        overflow: 'hidden',
+                        boxShadow: '0 4px 12px rgba(139, 92, 246, 0.2)',
+                        maxWidth: '500px'
+                      }}
+                    >
+                      <Box
+                        sx={{
+                          aspectRatio: '4/3',
+                          position: 'relative',
+                          backgroundColor: '#ffffff',
+                          p: 2.5,
+                          ...(template.design === 'gradient-border' && {
+                            borderLeft: `4px solid ${template.borderColors[0]}`,
+                            borderBottom: `4px solid ${template.borderColors[1]}`,
+                          }),
+                          ...(template.design === 'green-gold' && {
+                            border: `3px solid ${template.borderColors[0]}`,
+                            '&::before': {
+                              content: '""',
+                              position: 'absolute',
+                              top: 0,
+                              left: 0,
+                              right: 0,
+                              bottom: 0,
+                              border: `2px solid ${template.borderColors[1]}`,
+                              borderStyle: 'dashed',
+                              margin: '8px'
+                            }
+                          }),
+                          ...(template.design === 'minimal' && {
+                            borderTop: `2px solid ${template.borderColors[0]}`,
+                          }),
+                          ...(template.design === 'gradient-vibrant' && {
+                            borderLeft: `4px solid ${template.borderColors[0]}`,
+                            borderBottom: `4px solid ${template.borderColors[1]}`,
+                            borderRight: `2px solid ${template.borderColors[2]}`
+                          }),
+                          ...(template.design === 'vertical-red' && {
+                            borderTop: `4px solid ${template.borderColors[0]}`,
+                            borderLeft: `4px solid ${template.borderColors[0]}`
+                          }),
+                          ...(template.design === 'simple-white' && {
+                            border: '1px solid #e5e7eb'
+                          })
+                        }}
+                      >
+                        <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', position: 'relative', zIndex: 1 }}>
+                          {/* Top Section - Certificate Heading */}
+                          <Box sx={{ textAlign: 'center', mb: 1 }}>
+                            <Typography 
+                              variant="h6" 
+                              sx={{ 
+                                fontWeight: 'bold',
+                                fontStyle: 'italic',
+                                color: '#000000',
+                                fontSize: '0.85rem',
+                                mb: 0.5,
+                                letterSpacing: '1px'
+                              }}
+                            >
+                              {certFields.title || template.title || 'CERTIFICATE'}
+                            </Typography>
+                            <Typography 
+                              variant="caption" 
+                              sx={{ 
+                                color: '#000000',
+                                fontSize: '0.6rem',
+                                display: 'block',
+                                mb: 2
+                              }}
+                            >
+                              {certFields.subtitle ? `-${certFields.subtitle}-` : `-${template.subtitle}-`}
+                            </Typography>
+                            
+                            {/* Decorative Line */}
+                            <Box 
+                              sx={{ 
+                                width: '60%', 
+                                height: '1px', 
+                                backgroundColor: '#fbbf24', 
+                                margin: '0 auto 1rem',
+                                opacity: 0.6
+                              }} 
+                            />
+                            
+                            {/* Presented to */}
+                            <Typography 
+                              variant="caption" 
+                              sx={{ 
+                                color: '#6b7280',
+                                fontSize: '0.55rem',
+                                display: 'block',
+                                mb: 1
+                              }}
+                            >
+                              {certFields.recipientLabel || 'Presented to'}
+                            </Typography>
+                            
+                            {/* User Name */}
+                            <Typography 
+                              variant="h6" 
+                              sx={{ 
+                                fontWeight: 'bold',
+                                color: '#000000',
+                                fontSize: '0.9rem',
+                                mb: 1
+                              }}
+                            >
+                              {certFields.userName || 'User Name'}
+                            </Typography>
+                            
+                            {/* Description */}
+                            <Typography 
+                              variant="caption" 
+                              sx={{ 
+                                color: '#6b7280',
+                                fontSize: '0.5rem',
+                                fontStyle: 'italic',
+                                display: 'block',
+                                mb: 1
+                              }}
+                            >
+                              {certFields.descriptionText || 'who gave the best and completed the session'}
+                            </Typography>
+                          </Box>
+                          
+                          {/* Bottom Section - Date and Authorisation */}
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', mt: 'auto' }}>
+                            {/* Left - Date of Issue */}
+                            <Box>
+                              <Typography 
+                                variant="caption" 
+                                sx={{ 
+                                  color: '#6b7280',
+                                  fontSize: '0.45rem',
+                                  display: 'block',
+                                  mb: 0.5
+                                }}
+                              >
+                                Date of Issue
+                              </Typography>
+                              <Typography 
+                                variant="caption" 
+                                sx={{ 
+                                  color: '#000000',
+                                  fontSize: '0.5rem',
+                                  fontWeight: 'medium'
+                                }}
+                              >
+                                {certFields.dateOfIssue || '01 Sept 2026'}
+                              </Typography>
+                            </Box>
+                            
+                            {/* Right - Authorised by */}
+                            <Box sx={{ textAlign: 'right' }}>
+                              <Typography 
+                                variant="caption" 
+                                sx={{ 
+                                  color: '#6b7280',
+                                  fontSize: '0.45rem',
+                                  display: 'block',
+                                  mb: 0.5
+                                }}
+                              >
+                                Authorised by
+                              </Typography>
+                              <Typography 
+                                variant="caption" 
+                                sx={{ 
+                                  color: '#000000',
+                                  fontSize: '0.5rem',
+                                  fontWeight: 'medium'
+                                }}
+                              >
+                                {certFields.authorisedBy || 'Country Head'}
+                              </Typography>
+                            </Box>
+                          </Box>
+                        </Box>
+                      </Box>
+                    </Card>
+                  </Grid>
+                );
+              }
+              return null;
+            })()}
                 </Card>
         )}
 
@@ -13657,7 +15343,7 @@ Make the content professional, educational, and suitable for workplace training.
         reviews: 0,
         thumbnail: session.type === 'Employee Wellbeing' ? '🧘' : session.type === 'Technical Training' ? '💻' : '📚',
         status: session.status || 'draft',
-        category: session.type || 'General',
+        category: session.type || 'Not specified',
         createdAt: session.savedAt || session.createdAt,
         originalData: session,
         source: 'draft'
@@ -13688,7 +15374,7 @@ Make the content professional, educational, and suitable for workplace training.
         reviews: 0,
         thumbnail: session.type === 'Employee Wellbeing' ? '🧘' : session.type === 'Technical Training' ? '💻' : '📚',
         status: session.status || 'published',
-        category: session.type || 'General',
+        category: session.type || 'Not specified',
         createdAt: session.publishedAt || session.createdAt,
         originalData: session,
         source: 'published'
@@ -13901,9 +15587,22 @@ Make the content professional, educational, and suitable for workplace training.
             {filteredCourses.map((course) => (
               <Card
                 key={course.id}
-                onClick={() => {
-                  setSelectedLibrarySession(course.originalData);
+                onClick={async () => {
+                  try {
+                    // Fetch full session details (includes files, ai_content, quiz, etc.)
+                    const fullSession = await sessionAPI.getById(course.id);
+                    const normalizedSession = normalizePublishedSession(fullSession);
+                    setSelectedLibrarySession(normalizedSession);
                   setShowSessionDetailsDialog(true);
+                    setSessionViewMode(null); // Set to null to show Edit/Expand buttons
+                  } catch (error) {
+                    console.error('Failed to load session details:', error);
+                    // Fallback to course data if API call fails
+                    const normalizedSession = course.originalData ? normalizePublishedSession(course.originalData) : course;
+                    setSelectedLibrarySession(normalizedSession);
+                    setShowSessionDetailsDialog(true);
+                    setSessionViewMode(null); // Set to null to show Edit/Expand buttons
+                  }
                 }}
                 sx={{
                   mb: 2,
@@ -14035,9 +15734,22 @@ Make the content professional, educational, and suitable for workplace training.
             {filteredCourses.map((course) => (
               <Grid item xs={12} sm={6} md={4} lg={3} key={course.id}>
                 <Card
-                  onClick={() => {
-                    setSelectedLibrarySession(course.originalData);
+                  onClick={async () => {
+                    try {
+                      // Fetch full session details (includes files, ai_content, quiz, etc.)
+                      const fullSession = await sessionAPI.getById(course.id);
+                      const normalizedSession = normalizePublishedSession(fullSession);
+                      setSelectedLibrarySession(normalizedSession);
                     setShowSessionDetailsDialog(true);
+                      setSessionViewMode('view');
+                    } catch (error) {
+                      console.error('Failed to load session details:', error);
+                      // Fallback to course data if API call fails
+                      const normalizedSession = course.originalData ? normalizePublishedSession(course.originalData) : course;
+                      setSelectedLibrarySession(normalizedSession);
+                      setShowSessionDetailsDialog(true);
+                      setSessionViewMode('view');
+                    }
                   }}
                   sx={{
                     height: '100%',
@@ -14300,6 +16012,7 @@ Make the content professional, educational, and suitable for workplace training.
                           showToast('Cannot edit session after start date/time', 'error');
                           return;
                         }
+                        // Set sessionViewMode to 'edit' to show the edit mode dialog first
                         setSessionViewMode('edit');
                       }}
                       sx={{
@@ -14346,6 +16059,78 @@ Make the content professional, educational, and suitable for workplace training.
             <Box>
               {/* View Mode - Show all stages in read-only */}
               {renderSessionViewMode(selectedLibrarySession)}
+              
+              {/* Action Buttons - Keep visible in view mode */}
+              <Box display="flex" justifyContent="center" gap={2} flexWrap="wrap" mt={4} pt={3} sx={{ borderTop: '1px solid #e5e7eb' }}>
+                <Button
+                  variant="outlined"
+                  startIcon={<ExpandLessIcon />}
+                  onClick={() => setSessionViewMode(null)}
+                  sx={{
+                    color: '#114417DB',
+                    borderColor: '#114417DB',
+                    minWidth: 150
+                  }}
+                >
+                  Collapse
+                </Button>
+                {selectedLibrarySession?.status !== 'published' && (
+                  <>
+                    <Button
+                      variant="outlined"
+                      startIcon={<EditIcon />}
+                      onClick={() => {
+                        const startDateTime = selectedLibrarySession?.scheduledDateTime 
+                          ? new Date(selectedLibrarySession.scheduledDateTime)
+                          : null;
+                        const now = new Date();
+                        
+                        if (startDateTime && startDateTime <= now) {
+                          showToast('Cannot edit session after start date/time', 'error');
+                          return;
+                        }
+                        // Set sessionViewMode to 'edit' to show the edit mode dialog first
+                        setSessionViewMode('edit');
+                      }}
+                      sx={{
+                        color: '#114417DB',
+                        borderColor: '#114417DB',
+                        minWidth: 150
+                      }}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      startIcon={<DeleteIcon />}
+                      onClick={() => {
+                        if (window.confirm('Are you sure you want to delete this session? This will soft delete the session.')) {
+                          handleSoftDeleteSession(selectedLibrarySession);
+                        }
+                      }}
+                      sx={{
+                        color: '#ef4444',
+                        borderColor: '#ef4444',
+                        minWidth: 150
+                      }}
+                    >
+                      Delete
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      startIcon={<ScheduleIcon />}
+                      onClick={() => setSessionViewMode('reschedule')}
+                      sx={{
+                        color: '#3b82f6',
+                        borderColor: '#3b82f6',
+                        minWidth: 150
+                      }}
+                    >
+                      Reschedule
+                    </Button>
+                  </>
+                )}
+              </Box>
             </Box>
           ) : sessionViewMode === 'edit' ? (
             <Box>
@@ -14359,21 +16144,38 @@ Make the content professional, educational, and suitable for workplace training.
             </Box>
           ) : null}
         </DialogContent>
-        {sessionViewMode && (
+        {sessionViewMode && sessionViewMode !== 'view' && (
           <DialogActions>
             {sessionViewMode === 'edit' && (
-              <Button
-                variant="contained"
-                onClick={() => {
-                  handleSaveEditedSession(selectedLibrarySession);
-                }}
-                sx={{
-                  backgroundColor: '#114417DB',
-                  '&:hover': { backgroundColor: '#0a2f0e' }
-                }}
-              >
-                Save Changes
-              </Button>
+              <>
+                <Button
+                  variant="outlined"
+                  onClick={() => {
+                    setSessionViewMode(null);
+                  }}
+                  sx={{
+                    borderColor: '#6b7280',
+                    color: '#6b7280',
+                    '&:hover': { borderColor: '#4b5563', backgroundColor: '#f3f4f6' }
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="contained"
+                  startIcon={<EditIcon />}
+                  onClick={() => {
+                    // Load session data for editing and navigate to manage-session
+                    handleLoadSessionForEdit(selectedLibrarySession);
+                  }}
+                  sx={{
+                    backgroundColor: '#114417DB',
+                    '&:hover': { backgroundColor: '#0a2f0e' }
+                  }}
+                >
+                  Open in Edit Mode
+                </Button>
+              </>
             )}
             {sessionViewMode === 'reschedule' && (
               <Button
@@ -15256,14 +17058,72 @@ Make the content professional, educational, and suitable for workplace training.
         {/* Tab Content */}
         {manageSessionTab === 'create' ? (showContentCreator ? renderContentCreator() : renderCreateSession()) :
          manageSessionTab === 'content-creator' ? renderContentCreator() :
-         manageSessionTab === 'assessment' ? <InteractiveQuiz 
-          onSave={handleQuizSave} 
-          onPublish={handlePublishQuiz}
-          onSaveDraft={handleSaveQuizAsDraft}
-          onCancel={handleQuizCancel}
-          onSkip={handleQuizSkip}
-          existingQuizData={currentQuizData}
-        /> :
+         manageSessionTab === 'assessment' ? (() => {
+          console.log('Rendering InteractiveQuiz with currentQuizData:', currentQuizData);
+          console.log('currentQuizData structure:', {
+            title: currentQuizData?.title,
+            assessmentInfo: currentQuizData?.assessmentInfo,
+            questions: currentQuizData?.questions,
+            hasQuiz: !!currentQuizData?.title || !!currentQuizData?.assessmentInfo || !!currentQuizData?.questions
+          });
+          
+          // Safety check: If currentQuizData has wrong structure or missing quiz data,
+          // try to use sessionContentSnapshot.quiz directly as fallback
+          let quizDataToPass = currentQuizData;
+          
+          const hasWrongStructure = currentQuizData && 
+            (currentQuizData.aiContent !== undefined || currentQuizData.creationMode !== undefined || currentQuizData.files || currentQuizData.timestamp !== undefined) &&
+            !currentQuizData.title && !currentQuizData.assessmentInfo && (!currentQuizData.questions || currentQuizData.questions.length === 0);
+          
+          const isMissingQuizData = !currentQuizData || (!currentQuizData.title && !currentQuizData.assessmentInfo && (!currentQuizData.questions || currentQuizData.questions.length === 0));
+          
+          if (hasWrongStructure || isMissingQuizData) {
+            console.warn('currentQuizData has wrong structure or is missing quiz data, using sessionContentSnapshot.quiz as fallback');
+            console.log('sessionContentSnapshot:', sessionContentSnapshot);
+            console.log('sessionContentSnapshot.quiz:', sessionContentSnapshot?.quiz);
+            console.log('sessionContentSnapshot.assessmentInfo:', sessionContentSnapshot?.assessmentInfo);
+            
+            // Try to use sessionContentSnapshot.quiz directly as fallback (don't set state here to avoid infinite loop)
+            if (sessionContentSnapshot?.quiz && typeof sessionContentSnapshot.quiz === 'object') {
+              const restoredQuiz = sessionContentSnapshot.quiz;
+              const restoredAssessmentInfo = sessionContentSnapshot.assessmentInfo || sessionContentSnapshot.assessment_info || null;
+              
+              // Check if restoredQuiz has quiz structure (not sessionContentSnapshot structure)
+              const hasValidQuizStructure = restoredQuiz.title || restoredQuiz.assessmentInfo || (restoredQuiz.questions && Array.isArray(restoredQuiz.questions) && restoredQuiz.questions.length > 0);
+              
+              if (hasValidQuizStructure) {
+                quizDataToPass = {
+                  title: restoredQuiz.title || 'Questionnaire Form',
+                  description: restoredQuiz.description || '',
+                  questions: Array.isArray(restoredQuiz.questions) ? restoredQuiz.questions : [],
+                  assessmentInfo: restoredAssessmentInfo || restoredQuiz.assessmentInfo || {
+                    quizTitle: restoredQuiz.title || 'Questionnaire Form',
+                    passingScore: '',
+                    maxAttempts: '',
+                    criteriaDescription: ''
+                  }
+                };
+                console.log('Using restored quiz data from sessionContentSnapshot.quiz:', quizDataToPass);
+                console.log('quizDataToPass.assessmentInfo:', quizDataToPass.assessmentInfo);
+              } else {
+                console.error('sessionContentSnapshot.quiz exists but does not have valid quiz structure:', restoredQuiz);
+              }
+            } else {
+              console.error('sessionContentSnapshot.quiz is missing or not an object:', sessionContentSnapshot?.quiz);
+            }
+          }
+          
+          return (
+            <InteractiveQuiz 
+              onSave={handleQuizSave} 
+              onPublish={handlePublishQuiz}
+              onSaveDraft={handleSaveQuizAsDraft}
+              onCancel={handleQuizCancel}
+              onSkip={handleQuizSkip}
+              existingQuizData={quizDataToPass}
+            />
+          );
+        })() :
          manageSessionTab === 'certification' ? renderCertificationTemplates() :
          manageSessionTab === 'preview' ? renderAllSessions() :
          manageSessionTab === 'schedule' ? renderScheduleSessions() :
