@@ -39,7 +39,7 @@ import {
 } from '@mui/icons-material';
 import { styled } from '@mui/material/styles';
 import { useSessionRequests } from '../contexts/SessionRequestContext';
-import { sessionAPI } from '../utils/api';
+import { sessionAPI, notificationAPI } from '../utils/api';
 
 const APPROVAL_WINDOW_DAYS = 5;
 
@@ -140,31 +140,43 @@ const Approvals = () => {
     setShowActionDialog(true);
   };
 
-  const handleActionSubmit = () => {
+  const handleActionSubmit = async () => {
     if (!selectedRequest) return;
 
     if (actionType === 'approve') {
-      const approvedAt = new Date();
-      const approvalExpiresAt = new Date(approvedAt);
-      approvalExpiresAt.setDate(approvalExpiresAt.getDate() + APPROVAL_WINDOW_DAYS);
+      try {
+        const approvedAt = new Date();
+        const approvalExpiresAt = new Date(approvedAt);
+        approvalExpiresAt.setDate(approvalExpiresAt.getDate() + APPROVAL_WINDOW_DAYS);
 
-      updateRequestStatus(selectedRequest.id, 'approved', {
-        approvedAt: approvedAt.toISOString(),
-        approvalExpiresAt: approvalExpiresAt.toISOString()
-      });
+        await updateRequestStatus(selectedRequest.id, 'approved', {
+          approvedAt: approvedAt.toISOString(),
+          approvalExpiresAt: approvalExpiresAt.toISOString()
+        });
 
-      // Unlock the session
-      unlockSessionForEmployee(selectedRequest);
-      
-      // Small delay to ensure localStorage is updated and event is processed
-      setTimeout(() => {
-        alert(`Request approved successfully! The employee has ${APPROVAL_WINDOW_DAYS} days to complete the session before it locks again.`);
-      }, 100);
+        // Unlock the session
+        await unlockSessionForEmployee(selectedRequest);
+        
+        // Notification is automatically created by the backend when status changes to 'approved'
+        // Small delay to ensure localStorage is updated and event is processed
+        setTimeout(() => {
+          alert(`Request approved successfully! The employee has been notified and has ${APPROVAL_WINDOW_DAYS} days to complete the session before it locks again.`);
+        }, 100);
+      } catch (error) {
+        console.error('Error approving request:', error);
+        alert('Failed to approve request. Please try again.');
+      }
     } else if (actionType === 'reject') {
-      updateRequestStatus(selectedRequest.id, 'denied', {
-        deniedAt: new Date().toISOString()
-      });
-      alert('Request rejected. Employee will be notified.');
+      try {
+        await updateRequestStatus(selectedRequest.id, 'rejected', {
+          deniedAt: new Date().toISOString()
+        });
+        // Notification is automatically created by the backend when status changes to 'rejected'
+        alert('Request rejected. Employee has been notified.');
+      } catch (error) {
+        console.error('Error rejecting request:', error);
+        alert('Failed to reject request. Please try again.');
+      }
     } else if (actionType === 'message') {
       alert(`Message sent to ${selectedRequest.employeeName}: "${actionMessage}"`);
     }
@@ -351,8 +363,8 @@ const Approvals = () => {
                   </Typography>
                   <Typography variant="body2" color="text.secondary" gutterBottom>
                     {request.status === 'locked' 
-                      ? `Attempts Used: ${request.attemptsUsed}/${request.maxAttempts} • Locked: ${request.lockedDate}`
-                      : `Request Date: ${request.lockedDate} • Status: ${request.status}`
+                      ? `Attempts Used: ${request.attemptsUsed}/${request.maxAttempts} • Locked: ${request.lockedDate || 'N/A'}`
+                      : `Request Date: ${request.requestDate || (request.createdAt ? new Date(request.createdAt).toLocaleString() : 'N/A')} • Status: ${request.status}`
                     }
                   </Typography>
                 </Box>

@@ -146,5 +146,23 @@ export const authAPI = {
   }),
 };
 
+// Analytics API
+export const analyticsAPI = {
+  getAnalytics: () => apiRequest('/auth/analytics/'),
+};
+
+// Notifications API
+export const notificationAPI = {
+  getAll: () => apiRequest('/auth/notifications/'),
+  getById: (id) => apiRequest(`/auth/notifications/${id}/`),
+  markAllRead: () => apiRequest('/auth/notifications/mark-read/', {
+    method: 'POST',
+  }),
+  update: (id, data) => apiRequest(`/auth/notifications/${id}/`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  }),
+};
+
 export default apiRequest;
 

@@ -124,12 +124,16 @@ export const buildSessionContentItems = (session) => {
     });
   }
 
+  // Check for AI content in both camelCase and snake_case formats
+  const aiContentData = session.aiContent || session.ai_content || null;
   const aiKeywords =
-    session.aiContent?.keywords ||
+    aiContentData?.keywords ||
+    session.aiKeywords ||
+    session.ai_keywords ||
     session.resumeState?.aiKeywords ||
     session.resumeState?.aiContent?.keywords;
   const aiGenerated =
-    session.aiContent ||
+    aiContentData ||
     session.resumeState?.aiContentGenerated ||
     session.resumeState?.aiContent;
 
@@ -150,8 +154,10 @@ export const buildSessionContentItems = (session) => {
     });
   }
 
+  // Check for files in both camelCase and snake_case formats
+  const sessionFiles = session.files || [];
   const fileCandidates = [
-    ...(Array.isArray(session.files) ? session.files : []),
+    ...(Array.isArray(sessionFiles) ? sessionFiles : []),
     ...(Array.isArray(session.resumeState?.selectedFiles) ? session.resumeState.selectedFiles : []),
     ...(Array.isArray(session.resumeState?.files) ? session.resumeState.files : []),
   ]
@@ -179,6 +185,7 @@ export const buildSessionContentItems = (session) => {
     });
   });
 
+  // Check for quiz in both formats (should be the same, but check both for safety)
   const quiz = session.quiz || null;
   const questionCount =
     quiz?.questions?.length ||

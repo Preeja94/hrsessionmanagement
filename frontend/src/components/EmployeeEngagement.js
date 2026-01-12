@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import {
   Box,
   Typography,
@@ -7,29 +7,13 @@ import {
   Grid,
   Button,
   Chip,
-  TextField,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
   Avatar,
-  Divider,
-  List,
-  ListItem,
-  ListItemText,
-  ListItemIcon,
-  IconButton,
-  Badge,
   Paper
 } from '@mui/material';
 import {
   CheckCircle as CheckCircleIcon,
-  Edit as EditIcon,
   Close as CloseIcon,
-  Add as AddIcon,
   Person as PersonIcon,
-  Email as EmailIcon,
-  Schedule as ScheduleIcon,
   Lock as LockIcon,
   Warning as WarningIcon,
   Refresh as RefreshIcon,
@@ -41,62 +25,8 @@ import { useSessionRequests } from '../contexts/SessionRequestContext';
 const EmployeeEngagement = () => {
   const { sessionRequests, updateRequestStatus, refreshRequests } = useSessionRequests();
   
-  // Fallback data in case context is not working
-  const fallbackRequests = [
-    {
-      id: 1,
-      employeeName: "Test User",
-      sessionName: "Test Session",
-      attemptsUsed: 2,
-      maxAttempts: 3,
-      lockedDate: "Dec 16, 2024",
-      status: "locked",
-      reason: "Test reason for debugging",
-      employeeEmail: "test@company.com"
-    }
-  ];
-  
-  const displayRequests = sessionRequests && sessionRequests.length > 0 ? sessionRequests : fallbackRequests;
-  const [activeSubTab, setActiveSubTab] = useState('requests');
-  const [showAddEmployee, setShowAddEmployee] = useState(false);
-  const [newEmployee, setNewEmployee] = useState({
-    firstName: '',
-    lastName: '',
-    email: '',
-    phone: '',
-    department: '',
-    employeeCode: '',
-    jobRole: '',
-    reportingManager: ''
-  });
-
-  // Debug logging
-  console.log('EmployeeEngagement component loaded');
-  console.log('EmployeeEngagement - sessionRequests:', sessionRequests);
-  console.log('EmployeeEngagement - sessionRequests length:', sessionRequests.length);
-  console.log('EmployeeEngagement - displayRequests:', displayRequests);
-  
-  // Removed localStorage check - now using API via context
-
-  const handleAddEmployee = () => {
-    if (!newEmployee.firstName || !newEmployee.lastName || !newEmployee.email || !newEmployee.department) {
-      alert('Please fill in all required fields');
-      return;
-    }
-    
-    alert('Employee added successfully!');
-    setNewEmployee({
-      firstName: '',
-      lastName: '',
-      email: '',
-      phone: '',
-      department: '',
-      employeeCode: '',
-      jobRole: '',
-      reportingManager: ''
-    });
-    setShowAddEmployee(false);
-  };
+  // Use actual session requests from API (no fallback fake data)
+  const displayRequests = sessionRequests || [];
 
   const handleRequestAction = (requestId, action) => {
     if (action === 'approve') {
@@ -122,66 +52,18 @@ const EmployeeEngagement = () => {
 
   return (
     <Box p={3}>
-      {/* Debug Info */}
-      <Box mb={2} p={2} sx={{ backgroundColor: '#f0f0f0', borderRadius: 1 }}>
-        <Typography variant="body2" color="text.secondary">
-          Debug: Component loaded, displayRequests: {displayRequests.length}
-        </Typography>
-        <Button 
-          variant="contained" 
-          size="small" 
-          onClick={() => alert('Component is working!')}
-          sx={{ mt: 1 }}
-        >
-          Test Button
-        </Button>
-      </Box>
-      
       {/* Header */}
       <Box mb={4}>
         <Typography variant="h4" fontWeight="bold" gutterBottom>
-          Employee Engagement
+          Session Access Approvals
         </Typography>
         <Typography variant="body1" color="text.secondary">
-          Manage session requests and employee access
+          Review and manage employee requests for session access
         </Typography>
       </Box>
 
-      {/* Sub Navigation Tabs */}
-      <Box mb={4}>
-        <Box display="flex" gap={2}>
-          <Button
-            variant={activeSubTab === 'requests' ? 'contained' : 'outlined'}
-            onClick={() => setActiveSubTab('requests')}
-            sx={{
-              backgroundColor: activeSubTab === 'requests' ? '#3b82f6' : 'transparent',
-              color: activeSubTab === 'requests' ? 'white' : '#3b82f6',
-              '&:hover': {
-                backgroundColor: activeSubTab === 'requests' ? '#2563eb' : '#f3f4f6',
-              },
-            }}
-          >
-            Request Approvals
-          </Button>
-          <Button
-            variant={activeSubTab === 'employees' ? 'contained' : 'outlined'}
-            onClick={() => setActiveSubTab('employees')}
-            sx={{
-              backgroundColor: activeSubTab === 'employees' ? '#3b82f6' : 'transparent',
-              color: activeSubTab === 'employees' ? 'white' : '#3b82f6',
-              '&:hover': {
-                backgroundColor: activeSubTab === 'employees' ? '#2563eb' : '#f3f4f6',
-              },
-            }}
-          >
-            Add Employee
-          </Button>
-        </Box>
-      </Box>
-
-      {/* Request Approvals Tab */}
-      {activeSubTab === 'requests' && (
-        <>
+      {/* Request Approvals Section */}
+      <>
           {/* Session Requests Alert */}
           <Box mb={4}>
             <Card sx={{ backgroundColor: '#fff3cd', border: '1px solid #ffeaa7' }}>
@@ -189,12 +71,28 @@ const EmployeeEngagement = () => {
                 <Box display="flex" alignItems="center" mb={2}>
                   <WarningIcon sx={{ color: '#856404', mr: 1 }} />
                   <Typography variant="h6" fontWeight="bold" color="#856404">
-                    Session Requests Alert
+                    New Session Requests
                   </Typography>
                 </Box>
-                <Typography variant="body1" color="#856404">
-                  {displayRequests.filter(req => req.status === 'locked').length} locked sessions and {displayRequests.filter(req => req.status === 'pending').length} new access requests need your attention
-                </Typography>
+                {displayRequests.filter(req => req.status === 'pending').length > 0 ? (
+                  <>
+                    <Typography variant="body1" color="#856404">
+                      You have {displayRequests.filter(req => req.status === 'pending').length} new session access request{displayRequests.filter(req => req.status === 'pending').length !== 1 ? 's' : ''} that need{displayRequests.filter(req => req.status === 'pending').length === 1 ? 's' : ''} your attention.
+                    </Typography>
+                    {displayRequests.filter(req => req.status === 'locked').length > 0 && (
+                      <Typography variant="body2" color="#856404" sx={{ mt: 1 }}>
+                        Additionally, {displayRequests.filter(req => req.status === 'locked').length} locked session{displayRequests.filter(req => req.status === 'locked').length !== 1 ? 's' : ''} require review.
+                      </Typography>
+                    )}
+                  </>
+                ) : (
+                  <Typography variant="body1" color="#856404">
+                    {displayRequests.filter(req => req.status === 'locked').length > 0 
+                      ? `You have ${displayRequests.filter(req => req.status === 'locked').length} locked session${displayRequests.filter(req => req.status === 'locked').length !== 1 ? 's' : ''} that require review.`
+                      : 'No pending requests at this time.'
+                    }
+                  </Typography>
+                )}
                 <Typography variant="body2" color="#856404" sx={{ mt: 1 }}>
                   Total requests: {displayRequests.length}
                 </Typography>
@@ -259,8 +157,8 @@ const EmployeeEngagement = () => {
                         </Typography>
                         <Typography variant="body2" color="text.secondary" gutterBottom>
                           {request.status === 'locked' 
-                            ? `Attempts Used: ${request.attemptsUsed}/${request.maxAttempts} • Locked: ${request.lockedDate}`
-                            : `Request Date: ${request.lockedDate} • Status: New Request`
+                            ? `Attempts Used: ${request.attemptsUsed}/${request.maxAttempts} • Locked: ${request.lockedDate || 'N/A'}`
+                            : `Request Date: ${request.requestDate || (request.createdAt ? new Date(request.createdAt).toLocaleString() : 'N/A')} • Status: ${request.status === 'pending' ? 'New Request' : request.status}`
                           }
                         </Typography>
                       </Box>
@@ -361,128 +259,7 @@ const EmployeeEngagement = () => {
               </Grid>
             )}
           </Box>
-        </>
-      )}
-
-      {/* Add Employee Tab */}
-      {activeSubTab === 'employees' && (
-        <Box>
-          <Box display="flex" justifyContent="space-between" alignItems="center" mb={4}>
-            <Typography variant="h5" fontWeight="bold">
-              Add New Employee
-            </Typography>
-            <Button
-              variant="contained"
-              startIcon={<AddIcon />}
-              onClick={() => setShowAddEmployee(true)}
-              sx={{ backgroundColor: '#10b981', '&:hover': { backgroundColor: '#059669' } }}
-            >
-              Add New Employee
-            </Button>
-          </Box>
-
-          {showAddEmployee && (
-            <Card sx={{ p: 4 }}>
-              <Typography variant="h6" fontWeight="bold" gutterBottom>
-                Employee Information
-              </Typography>
-              <Grid container spacing={3}>
-                <Grid item xs={12} sm={6}>
-                  <TextField
-                    label="First Name"
-                    value={newEmployee.firstName}
-                    onChange={(e) => setNewEmployee(prev => ({ ...prev, firstName: e.target.value }))}
-                    fullWidth
-                    required
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6}>
-                  <TextField
-                    label="Last Name"
-                    value={newEmployee.lastName}
-                    onChange={(e) => setNewEmployee(prev => ({ ...prev, lastName: e.target.value }))}
-                    fullWidth
-                    required
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6}>
-                  <TextField
-                    label="Email"
-                    type="email"
-                    value={newEmployee.email}
-                    onChange={(e) => setNewEmployee(prev => ({ ...prev, email: e.target.value }))}
-                    fullWidth
-                    required
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6}>
-                  <TextField
-                    label="Phone Number"
-                    value={newEmployee.phone}
-                    onChange={(e) => setNewEmployee(prev => ({ ...prev, phone: e.target.value }))}
-                    fullWidth
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6}>
-                  <FormControl fullWidth required>
-                    <InputLabel>Department</InputLabel>
-                    <Select
-                      value={newEmployee.department}
-                      onChange={(e) => setNewEmployee(prev => ({ ...prev, department: e.target.value }))}
-                      label="Department"
-                    >
-                      <MenuItem value="Engineering">Engineering</MenuItem>
-                      <MenuItem value="Marketing">Marketing</MenuItem>
-                      <MenuItem value="HR">HR</MenuItem>
-                      <MenuItem value="Finance">Finance</MenuItem>
-                      <MenuItem value="Sales">Sales</MenuItem>
-                    </Select>
-                  </FormControl>
-                </Grid>
-                <Grid item xs={12} sm={6}>
-                  <TextField
-                    label="Employee Code"
-                    value={newEmployee.employeeCode}
-                    onChange={(e) => setNewEmployee(prev => ({ ...prev, employeeCode: e.target.value }))}
-                    fullWidth
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6}>
-                  <TextField
-                    label="Job Role"
-                    value={newEmployee.jobRole}
-                    onChange={(e) => setNewEmployee(prev => ({ ...prev, jobRole: e.target.value }))}
-                    fullWidth
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6}>
-                  <TextField
-                    label="Reporting Manager"
-                    value={newEmployee.reportingManager}
-                    onChange={(e) => setNewEmployee(prev => ({ ...prev, reportingManager: e.target.value }))}
-                    fullWidth
-                  />
-                </Grid>
-              </Grid>
-              <Box display="flex" gap={2} mt={4}>
-                <Button
-                  variant="contained"
-                  onClick={handleAddEmployee}
-                  sx={{ backgroundColor: '#10b981', '&:hover': { backgroundColor: '#059669' } }}
-                >
-                  Add Employee
-                </Button>
-                <Button
-                  variant="outlined"
-                  onClick={() => setShowAddEmployee(false)}
-                >
-                  Cancel
-                </Button>
-              </Box>
-            </Card>
-          )}
-        </Box>
-      )}
+      </>
     </Box>
   );
 };

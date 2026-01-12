@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { employeeAPI, sessionAPI } from '../utils/api';
+import { employeeAPI, sessionAPI, sessionCompletionAPI, notificationAPI } from '../utils/api';
 import {
   Box,
   Typography,
@@ -208,8 +208,18 @@ const ActivityCard = styled(Card)(({ theme }) => ({
 
 const AdminDashboard = () => {
   const navigate = useNavigate();
-  const { logout: logoutUser } = useAuth();
-  
+  const { logout: logoutUser, user, getUserRole } = useAuth();
+
+  // Check user role and redirect if not admin
+  useEffect(() => {
+    const userRole = getUserRole();
+    const isAdmin = userRole === 'admin' || userRole === 'hr_admin';
+    if (!isAdmin) {
+      // User is not an admin, redirect to employee dashboard
+      navigate('/employee-dashboard', { replace: true });
+    }
+  }, [getUserRole, navigate]);
+
   // Active tab state - no longer using localStorage
   const [activeTab, setActiveTab] = useState('dashboard');
   const [dateRangeFilter, setDateRangeFilter] = useState('all'); // 'all', '7days', '30days', 'custom'
@@ -366,20 +376,38 @@ const AdminDashboard = () => {
     return files || [];
   };
   
-  // Profile states
+  // Profile states - will be initialized from auth context user data via useEffect
   const [showProfile, setShowProfile] = useState(false);
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [profileData, setProfileData] = useState({
-    firstName: 'Admin',
-    lastName: 'User',
-    email: 'admin@company.com',
-    phone: '123-456-7890',
-    department: 'Human Resources',
-    jobRole: 'HR Administrator',
-    reportingManager: 'CEO',
-    employeeId: 'ADM001'
+    firstName: '',
+    lastName: '',
+    email: '',
+    phone: '',
+    department: '',
+    jobRole: 'HR Administrator', // Admin role - could be customized
+    reportingManager: '',
+    employeeId: '',
+    keyskills: []
   });
   const [editProfileData, setEditProfileData] = useState(profileData);
+  
+  // Load profile data from auth context user data
+  useEffect(() => {
+    if (user) {
+      setProfileData({
+        firstName: user?.first_name || user?.firstName || '',
+        lastName: user?.last_name || user?.lastName || '',
+        email: user?.email || '',
+        phone: user?.phone_number || user?.phone || '',
+        department: user?.department || '',
+        jobRole: 'HR Administrator', // Admin role - could be customized
+        reportingManager: '',
+        employeeId: user?.employee_id || user?.employeeId || '',
+        keyskills: []
+      });
+    }
+  }, [user]);
   
   // Notification states
   const [notificationAnchorEl, setNotificationAnchorEl] = useState(null);
@@ -612,7 +640,67 @@ const AdminDashboard = () => {
   // Employee database with departments
   const [employees, setEmployees] = useState([]);
   const [employeesLoading, setEmployeesLoading] = useState(true);
-  const [notifications, setNotifications] = useState(() => getDefaultNotifications());
+  const [notifications, setNotifications] = useState([]);
+  const [notificationsLoading, setNotificationsLoading] = useState(true);
+  
+  // Function to load notifications from API
+  const loadNotifications = async () => {
+    try {
+      setNotificationsLoading(true);
+      const data = await notificationAPI.getAll();
+      // Transform API response to match frontend format
+      const transformedNotifications = data.map(notif => ({
+        id: notif.id,
+        type: notif.type || 'general',
+        message: notif.message || notif.title || '',
+        title: notif.title || notif.message || '',
+        time: notif.created_at ? formatNotificationTime(notif.created_at) : 'Just now',
+        read: notif.is_read || false,
+        action: getNotificationAction(notif.type, notif.related_session?.id)
+      }));
+      setNotifications(transformedNotifications);
+    } catch (error) {
+      console.error('Failed to load notifications:', error);
+      // Fallback to default notifications on error
+      setNotifications(getDefaultNotifications());
+    } finally {
+      setNotificationsLoading(false);
+    }
+  };
+
+  // Helper function to format notification time
+  const formatNotificationTime = (dateString) => {
+    if (!dateString) return 'Just now';
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+    
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins} minute${diffMins > 1 ? 's' : ''} ago`;
+    if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+    if (diffDays < 7) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+    return date.toLocaleDateString();
+  };
+
+  // Helper function to determine notification action based on type
+  const getNotificationAction = (type, sessionId) => {
+    switch (type) {
+      case 'session_approved':
+      case 'session_scheduled':
+        return 'view_sessions';
+      case 'session_rejected':
+        return 'view_requests';
+      case 'session_completed':
+        return 'view_analytics';
+      case 'certificate_earned':
+        return 'view_certificates';
+      default:
+        return 'view_details';
+    }
+  };
   
   // Function to load employees (reusable)
   const fetchEmployees = async () => {
@@ -622,6 +710,7 @@ const AdminDashboard = () => {
       // Transform API response to match frontend format
       const transformedEmployees = data.map(emp => ({
         id: emp.id,
+        userId: emp.user?.id || emp.user_id || emp.id, // Store user ID for matching with completions
         firstName: emp.firstName || emp.user?.first_name || '',
         lastName: emp.lastName || emp.user?.last_name || '',
         name: `${emp.firstName || emp.user?.first_name || ''} ${emp.lastName || emp.user?.last_name || ''}`.trim(),
@@ -653,7 +742,26 @@ const AdminDashboard = () => {
     fetchEmployees();
   }, []);
 
+  // Load session completions from API on mount
+  useEffect(() => {
+    const loadCompletions = async () => {
+      try {
+        const completions = await sessionCompletionAPI.getAll();
+        setEmployeeCompletions(completions);
+      } catch (error) {
+        console.error('Error loading session completions:', error);
+        setEmployeeCompletions([]);
+      }
+    };
+    loadCompletions();
+  }, []);
+
   // Reload employees when switching to employees tab
+  // Load notifications on mount and when activeTab changes
+  useEffect(() => {
+    loadNotifications();
+  }, []);
+
   useEffect(() => {
     if (activeTab === 'employees') {
       fetchEmployees();
@@ -779,46 +887,6 @@ const AdminDashboard = () => {
     loadSessions();
   }, []);
 
-  // Reload sessions when switching to tabs that need fresh data
-  useEffect(() => {
-    if (activeTab === 'dashboard' || activeTab === 'course-library' || activeTab === 'manage-session') {
-      const loadSessions = async () => {
-        try {
-          setSessionsLoading(true);
-          const allSessions = await sessionAPI.getAll();
-          const normalizedSessions = allSessions.map(normalizePublishedSession);
-          const sessionMap = new Map();
-          normalizedSessions.forEach(session => {
-            if (!session.id) return;
-            const existing = sessionMap.get(session.id);
-            const sessionDate = new Date(session.updated_at || session.updatedAt || session.savedAt || session.created_at || session.createdAt || 0);
-            const existingDate = existing ? new Date(existing.updated_at || existing.updatedAt || existing.savedAt || existing.created_at || existing.createdAt || 0) : new Date(0);
-            if (!existing || sessionDate > existingDate || 
-                (sessionDate.getTime() === existingDate.getTime() && 
-                 (session.status === 'scheduled' && existing.status !== 'scheduled') ||
-                 (session.status === 'published' && existing.status !== 'draft'))) {
-              sessionMap.set(session.id, session);
-            }
-          });
-          const uniqueSessions = Array.from(sessionMap.values());
-          const drafts = uniqueSessions.filter(s => s.status === 'draft');
-          const published = uniqueSessions.filter(s => s.status === 'published' || s.status === 'scheduled');
-          setDraftSessions(drafts);
-          setPublishedSessions(published);
-          setSavedSessions(uniqueSessions);
-        } catch (error) {
-          console.error('Error loading sessions:', error);
-          setDraftSessions([]);
-          setPublishedSessions([]);
-          setSavedSessions([]);
-        } finally {
-          setSessionsLoading(false);
-        }
-      };
-      loadSessions();
-    }
-  }, [activeTab]);
-  
   // Folder view states
   const [openFolder, setOpenFolder] = useState(null); // 'drafts', 'assessments', 'published'
   const [selectedAllSessionItem, setSelectedAllSessionItem] = useState(null); // Selected session/assessment for view in All Sessions
@@ -911,6 +979,103 @@ const AdminDashboard = () => {
   const [sessionCertifications, setSessionCertifications] = useState({}); // { sessionId: certificationId }
   const [employeeCompletions, setEmployeeCompletions] = useState([]);
   
+  // Generate activities from existing data when sessions and completions are loaded (only once)
+  const [activitiesInitialized, setActivitiesInitialized] = useState(false);
+  
+  // Generate activities from existing data when sessions and completions are loaded
+  useEffect(() => {
+    // Only generate activities once when data is loaded and activities haven't been initialized
+    if (!activitiesInitialized && (savedSessions.length > 0 || employeeCompletions.length > 0)) {
+      const generatedActivities = [];
+      const activityIds = new Set(); // Track IDs to avoid duplicates
+      
+      // Generate activities from sessions
+      savedSessions.forEach(session => {
+        const createdAt = session.created_at || session.createdAt;
+        const publishedAt = session.published_at || session.publishedAt;
+        const scheduledDateTime = session.scheduled_datetime || session.scheduledDateTime;
+        
+        // Session created (use most recent date)
+        if (createdAt) {
+          const activityId = `session-created-${session.id}`;
+          if (!activityIds.has(activityId)) {
+            activityIds.add(activityId);
+            generatedActivities.push({
+              id: activityId,
+              action: `Session created: ${session.title || 'Untitled'}`,
+              user: session.created_by?.first_name && session.created_by?.last_name 
+                ? `${session.created_by.first_name} ${session.created_by.last_name}`
+                : 'Admin',
+              type: 'info',
+              timestamp: createdAt,
+              iconType: 'session_created'
+            });
+          }
+        }
+        
+        // Session published
+        if (session.status === 'published' && publishedAt) {
+          const activityId = `session-published-${session.id}`;
+          if (!activityIds.has(activityId)) {
+            activityIds.add(activityId);
+            generatedActivities.push({
+              id: activityId,
+              action: `Session published: ${session.title || 'Untitled'}`,
+              user: 'Admin',
+              type: 'published',
+              timestamp: publishedAt,
+              iconType: 'session_published'
+            });
+          }
+        }
+        
+        // Session scheduled
+        if (session.status === 'scheduled' && scheduledDateTime) {
+          const activityId = `session-scheduled-${session.id}`;
+          if (!activityIds.has(activityId)) {
+            activityIds.add(activityId);
+            generatedActivities.push({
+              id: activityId,
+              action: `Session scheduled: ${session.title || 'Untitled'}`,
+              user: 'Admin',
+              type: 'scheduled',
+              timestamp: scheduledDateTime,
+              iconType: 'session_scheduled'
+            });
+          }
+        }
+      });
+      
+      // Generate activities from completions (employee completions)
+      employeeCompletions.forEach(completion => {
+        if (completion.completed_at) {
+          const session = savedSessions.find(s => s.id === completion.session);
+          const sessionTitle = session?.title || 'Session';
+          const activityId = `completion-${completion.id}`;
+          if (!activityIds.has(activityId)) {
+            activityIds.add(activityId);
+            generatedActivities.push({
+              id: activityId,
+              action: `Session completed: ${sessionTitle}`,
+              user: completion.employee_name || 'Employee',
+              type: 'completed',
+              timestamp: completion.completed_at,
+              iconType: 'session_completed'
+            });
+          }
+        }
+      });
+      
+      // Sort by timestamp (most recent first) and set activities
+      generatedActivities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      
+      if (generatedActivities.length > 0) {
+        setActivities(generatedActivities.slice(0, 50)); // Keep last 50
+        setActivitiesInitialized(true);
+      }
+    }
+  }, [savedSessions, employeeCompletions, activitiesInitialized]); // Only run once when data is loaded
+
   // View All dialog states
   const [showViewAllDialog, setShowViewAllDialog] = useState(false);
   const [viewAllType, setViewAllType] = useState(null); // 'drafts', 'popular', 'newlyAdded'
@@ -1018,7 +1183,7 @@ const AdminDashboard = () => {
       : savedSessions.filter(s => isWithinDateRange(s.createdAt, dateRangeFilter));
     
     const completedSessions = filteredSessions.filter(s => s.status === 'completed').length;
-    const inProgressSessions = filteredSessions.filter(s => s.status === 'in_progress').length;
+    const publishedSessionsCount = filteredSessions.filter(s => s.status === 'published').length;
     const scheduledSessions = filteredSessions.filter(s => s.status === 'scheduled').length;
     const draftSessionsCount = filteredSessions.filter(s => s.status === 'draft').length;
     const totalSessionCount = filteredSessions.length;
@@ -1026,7 +1191,7 @@ const AdminDashboard = () => {
     return [
       { label: 'All', value: totalSessionCount, percentage: 100 },
       { label: 'Scheduled', value: scheduledSessions, percentage: totalSessionCount > 0 ? Math.round((scheduledSessions / totalSessionCount) * 100) : 0 },
-      { label: 'In Progress', value: inProgressSessions, percentage: totalSessionCount > 0 ? Math.round((inProgressSessions / totalSessionCount) * 100) : 0 },
+      { label: 'Published', value: publishedSessionsCount, percentage: totalSessionCount > 0 ? Math.round((publishedSessionsCount / totalSessionCount) * 100) : 0 },
       { label: 'Completed', value: completedSessions, percentage: totalSessionCount > 0 ? Math.round((completedSessions / totalSessionCount) * 100) : 0 },
       { label: 'Draft', value: draftSessionsCount, percentage: totalSessionCount > 0 ? Math.round((draftSessionsCount / totalSessionCount) * 100) : 0 }
     ];
@@ -1215,19 +1380,61 @@ const AdminDashboard = () => {
     return getRecentActivity();
   }, [activities, currentTime, dateRangeFilter, customStartDate, customEndDate]);
 
-  // Memoize top performers for Leader Board
+  // Memoize top performers for Leader Board - sorted by completion rate (percentage)
   const topPerformers = useMemo(() => {
-    // Calculate top performers directly from employees data
-    return employees.slice(0, 5).map((employee, index) => ({
-      id: employee.id,
-      name: employee.name,
-      department: employee.department,
-      sessionsCompleted: Math.floor(Math.random() * 10) + 1,
-      completionRate: Math.floor(Math.random() * 40) + 60,
-      rank: index + 1,
-      rankColor: index === 0 ? '#114417DB' : index === 1 ? '#f59e0b' : index === 2 ? '#ef4444' : '#6b7280'
-    }));
-  }, [employees]);
+    // Calculate top performers from employee completions and published sessions
+    const totalPublished = publishedSessions.length;
+    
+    // Count unique sessions completed per employee (count all completions, not just passed)
+    // Note: completion.employee is a User ID, not EmployeeProfile ID
+    const employeeSessionMap = new Map();
+    employeeCompletions.forEach(completion => {
+      const userId = completion.employee; // This is the User ID
+      if (!employeeSessionMap.has(userId)) {
+        employeeSessionMap.set(userId, new Set());
+      }
+      // Count all completions (both passed and failed attempts count as completion)
+      employeeSessionMap.get(userId).add(completion.session);
+    });
+
+    // Calculate performance for each employee
+    // Match completion.employee (User ID) with emp.userId (User ID)
+    const employeePerformance = employees
+      .filter(emp => emp.role === 'employee') // Only include employees
+      .map(emp => {
+        // Use userId to match with completion.employee (which is also a User ID)
+        const userId = emp.userId || emp.id; // Fallback to emp.id if userId not available
+        const completedSessions = employeeSessionMap.get(userId) || new Set();
+        const sessionsCompleted = completedSessions.size;
+        const completionRate = totalPublished > 0
+          ? Math.round((sessionsCompleted / totalPublished) * 100)
+          : 0;
+        
+        return {
+          id: emp.id,
+          name: emp.name,
+          department: emp.department || 'N/A',
+          sessionsCompleted: sessionsCompleted,
+          completionRate: completionRate
+        };
+      })
+      .filter(emp => emp.sessionsCompleted > 0) // Only show employees with at least one completion
+      .sort((a, b) => {
+        // Sort by completion rate (percentage) descending, then by sessions completed
+        if (b.completionRate !== a.completionRate) {
+          return b.completionRate - a.completionRate;
+        }
+        return b.sessionsCompleted - a.sessionsCompleted;
+      })
+      .slice(0, 5) // Get top 5
+      .map((employee, index) => ({
+        ...employee,
+        rank: index + 1,
+        rankColor: index === 0 ? '#114417DB' : index === 1 ? '#f59e0b' : index === 2 ? '#ef4444' : '#6b7280'
+      }));
+    
+    return employeePerformance;
+  }, [employees, employeeCompletions, publishedSessions]);
 
   // Real-time filtered sessions for Course Management
   const draftCoursesList = useMemo(() => {
@@ -1582,11 +1789,13 @@ const AdminDashboard = () => {
     
     // Save certification data when switching to preview tab
     if (newTab === 'preview' && (selectedTemplate || defaultTemplateId || certificateFields)) {
+      // Resolve template to full object before saving
+      const templateToSave = resolveCertificateTemplate(selectedMenuTemplate || selectedTemplate || defaultTemplateId);
       const certificationData = certificateFields && Object.keys(certificateFields).length > 0 ? {
         fields: certificateFields,
-        template: selectedMenuTemplate || selectedTemplate || defaultTemplateId || null
+        template: templateToSave // Save full template object
       } : null;
-      
+
       if (certificationData) {
         setSessionContentSnapshot(prev => ({
           ...prev,
@@ -1747,11 +1956,13 @@ const AdminDashboard = () => {
       handleSaveAsDraft();
     } else if (manageSessionTab === 'certification') {
       // Save certification data to sessionContentSnapshot before proceeding
+      // Resolve template to full object before saving
+      const templateToSave = resolveCertificateTemplate(selectedMenuTemplate || defaultTemplateId);
       const certificationData = certificateFields && Object.keys(certificateFields).length > 0 ? {
         fields: certificateFields,
-        template: selectedMenuTemplate || defaultTemplateId || null
+        template: templateToSave // Save full template object
       } : null;
-      
+
       setSessionContentSnapshot(prev => ({
         ...prev,
         certification: certificationData,
@@ -2206,30 +2417,53 @@ const AdminDashboard = () => {
 
   const handleNotificationAction = (notification) => {
     markNotificationAsRead(notification.id);
-    if (notification.action === 'view_request') {
-      navigate('/employee-engagement');
-    } else if (notification.action === 'view_analytics') {
+    if (notification.action === 'view_request' || notification.type === 'session_request') {
+      setActiveTab('approvals');
+      navigate('/admin-dashboard');
+    } else if (notification.action === 'view_analytics' || notification.type === 'session_completed') {
       setActiveTab('analytics');
-    } else if (notification.action === 'view_employee') {
+      navigate('/admin-dashboard');
+    } else if (notification.action === 'view_employee' || notification.type === 'employee_added') {
       setActiveTab('employees');
+      navigate('/admin-dashboard');
+    } else if (notification.action === 'view_sessions' || notification.type === 'session_scheduled' || notification.type === 'session_approved') {
+      setActiveTab('course-library');
+      navigate('/admin-dashboard');
     } else if (notification.action === 'view_details') {
       showToast('System maintenance details: Scheduled maintenance will occur from 11 PM to 1 AM EST.', 'info');
     }
     setNotificationAnchorEl(null);
   };
 
-  const markNotificationAsRead = (notificationId) => {
-    setNotifications(prev => 
-      prev.map(notif => 
-        notif.id === notificationId ? { ...notif, read: true } : notif
-      )
-    );
+  const markNotificationAsRead = async (notificationId) => {
+    try {
+      // Update in backend
+      await notificationAPI.update(notificationId, { is_read: true });
+      // Update local state
+      setNotifications(prev =>
+        prev.map(notif =>
+          notif.id === notificationId ? { ...notif, read: true } : notif
+        )
+      );
+    } catch (error) {
+      console.error('Failed to mark notification as read:', error);
+      // Still update local state on error
+      setNotifications(prev =>
+        prev.map(notif =>
+          notif.id === notificationId ? { ...notif, read: true } : notif
+        )
+      );
+    }
   };
 
   const getNotificationIcon = (type) => {
     switch (type) {
       case 'session_request': return <GroupIcon fontSize="small" />;
       case 'session_completed': return <CheckCircleIcon fontSize="small" />;
+      case 'session_scheduled': return <CalendarIcon fontSize="small" />;
+      case 'session_approved': return <CheckCircleIcon fontSize="small" />;
+      case 'session_rejected': return <WarningIcon fontSize="small" />;
+      case 'certificate_earned': return <CheckCircleIcon fontSize="small" />;
       case 'system_alert': return <WarningIcon fontSize="small" />;
       case 'employee_added': return <AddIcon fontSize="small" />;
       default: return <NotificationsIcon fontSize="small" />;
@@ -2240,6 +2474,10 @@ const AdminDashboard = () => {
     switch (type) {
       case 'session_request': return 'info';
       case 'session_completed': return 'success';
+      case 'session_scheduled': return 'primary';
+      case 'session_approved': return 'success';
+      case 'session_rejected': return 'error';
+      case 'certificate_earned': return 'success';
       case 'system_alert': return 'warning';
       case 'employee_added': return 'primary';
       default: return 'default';
@@ -2248,23 +2486,14 @@ const AdminDashboard = () => {
 
   const unreadNotificationsCount = notifications.filter(n => !n.read).length;
 
-  // Simulate real-time notifications
+  // Refresh notifications periodically (every 30 seconds)
   useEffect(() => {
     const interval = setInterval(() => {
-      const newNotification = {
-        id: Date.now(),
-        type: 'session_request',
-        message: `New session access request from ${employees[Math.floor(Math.random() * employees.length)].name}`,
-        time: 'Just now',
-        read: false,
-        action: 'view_request'
-      };
-      
-      setNotifications(prev => [newNotification, ...prev.slice(0, 9)]); // Keep only last 10 notifications
-    }, 30000); // Add new notification every 30 seconds
+      loadNotifications();
+    }, 30000); // Refresh every 30 seconds
 
     return () => clearInterval(interval);
-  }, [employees]);
+  }, []);
 
   // Map frontend session type values to backend values
   // Helper function to get UI label for session type (for display only)
@@ -2310,6 +2539,29 @@ const AdminDashboard = () => {
     setAiKeywords('');
     setShowContentPreview(false);
     setSelectedCreationMode(null);
+  };
+
+  // Helper function to resolve template to full object
+  const resolveCertificateTemplate = (templateValue) => {
+    if (!templateValue) return null;
+    
+    // If it's already a full template object with borderColors, return it
+    if (typeof templateValue === 'object' && templateValue.borderColors) {
+      return templateValue;
+    }
+    
+    // Otherwise, try to find by ID
+    const certificateTemplates = [
+      { id: 1, name: 'Certificate of Appreciation', title: 'CERTIFICATE', subtitle: 'OF APPRECIATION', design: 'gradient-border', borderColors: ['#8b5cf6', '#f59e0b'] },
+      { id: 2, name: 'Certificate of Excellence', title: 'CERTIFICATE', subtitle: 'Meaningful Leader Certification', design: 'green-gold', borderColors: ['#10b981', '#fbbf24'], hasMedal: true },
+      { id: 3, name: 'Certificate of Completion', title: 'CERTIFICATE', subtitle: 'OF COMPLETION', design: 'minimal', borderColors: ['#10b981'] },
+      { id: 4, name: 'Certificate of Achievement', title: 'CERTIFICATE', subtitle: 'OF ACHIEVEMENT', design: 'gradient-vibrant', borderColors: ['#8b5cf6', '#f59e0b', '#fbbf24'], hasMedal: true },
+      { id: 5, name: 'Certificate Vertical', title: 'CERTIFICATE', subtitle: 'OF COMPLETION', design: 'vertical-red', borderColors: ['#ef4444'] },
+      { id: 6, name: 'Certificate Simple', title: 'CERTIFICATE', subtitle: 'Creating Power Manager for Leader', design: 'simple-white', borderColors: ['#e5e7eb'], hasMedal: true }
+    ];
+    
+    const templateId = typeof templateValue === 'object' ? templateValue.id : templateValue;
+    return certificateTemplates.find(t => t.id === templateId) || null;
   };
 
   const handleContentCreatorProceed = () => {
@@ -2788,11 +3040,12 @@ Make the content professional, educational, and suitable for workplace training.
       const resolvedQuiz = quizData?.quiz || quizData || null;
       const resolvedCreationMode = sessionContentSnapshot?.creationMode ?? selectedCreationMode;
       
-      // Get certification data if available
+      // Get certification data if available - resolve template to full object
+      const templateToSave = resolveCertificateTemplate(selectedMenuTemplate || defaultTemplateId);
       const resolvedCertification = sessionContentSnapshot?.certification || 
                                    (certificateFields && Object.keys(certificateFields).length > 0 ? {
                                      fields: certificateFields,
-                                     template: selectedMenuTemplate || defaultTemplateId || null
+                                     template: templateToSave // Save full template object
                                    } : null);
       
       const sessionData = {
@@ -3175,11 +3428,12 @@ Make the content professional, educational, and suitable for workplace training.
       }
       const resolvedCreationMode = sessionContentSnapshot?.creationMode ?? selectedCreationMode;
       
-      // Get certification data if available
+      // Get certification data if available - resolve template to full object
+      const templateToSave = resolveCertificateTemplate(selectedMenuTemplate || defaultTemplateId);
       const resolvedCertification = sessionContentSnapshot?.certification || 
                                    (certificateFields && Object.keys(certificateFields).length > 0 ? {
                                      fields: certificateFields,
-                                     template: selectedMenuTemplate || defaultTemplateId || null
+                                     template: templateToSave // Save full template object
                                    } : null);
       
       const sessionData = {
@@ -5824,6 +6078,9 @@ Make the content professional, educational, and suitable for workplace training.
     setSelectedSession(null);
     setSelectedSessionForScheduling(null);
     
+    // Refresh notifications after scheduling
+    loadNotifications();
+    
     // Redirect to session library after scheduling
     setTimeout(() => {
       setActiveTab('course-library');
@@ -5957,7 +6214,7 @@ Make the content professional, educational, and suitable for workplace training.
                     switch(item.label) {
                       case 'All': return '#114417DB';
                       case 'Scheduled': return '#3b82f6';
-                      case 'In Progress': return '#f59e0b';
+                      case 'Published': return '#10b981';
                       case 'Completed': return '#114417DB';
                       case 'Draft': return '#ef4444';
                       default: return '#6b7280';
@@ -9515,7 +9772,10 @@ Make the content professional, educational, and suitable for workplace training.
     
     // Navigate back to session library
     setActiveTab('course-library');
-    
+
+    // Refresh notifications after scheduling
+    loadNotifications();
+
     showToast('Session saved and scheduled successfully! It will auto-publish when the start time arrives.', 'success');
     } catch (error) {
       console.error('Failed to save and schedule session:', error);
@@ -13999,6 +14259,7 @@ Make the content professional, educational, and suitable for workplace training.
       // Transform and add to state
     const employee = {
         id: created.id,
+        userId: created.user?.id || created.user_id || created.id, // Store user ID for matching with completions
         firstName: created.firstName || created.user?.first_name || '',
         lastName: created.lastName || created.user?.last_name || '',
         name: `${created.firstName || created.user?.first_name || ''} ${created.lastName || created.user?.last_name || ''}`.trim(),
@@ -14012,7 +14273,7 @@ Make the content professional, educational, and suitable for workplace training.
         keyskills: created.keyskills || [],
         status: created.status || 'active',
         createdAt: created.created_at || new Date().toISOString().split('T')[0]
-    };
+      };
     
     setEmployees(prev => [employee, ...prev]);
     setNewEmployee({
@@ -14089,6 +14350,7 @@ Make the content professional, educational, and suitable for workplace training.
       // Transform and update state
       const employee = {
         id: updated.id,
+        userId: updated.user?.id || updated.user_id || updated.id, // Store user ID for matching with completions
         firstName: updated.firstName || updated.user?.first_name || '',
         lastName: updated.lastName || updated.user?.last_name || '',
         name: `${updated.firstName || updated.user?.first_name || ''} ${updated.lastName || updated.user?.last_name || ''}`.trim(),
@@ -14427,6 +14689,7 @@ Make the content professional, educational, and suitable for workplace training.
                     // Transform API response to match frontend format
                     const transformedEmployee = {
                       id: employeeData.id,
+                      userId: employeeData.user?.id || employeeData.user_id || employeeData.id, // Store user ID for matching with completions
                       firstName: employeeData.firstName || employeeData.user?.first_name || '',
                       lastName: employeeData.lastName || employeeData.user?.last_name || '',
                       name: `${employeeData.firstName || employeeData.user?.first_name || ''} ${employeeData.lastName || employeeData.user?.last_name || ''}`.trim(),
@@ -16240,32 +16503,96 @@ Make the content professional, educational, and suitable for workplace training.
     );
   };
 
-  // Sample analytics data - In real app, this would come from context/API
-  const getAnalyticsData = () => {
-    const completedCount = employeeCompletions.length;
+  // Calculate analytics data from real API data - memoized to prevent constant recalculation
+  const analyticsData = useMemo(() => {
+    // Count unique employees who have completed sessions
+    const employeesWithCompletions = new Set(employeeCompletions.map(c => c.employee));
+    const totalLearners = employeesWithCompletions.size || employees.length;
+    
+    // Count total completions (all attempts)
+    const totalSessionsCompleted = employeeCompletions.length;
+    
+    // Count unique sessions completed
+    const uniqueSessionsCompleted = new Set(employeeCompletions.map(c => c.session)).size;
     const totalPublished = publishedSessions.length;
-    const completionRate =
-      totalPublished > 0 ? Math.round((completedCount / totalPublished) * 100) : (completedCount > 0 ? 100 : 0);
-    const activeSessionCount = Math.max(totalPublished - completedCount, 0);
+    
+    // Calculate completion rate (unique sessions completed / total published sessions)
+    const completionRate = totalPublished > 0 
+      ? Math.round((uniqueSessionsCompleted / totalPublished) * 100) 
+      : 0;
+    
+    // Calculate average rating from feedback (if available)
+    const ratingsWithFeedback = employeeCompletions
+      .filter(c => c.feedback && c.feedback.rating)
+      .map(c => parseFloat(c.feedback.rating));
+    const averageRating = ratingsWithFeedback.length > 0
+      ? Math.round((ratingsWithFeedback.reduce((sum, r) => sum + r, 0) / ratingsWithFeedback.length) * 10) / 10
+      : 0;
+    
+    // Active sessions (published sessions that haven't been completed by all employees)
+    const activeSessionCount = Math.max(totalPublished - uniqueSessionsCompleted, 0);
+    
+    // Calculate employee performance metrics
+    const employeePerformanceMap = new Map();
+    
+    // Initialize all employees - use userId (User ID) as key for matching with completions
+    employees.forEach(emp => {
+      const userId = emp.userId || emp.id; // Use userId (User ID) for matching
+      employeePerformanceMap.set(userId, {
+        id: emp.id, // Keep EmployeeProfile ID for display
+        userId: userId, // Store User ID for reference
+        name: emp.name,
+        department: emp.department || 'N/A',
+        sessionsCompleted: 0,
+        totalSessions: totalPublished,
+        completionRate: 0
+      });
+    });
+    
+    // Count completions per employee (unique sessions)
+    // Note: completion.employee is a User ID, not EmployeeProfile ID
+    const employeeSessionMap = new Map();
+    employeeCompletions.forEach(completion => {
+      const userId = completion.employee; // This is the User ID
+      if (!employeeSessionMap.has(userId)) {
+        employeeSessionMap.set(userId, new Set());
+      }
+      employeeSessionMap.get(userId).add(completion.session);
+    });
+    
+    // Update employee performance - match by User ID
+    employeeSessionMap.forEach((sessionSet, userId) => {
+      const perf = employeePerformanceMap.get(userId);
+      if (perf) {
+        perf.sessionsCompleted = sessionSet.size;
+        perf.completionRate = totalPublished > 0 
+          ? Math.round((sessionSet.size / totalPublished) * 100) 
+          : 0;
+      }
+    });
+    
+    // Get top performers (sorted by completion rate, then by sessions completed)
+    const topPerformers = Array.from(employeePerformanceMap.values())
+      .sort((a, b) => {
+        if (b.completionRate !== a.completionRate) {
+          return b.completionRate - a.completionRate;
+        }
+        return b.sessionsCompleted - a.sessionsCompleted;
+      })
+      .slice(0, 5)
+      .filter(emp => emp.sessionsCompleted > 0); // Only show employees with at least one completion
 
     return {
-      totalLearners: employees.length,
+      totalLearners: totalLearners > 0 ? totalLearners : employees.length,
       completionRate,
-      averageRating: 4.5,
+      averageRating: averageRating > 0 ? averageRating : 0,
       activeSessions: activeSessionCount,
-      totalSessionsCompleted: completedCount,
-      topPerformers: employees.slice(0, 5).map((emp, idx) => ({
-        id: emp.id,
-        name: emp.name,
-        department: emp.department,
-        sessionsCompleted: Math.floor(Math.random() * 10) + 1,
-        completionRate: Math.floor(Math.random() * 40) + 60
-      }))
+      totalSessionsCompleted,
+      topPerformers
     };
-  };
+  }, [employeeCompletions, publishedSessions, employees]);
 
   const renderAnalyticsDashboard = () => {
-    const analyticsData = getAnalyticsData();
     const kpiData = [
       {
         value: analyticsData.totalLearners.toString(),

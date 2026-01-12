@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Box,
   Typography,
@@ -15,23 +15,62 @@ import {
   Chip,
   Checkbox,
   FormGroup,
-  Alert
+  Alert,
+  CircularProgress
 } from '@mui/material';
 import {
   ArrowBack as ArrowBackIcon,
   ArrowForward as ArrowForwardIcon,
   CheckCircle as CheckCircleIcon,
-  Quiz as QuizIcon
+  Quiz as QuizIcon,
+  Refresh as RefreshIcon
 } from '@mui/icons-material';
+import { sessionCompletionAPI } from '../utils/api';
+import { useAuth } from '../contexts/AuthContext';
 
 const KnowledgeAssessment = ({ session, onComplete, onBack, isViewOnly = false }) => {
+  const { getUserId } = useAuth();
   const [currentQuestion, setCurrentQuestion] = useState(0);
   const [answers, setAnswers] = useState({});
   const [quizStarted, setQuizStarted] = useState(false);
   const [showResults, setShowResults] = useState(false);
+  const [previousAttempts, setPreviousAttempts] = useState([]);
+  const [currentAttempt, setCurrentAttempt] = useState(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [attemptsUsed, setAttemptsUsed] = useState(0);
   
+  // Load previous attempts when component mounts
+  useEffect(() => {
+    const loadPreviousAttempts = async () => {
+      if (!session?.id || isViewOnly) return;
+      
+      try {
+        const userId = getUserId();
+        if (!userId) return;
+        
+        const completions = await sessionCompletionAPI.getAll(userId, session.id);
+        if (completions && Array.isArray(completions)) {
+          setPreviousAttempts(completions);
+          setAttemptsUsed(completions.length);
+          
+          // Find the latest attempt
+          const latest = completions.sort((a, b) => 
+            new Date(b.completed_at) - new Date(a.completed_at)
+          )[0];
+          if (latest) {
+            setCurrentAttempt(latest);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to load previous attempts:', error);
+      }
+    };
+    
+    loadPreviousAttempts();
+  }, [session?.id, isViewOnly, getUserId]);
+
   // If view-only, show results immediately
-  React.useEffect(() => {
+  useEffect(() => {
     if (isViewOnly && session?.assessmentResults) {
       setShowResults(true);
       setQuizStarted(true);
@@ -252,6 +291,61 @@ const KnowledgeAssessment = ({ session, onComplete, onBack, isViewOnly = false }
     setQuizStarted(true);
   };
 
+  const handleRetake = () => {
+    setAnswers({});
+    setCurrentQuestion(0);
+    setShowResults(false);
+    setQuizStarted(true);
+    setCurrentAttempt(null);
+  };
+
+  const saveScoreToBackend = async (score, passed) => {
+    if (!session?.id || isViewOnly) return null;
+    
+    try {
+      setIsSaving(true);
+      const userId = getUserId();
+      if (!userId) {
+        console.error('User ID not found');
+        return null;
+      }
+
+      // Get questions for feedback calculation
+      const evaluableQuestions = questions.filter(questionHasSolution);
+      const correctAnswersCount = evaluableQuestions.reduce((count, question) => {
+        const selectedAnswer = answers[question.id];
+        return isAnswerCorrect(question, selectedAnswer) ? count + 1 : count;
+      }, 0);
+
+      const completionData = {
+        employee: parseInt(userId),
+        session: session.id,
+        score: score,
+        passed: passed,
+        answers: answers, // Store user's answers
+        feedback: {
+          completedAt: new Date().toISOString(),
+          totalQuestions: questions.length,
+          correctAnswers: correctAnswersCount
+        }
+      };
+
+      const saved = await sessionCompletionAPI.create(completionData);
+      
+      // Update local state
+      setPreviousAttempts(prev => [...prev, saved]);
+      setAttemptsUsed(prev => prev + 1);
+      setCurrentAttempt(saved);
+      
+      return saved;
+    } catch (error) {
+      console.error('Failed to save score:', error);
+      return null;
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const calculateScore = () => {
     const evaluableQuestions = questions.filter(questionHasSolution);
     // If no questions have correct answers, return null (don't show score)
@@ -277,14 +371,43 @@ const KnowledgeAssessment = ({ session, onComplete, onBack, isViewOnly = false }
     return "Keep studying! Review the material and try again.";
   };
 
-  const checkpointTitle = assessmentInfo.quizTitle || 'Checkpoint Assessment';
+  const checkpointTitle = assessmentInfo.quizTitle || session?.quiz?.assessmentInfo?.quizTitle || 'Checkpoint Assessment';
   const checkpointDescription = assessmentInfo.description || 'Test your understanding of this session before moving forward.';
   const passingScoreValue =
-    assessmentInfo.passingScore !== undefined && assessmentInfo.passingScore !== '' ? assessmentInfo.passingScore : null;
+    assessmentInfo.passingScore !== undefined && assessmentInfo.passingScore !== '' 
+      ? assessmentInfo.passingScore 
+      : (session?.quiz?.assessmentInfo?.passingScore !== undefined && session?.quiz?.assessmentInfo?.passingScore !== ''
+          ? session.quiz.assessmentInfo.passingScore
+          : null);
   const maxAttemptsValue =
-    assessmentInfo.maxAttempts !== undefined && assessmentInfo.maxAttempts !== '' ? assessmentInfo.maxAttempts : null;
+    assessmentInfo.maxAttempts !== undefined && assessmentInfo.maxAttempts !== '' 
+      ? assessmentInfo.maxAttempts 
+      : (session?.quiz?.assessmentInfo?.maxAttempts !== undefined && session?.quiz?.assessmentInfo?.maxAttempts !== ''
+          ? session.quiz.assessmentInfo.maxAttempts
+          : null);
   const criteriaValue =
     assessmentInfo.criteria || assessmentInfo.criteriaDescription || assessmentInfo.successCriteria || null;
+
+  // Save score when results are shown (only once) - MUST be before any early returns
+  useEffect(() => {
+    if (showResults && !isViewOnly && !currentAttempt && !isSaving) {
+      const evaluableQuestions = questions.filter(questionHasSolution);
+      if (evaluableQuestions.length > 0) {
+        const score = calculateScore();
+        const shouldShowScore = score !== null && evaluableQuestions.length > 0;
+        
+        if (shouldShowScore) {
+          const passingScoreNumeric =
+            passingScoreValue !== null && !Number.isNaN(parseFloat(passingScoreValue))
+              ? parseFloat(passingScoreValue)
+              : null;
+          const passed = passingScoreNumeric !== null ? score >= passingScoreNumeric : true;
+          saveScoreToBackend(score, passed);
+        }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showResults, isViewOnly, currentAttempt, isSaving, passingScoreValue]);
 
   const assessmentHighlights = [
     totalQuestions ? `${totalQuestions} question${totalQuestions === 1 ? '' : 's'}` : null,
@@ -391,6 +514,13 @@ const KnowledgeAssessment = ({ session, onComplete, onBack, isViewOnly = false }
 
     // Check if certificate is configured
     const hasCertificate = session?.certificate && (session.certificate.template || session.certificate.id);
+    
+    // Check if retake is allowed
+    const maxAttemptsNum = maxAttemptsValue ? parseInt(maxAttemptsValue) : null;
+    const canRetake = !isPassing && (maxAttemptsNum === null || attemptsUsed < maxAttemptsNum);
+    const bestScore = previousAttempts.length > 0 
+      ? Math.max(...previousAttempts.map(a => a.score || 0))
+      : null;
 
     return (
       <Box p={3}>
@@ -548,20 +678,57 @@ const KnowledgeAssessment = ({ session, onComplete, onBack, isViewOnly = false }
               </Button>
             )
           ) : shouldShowScore && !isPassing ? (
-            <Button
-              variant="contained"
-              size="large"
-              startIcon={<ArrowBackIcon />}
-              onClick={handleStartQuiz}
-              sx={{ 
-                backgroundColor: '#114417DB', 
-                '&:hover': { backgroundColor: '#0a2f0e' },
-                px: 4,
-                py: 1.5
-              }}
-            >
-              Retake Assessment
-            </Button>
+            <Box>
+              {canRetake ? (
+                <Button
+                  variant="contained"
+                  size="large"
+                  startIcon={<RefreshIcon />}
+                  onClick={handleRetake}
+                  disabled={isSaving}
+                  sx={{ 
+                    backgroundColor: '#f59e0b', 
+                    '&:hover': { backgroundColor: '#d97706' },
+                    px: 4,
+                    py: 1.5,
+                    mb: 2
+                  }}
+                >
+                  {isSaving ? (
+                    <>
+                      <CircularProgress size={20} sx={{ mr: 1, color: 'white' }} />
+                      Saving...
+                    </>
+                  ) : (
+                    `Retake Assessment (${attemptsUsed}/${maxAttemptsNum || '∞'} attempts)`
+                  )}
+                </Button>
+              ) : (
+                <Alert severity="error" sx={{ mb: 2 }}>
+                  You have reached the maximum number of attempts ({maxAttemptsNum}). 
+                  {bestScore !== null && (
+                    <> Your best score was {bestScore}%.</>
+                  )}
+                </Alert>
+              )}
+              {previousAttempts.length > 0 && (
+                <Box mt={2}>
+                  <Typography variant="body2" color="text.secondary" gutterBottom>
+                    Previous Attempts:
+                  </Typography>
+                  <Box display="flex" flexWrap="wrap" gap={1}>
+                    {previousAttempts.map((attempt, idx) => (
+                      <Chip
+                        key={attempt.id || idx}
+                        label={`Attempt ${attempt.attempt_number || idx + 1}: ${attempt.score || 0}% ${attempt.passed ? '✓' : '✗'}`}
+                        color={attempt.passed ? 'success' : 'error'}
+                        size="small"
+                      />
+                    ))}
+                  </Box>
+                </Box>
+              )}
+            </Box>
           ) : (
             <Button
               variant="contained"

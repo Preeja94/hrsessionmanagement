@@ -1,5 +1,5 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
-import { sessionRequestAPI } from '../utils/api';
+import { sessionRequestAPI, analyticsAPI } from '../utils/api';
 
 const SessionRequestContext = createContext();
 
@@ -21,6 +21,8 @@ export const SessionRequestProvider = ({ children }) => {
           attemptsUsed: req.attempts_used || 0,
           maxAttempts: req.max_attempts || 3,
           lockedDate: req.locked_date ? new Date(req.locked_date).toLocaleDateString() : null,
+          requestDate: req.created_at ? new Date(req.created_at).toLocaleString() : null,
+          createdAt: req.created_at || null,
           status: req.status || 'pending',
           reason: req.reason || '',
           employeeEmail: req.employee_email || '',
@@ -38,64 +40,61 @@ export const SessionRequestProvider = ({ children }) => {
     loadSessionRequests();
   }, []);
   
-  // Employee performance tracking
-  const [employeePerformance, setEmployeePerformance] = useState([
-    {
-      id: 1,
-      name: 'Sarah Thompson',
-      department: 'Sales Department',
-      sessionsCompleted: 12,
-      totalSessions: 15,
-      completionRate: 80,
-      averageRating: 4.8,
-      lastActivity: '2024-12-17',
-      status: 'active'
-    },
-    {
-      id: 2,
-      name: 'Michael Chen',
-      department: 'Engineering Department',
-      sessionsCompleted: 15,
-      totalSessions: 18,
-      completionRate: 83,
-      averageRating: 4.6,
-      lastActivity: '2024-12-16',
-      status: 'active'
-    },
-    {
-      id: 3,
-      name: 'Emily Davis',
-      department: 'Marketing Department',
-      sessionsCompleted: 10,
-      totalSessions: 12,
-      completionRate: 83,
-      averageRating: 4.7,
-      lastActivity: '2024-12-15',
-      status: 'active'
-    },
-    {
-      id: 4,
-      name: 'John Smith',
-      department: 'HR Department',
-      sessionsCompleted: 8,
-      totalSessions: 10,
-      completionRate: 80,
-      averageRating: 4.5,
-      lastActivity: '2024-12-14',
-      status: 'active'
-    },
-    {
-      id: 5,
-      name: 'Lisa Wilson',
-      department: 'Finance Department',
-      sessionsCompleted: 14,
-      totalSessions: 16,
-      completionRate: 88,
-      averageRating: 4.9,
-      lastActivity: '2024-12-17',
-      status: 'active'
-    }
-  ]);
+  // Employee performance tracking - loaded from API
+  const [employeePerformance, setEmployeePerformance] = useState([]);
+  const [analyticsLoading, setAnalyticsLoading] = useState(true);
+  
+  // Analytics data state
+  const [analyticsCache, setAnalyticsCache] = useState({
+    totalLearners: 0,
+    completionRate: 0,
+    averageRating: 0,
+    activeSessions: 0,
+    totalSessionsCompleted: 0,
+    topPerformers: []
+  });
+  
+  // Load analytics data from API
+  useEffect(() => {
+    const loadAnalytics = async () => {
+      try {
+        setAnalyticsLoading(true);
+        const analyticsData = await analyticsAPI.getAnalytics();
+        if (analyticsData) {
+          if (analyticsData.employeePerformance) {
+            setEmployeePerformance(analyticsData.employeePerformance);
+          }
+          // Update analytics cache
+          setAnalyticsCache({
+            totalLearners: analyticsData.totalLearners || 0,
+            completionRate: analyticsData.completionRate || 0,
+            averageRating: analyticsData.averageRating || 0,
+            activeSessions: analyticsData.activeSessions || 0,
+            totalSessionsCompleted: analyticsData.totalSessionsCompleted || 0,
+            topPerformers: analyticsData.topPerformers || []
+          });
+        }
+      } catch (error) {
+        console.error('Error loading analytics from API:', error);
+        setEmployeePerformance([]);
+        // Fallback to empty cache
+        setAnalyticsCache({
+          totalLearners: 0,
+          completionRate: 0,
+          averageRating: 0,
+          activeSessions: sessionRequests.filter(req => req.status === 'pending' || req.status === 'locked').length,
+          totalSessionsCompleted: 0,
+          topPerformers: []
+        });
+      } finally {
+        setAnalyticsLoading(false);
+      }
+    };
+    loadAnalytics();
+    // Refresh analytics every 30 seconds
+    const interval = setInterval(loadAnalytics, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   const addSessionRequest = async (request) => {
     try {
@@ -116,6 +115,8 @@ export const SessionRequestProvider = ({ children }) => {
         attemptsUsed: newRequest.attempts_used || 0,
         maxAttempts: newRequest.max_attempts || 3,
         lockedDate: newRequest.locked_date ? new Date(newRequest.locked_date).toLocaleDateString() : null,
+        requestDate: newRequest.created_at ? new Date(newRequest.created_at).toLocaleString() : null,
+        createdAt: newRequest.created_at || null,
         status: newRequest.status || 'pending',
         reason: newRequest.reason || '',
         employeeEmail: newRequest.employee_email || '',
@@ -180,26 +181,10 @@ export const SessionRequestProvider = ({ children }) => {
     );
   };
 
-  // Calculate real-time analytics
-  const getAnalyticsData = () => {
-    const totalLearners = employeePerformance.length;
-    const totalSessionsCompleted = employeePerformance.reduce((sum, emp) => sum + emp.sessionsCompleted, 0);
-    const totalSessions = employeePerformance.reduce((sum, emp) => sum + emp.totalSessions, 0);
-    const averageCompletionRate = totalSessions > 0 ? Math.round((totalSessionsCompleted / totalSessions) * 100) : 0;
-    const averageRating = employeePerformance.length > 0 ? 
-      Math.round((employeePerformance.reduce((sum, emp) => sum + emp.averageRating, 0) / employeePerformance.length) * 10) / 10 : 0;
-    const activeSessions = sessionRequests.filter(req => req.status === 'pending' || req.status === 'locked').length;
 
-    return {
-      totalLearners,
-      completionRate: averageCompletionRate,
-      averageRating,
-      activeSessions,
-      totalSessionsCompleted,
-      topPerformers: employeePerformance
-        .sort((a, b) => b.completionRate - a.completionRate)
-        .slice(0, 3)
-    };
+  // Calculate real-time analytics - use cached data
+  const getAnalyticsData = () => {
+    return analyticsCache;
   };
 
   return (
@@ -221,6 +206,8 @@ export const SessionRequestProvider = ({ children }) => {
             attemptsUsed: req.attempts_used || 0,
             maxAttempts: req.max_attempts || 3,
             lockedDate: req.locked_date ? new Date(req.locked_date).toLocaleDateString() : null,
+            requestDate: req.created_at ? new Date(req.created_at).toLocaleString() : null,
+            createdAt: req.created_at || null,
             status: req.status || 'pending',
             reason: req.reason || '',
             employeeEmail: req.employee_email || '',

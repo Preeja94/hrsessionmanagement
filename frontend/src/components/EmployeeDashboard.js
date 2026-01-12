@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { employeeAPI, sessionAPI, sessionCompletionAPI, getAuthToken } from '../utils/api';
+import { employeeAPI, sessionAPI, sessionCompletionAPI, sessionRequestAPI, notificationAPI, getAuthToken } from '../utils/api';
 import {
   Box,
   Typography,
@@ -137,7 +137,26 @@ const normalizePublishedSession = (session = {}) => ({
   completedAt: session.completedAt || null,
   lastCompletionScore: session.lastCompletionScore ?? null,
   lastFeedback: session.lastFeedback || null,
-  moduleCount: calculateModuleCount(session) // Add module count
+  moduleCount: calculateModuleCount(session), // Add module count
+  // Content fields: explicitly preserve both camelCase and snake_case formats
+  files: session.files || [],
+  aiContent: session.aiContent || session.ai_content || null,
+  ai_content: session.ai_content || session.aiContent || null,
+  aiKeywords: session.aiKeywords || session.ai_keywords || null,
+  ai_keywords: session.ai_keywords || session.aiKeywords || null,
+  creationMode: session.creationMode || session.creation_mode || null,
+  creation_mode: session.creation_mode || session.creationMode || null,
+  quiz: session.quiz || null,
+  assessmentInfo: session.assessmentInfo || session.assessment_info || null,
+  assessment_info: session.assessment_info || session.assessmentInfo || null,
+  questions: session.questions || session.quiz?.questions || null,
+  // Certification fields: handle both formats
+  certificate: session.certificate || session.certification || null,
+  certification: session.certification || session.certificate || null,
+  hasCertificate: session.hasCertificate !== undefined ? session.hasCertificate : (session.has_certificate !== undefined ? session.has_certificate : false),
+  // Preserve audience/participants field for recommendation logic
+  audience: session.audience || session.participants || null,
+  participants: session.participants || session.audience || null
 });
 
 // Removed loadPublishedSessions - now using API
@@ -175,8 +194,20 @@ const ActivityCard = styled(Card)(({ theme }) => ({
 
 const EmployeeDashboard = () => {
   const navigate = useNavigate();
-  const { getUserId, getUserEmail, logout: logoutUser } = useAuth();
+  const { getUserId, getUserEmail, logout: logoutUser, getUserRole } = useAuth();
+  
+  // Check user role and redirect if admin
+  useEffect(() => {
+    const userRole = getUserRole();
+    const isAdmin = userRole === 'admin' || userRole === 'hr_admin';
+    if (isAdmin) {
+      // User is an admin, redirect to admin dashboard
+      navigate('/admin-dashboard', { replace: true });
+    }
+  }, [getUserRole, navigate]);
+  
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [showCompletedSessions, setShowCompletedSessions] = useState(true); // Toggle to show/hide completed sessions
   const [profileAnchorEl, setProfileAnchorEl] = useState(null);
   const [settingsAnchorEl, setSettingsAnchorEl] = useState(null);
   const [showProfile, setShowProfile] = useState(false);
@@ -204,6 +235,7 @@ const EmployeeDashboard = () => {
   const [publishedSessions, setPublishedSessions] = useState([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [completionsLoading, setCompletionsLoading] = useState(true);
+  const [approvedRequests, setApprovedRequests] = useState([]); // Track approved session requests
   
   // Track started sessions
   const [startedSessions, setStartedSessions] = useState(new Set());
@@ -214,9 +246,9 @@ const EmployeeDashboard = () => {
       setSessionsLoading(true);
       // Load all published and scheduled sessions
       const allSessions = await sessionAPI.getAll();
-      // Only show published sessions (not scheduled) - scheduled sessions will auto-publish when start time arrives
-      const publishedOnly = allSessions.filter(s => s.status === 'published');
-      const normalized = Array.isArray(publishedOnly) ? publishedOnly.map(normalizePublishedSession) : [];
+      // Show both published and scheduled sessions (scheduled sessions will auto-publish when start time arrives)
+      const publishedAndScheduled = allSessions.filter(s => s.status === 'published' || s.status === 'scheduled');
+      const normalized = Array.isArray(publishedAndScheduled) ? publishedAndScheduled.map(normalizePublishedSession) : [];
       setPublishedSessions(normalized);
     } catch (error) {
       console.error('Failed to load published sessions:', error);
@@ -248,9 +280,38 @@ const EmployeeDashboard = () => {
     }
   };
 
+  // Function to load approved session requests
+  const loadApprovedRequests = async () => {
+    try {
+      const userId = getUserId();
+      if (userId) {
+        // Get approved requests for this employee
+        const requests = await sessionRequestAPI.getAll('approved');
+        const myApprovedRequests = requests.filter(req => req.employee === parseInt(userId) || req.employee === userId);
+        setApprovedRequests(myApprovedRequests);
+      }
+    } catch (error) {
+      console.error('Failed to load approved requests:', error);
+      setApprovedRequests([]);
+    }
+  };
+
   // Load published sessions from API on mount
   useEffect(() => {
     loadSessions();
+  }, []);
+
+  // Listen for session updates (when admin schedules a new session)
+  useEffect(() => {
+    const handleSessionUpdate = () => {
+      loadSessions();
+    };
+    
+    window.addEventListener('published-sessions-updated', handleSessionUpdate);
+    
+    return () => {
+      window.removeEventListener('published-sessions-updated', handleSessionUpdate);
+    };
   }, []);
 
   // Load completed sessions from API on mount
@@ -258,11 +319,17 @@ const EmployeeDashboard = () => {
     loadCompletions();
   }, [getUserId]);
 
+  // Load approved requests on mount
+  useEffect(() => {
+    loadApprovedRequests();
+  }, [getUserId]);
+
   // Reload data when switching to tabs that need fresh data
   useEffect(() => {
     if (activeTab === 'dashboard' || activeTab === 'my-courses' || activeTab === 'course-library') {
       loadSessions();
       loadCompletions();
+      loadApprovedRequests(); // Refresh approved requests when switching tabs
     }
   }, [activeTab]);
   
@@ -342,37 +409,78 @@ const EmployeeDashboard = () => {
     };
     
     loadEmployeeProfile();
+    loadNotifications();
   }, [getUserId, getUserEmail]);
 
-  // Notifications
-  const [notifications, setNotifications] = useState([
-    {
-      id: 1,
-      title: 'Live Session Starting',
-      message: 'Mental Health & Wellbeing session is starting in 5 minutes',
-      time: '2 minutes ago',
-      type: 'live',
-      read: false
-    },
-    {
-      id: 2,
-      title: 'Upcoming Session',
-      message: 'JavaScript ES6+ Mastery session scheduled for tomorrow at 2 PM',
-      time: '1 hour ago',
-      type: 'upcoming',
-      read: false
-    },
-    {
-      id: 3,
-      title: 'Session Completed',
-      message: 'Congratulations! You completed the React Fundamentals session',
-      time: '3 hours ago',
-      type: 'completion',
-      read: true
-    }
-  ]);
+  // Refresh notifications periodically (every 30 seconds)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      loadNotifications();
+    }, 30000); // Refresh every 30 seconds
 
+    return () => clearInterval(interval);
+  }, []);
+
+  // Notifications
+  const [notifications, setNotifications] = useState([]);
+  const [notificationsLoading, setNotificationsLoading] = useState(true);
   const [notificationAnchorEl, setNotificationAnchorEl] = useState(null);
+
+  // Function to load notifications from API
+  const loadNotifications = async () => {
+    try {
+      setNotificationsLoading(true);
+      const data = await notificationAPI.getAll();
+      // Transform API response to match frontend format
+      const transformedNotifications = data.map(notif => ({
+        id: notif.id,
+        type: mapNotificationType(notif.type),
+        title: notif.title || notif.message || '',
+        message: notif.message || notif.title || '',
+        time: formatNotificationTime(notif.created_at),
+        read: notif.is_read || false
+      }));
+      setNotifications(transformedNotifications);
+    } catch (error) {
+      console.error('Failed to load notifications:', error);
+      setNotifications([]);
+    } finally {
+      setNotificationsLoading(false);
+    }
+  };
+
+  // Helper function to format notification time
+  const formatNotificationTime = (dateString) => {
+    if (!dateString) return 'Just now';
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+    
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins} minute${diffMins > 1 ? 's' : ''} ago`;
+    if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+    if (diffDays < 7) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+    return date.toLocaleDateString();
+  };
+
+  // Helper function to map backend notification types to frontend types
+  const mapNotificationType = (backendType) => {
+    switch (backendType) {
+      case 'session_scheduled':
+        return 'upcoming';
+      case 'session_approved':
+        return 'upcoming';
+      case 'session_completed':
+        return 'completion';
+      case 'certificate_earned':
+        return 'completion';
+      default:
+        return 'general';
+    }
+  };
 
   const hasCertificationForSession = (sessionId) => {
     if (!sessionId) return false;
@@ -446,6 +554,33 @@ const EmployeeDashboard = () => {
   useEffect(() => {
     setSelectedSession((prev) => {
       if (!prev) return prev;
+      // Don't overwrite if session has full content fields (was fetched via getById)
+      // Check if session has content fields that indicate it was fully loaded
+      const hasFullContent = prev.files !== undefined || prev.aiContent !== undefined || prev.quiz !== undefined || prev.ai_content !== undefined;
+      if (hasFullContent) {
+        // Only update certification fields, don't replace the whole session
+        const hasCertification = hasCertificationForSession(prev.id) || prev.certificate || prev.hasCertificate;
+        if (prev.hasCertificate === hasCertification && prev.certificate === hasCertification) {
+          return prev;
+        }
+        return {
+          ...prev,
+          hasCertificate: hasCertification,
+          certificate: hasCertification
+        };
+      }
+      // If session doesn't have full content, try to find it in publishedSessions and merge
+      const publishedSession = publishedSessions.find(s => s.id === prev.id);
+      if (publishedSession) {
+        const hasCertification = hasCertificationForSession(prev.id) || publishedSession.certificate || publishedSession.hasCertificate;
+        return {
+          ...publishedSession,
+          ...prev, // Preserve any additional fields from prev
+          hasCertificate: hasCertification,
+          certificate: hasCertification
+        };
+      }
+      // If not found, just update certification
       const hasCertification = hasCertificationForSession(prev.id) || prev.certificate || prev.hasCertificate;
       if (prev.hasCertificate === hasCertification && prev.certificate === hasCertification) {
         return prev;
@@ -460,15 +595,67 @@ const EmployeeDashboard = () => {
 
   const enrichedSessions = useMemo(() => {
     if (!publishedSessions.length) return [];
+    // Get approved request session IDs
+    const approvedSessionIds = new Set(approvedRequests.map(req => req.session));
+
+    // Create a map of session completions by session ID (get the latest completion for each session)
+    const completionsBySession = new Map();
+    sessionCompletions.forEach(completion => {
+      const sessionId = completion.session;
+      const existing = completionsBySession.get(sessionId);
+      // Keep the most recent completion (highest attempt_number or latest completed_at)
+      if (!existing || 
+          (completion.attempt_number && existing.attempt_number && completion.attempt_number > existing.attempt_number) ||
+          (completion.completed_at && existing.completed_at && new Date(completion.completed_at) > new Date(existing.completed_at))) {
+        completionsBySession.set(sessionId, completion);
+      }
+    });
+
     return publishedSessions.map((session) => {
       const completed = completedSessions.includes(session.id);
       const hasCertification = Boolean(sessionCertifications[session.id]);
       const dueDateObj = session.dueDateTime ? new Date(session.dueDateTime) : null;
       const approvalExpiresObj = session.approvalExpiresAt ? new Date(session.approvalExpiresAt) : null;
       const scheduledDateObj = session.scheduledDateTime ? new Date(session.scheduledDateTime) : null;
+
+      // Get completion data for this session
+      const completion = completionsBySession.get(session.id);
+      const completedAt = completion?.completed_at ? new Date(completion.completed_at) : null;
+      const score = completion?.score ?? null;
+      
+      // Calculate time taken (from start date to completion date)
+      let timeTaken = null;
+      if (completed && completedAt) {
+        const startDate = scheduledDateObj || dueDateObj || (session.createdAt ? new Date(session.createdAt) : null);
+        if (startDate && !isNaN(startDate.getTime()) && !isNaN(completedAt.getTime())) {
+          const diffMs = completedAt.getTime() - startDate.getTime();
+          if (diffMs > 0) {
+            const diffMinutes = Math.floor(diffMs / 60000);
+            const diffHours = Math.floor(diffMinutes / 60);
+            const diffDays = Math.floor(diffHours / 24);
+            
+            if (diffDays > 0) {
+              timeTaken = `${diffDays} day${diffDays !== 1 ? 's' : ''}`;
+            } else if (diffHours > 0) {
+              timeTaken = `${diffHours} hour${diffHours !== 1 ? 's' : ''}`;
+            } else if (diffMinutes > 0) {
+              timeTaken = `${diffMinutes} minute${diffMinutes !== 1 ? 's' : ''}`;
+            } else {
+              timeTaken = 'Less than a minute';
+            }
+          }
+        }
+      }
+
+      // Check if this session has an approved request
+      const hasApprovedRequest = approvedSessionIds.has(session.id);
+
+      // If session has approved request, it should not be locked
+      const isActuallyLocked = hasApprovedRequest ? false : (session.isLocked ?? false);
+
       const status = completed
         ? 'completed'
-        : session.isLocked
+        : isActuallyLocked
           ? 'locked'
           : session.status && session.status !== 'locked'
             ? session.status
@@ -481,37 +668,60 @@ const EmployeeDashboard = () => {
         status,
         completed,
         progress,
+        isLocked: isActuallyLocked,
         instructor: session.instructor || 'HR Team',
         dueDateObj,
         approvalExpiresObj,
         scheduledDateObj,
         hasCertificate: hasCertification && completed,
-        certificate: hasCertification && completed
+        certificate: hasCertification && completed,
+        hasApprovedRequest,
+        // Add completion data
+        completedAt: completedAt ? completedAt.toISOString() : null,
+        lastCompletionScore: score,
+        timeTaken: timeTaken
       };
     });
-  }, [publishedSessions, completedSessions, sessionCertifications]);
+  }, [publishedSessions, completedSessions, sessionCompletions, sessionCertifications, approvedRequests]);
 
   const lockedSessionsList = useMemo(
     () => enrichedSessions.filter(session => session.status === 'locked' && !session.completed),
     [enrichedSessions]
   );
 
-  // Recommended sessions based on employee skills
+  // Recommended sessions based on employee skills OR audience="all"
   const recommendedSessionsList = useMemo(() => {
     const employeeSkillsRaw = profileData.keyskills || [];
     const employeeSkills = employeeSkillsRaw
       .map(skill => (skill || '').toString().toLowerCase().trim())
       .filter(Boolean);
-    
-    if (employeeSkills.length === 0) {
-      return [];
-    }
-    
-    // Filter sessions that match employee skills and are not locked or completed
+
+    // Filter sessions that match employee skills OR are for all employees
     return enrichedSessions.filter(session => {
+      // Exclude locked or completed sessions
+      // Include both 'published' and 'scheduled' sessions
       if (session.status === 'locked' || session.completed) return false;
+      
+      // Include scheduled sessions (they should appear in recommendations)
+      // The status check above already handles locked/completed, so scheduled sessions will pass through
+      
+      // Check if session is for all employees (audience="all" or "all employees" or similar)
+      const sessionAudience = (session.audience || session.participants || '').toLowerCase().trim();
+      // Check for various forms: "all", "all employees", or starts with "all"
+      const isForAllEmployees = sessionAudience === 'all' || 
+                                 sessionAudience === 'all employees' || 
+                                 sessionAudience.startsWith('all');
+      if (isForAllEmployees) {
+        return true; // Include all sessions for "all employees"
+      }
+      
+      // If no employee skills, only show "all" audience sessions
+      if (employeeSkills.length === 0) {
+        return false;
+      }
+      
+      // Check if session has matching skills
       if (!session.skills || session.skills.length === 0) return false;
-      // Check if session has any matching skills
       const sessionSkills = (session.skills || [])
         .map(skill => (skill || '').toString().toLowerCase().trim())
         .filter(Boolean);
@@ -529,13 +739,21 @@ const EmployeeDashboard = () => {
   
   // Combined list for "My Sessions" - show all enriched sessions so completed sessions appear as well,
   // and mark which ones are recommended based on skills
+  // Optionally filter out completed sessions if user prefers
   const mySessionsList = useMemo(() => {
     const recommendedIds = new Set(recommendedSessionsList.map(s => s.id));
-    return enrichedSessions.map(session => ({
+    let sessionsToShow = enrichedSessions;
+    
+    // Filter out completed sessions if user doesn't want to see them
+    if (!showCompletedSessions) {
+      sessionsToShow = enrichedSessions.filter(session => !session.completed);
+    }
+    
+    return sessionsToShow.map(session => ({
       ...session,
       isRecommended: recommendedIds.has(session.id),
     }));
-  }, [enrichedSessions, recommendedSessionsList]);
+  }, [enrichedSessions, recommendedSessionsList, showCompletedSessions]);
 
   const getPrimarySessionDate = useCallback((session) => {
     if (!session) return null;
@@ -876,9 +1094,28 @@ const EmployeeDashboard = () => {
       setCurrentView('session-detail'); // First show session detail page
     } catch (error) {
       console.error('Failed to load session details:', error);
-      // Fallback to local session data if API call fails
+      // Fallback: try to get full session from publishedSessions or fetch again
       const details = getSessionDetails(session);
       if (details) {
+        // Check if details have content fields, if not, try to fetch again
+        const hasContent = details.files?.length > 0 || details.aiContent || details.quiz || details.ai_content;
+        if (!hasContent) {
+          // Try fetching one more time
+          try {
+            const retrySession = await sessionAPI.getById(session.id);
+            const retryNormalized = normalizePublishedSession(retrySession);
+            const completion = sessionCompletions.find(c => c.session === retryNormalized.id);
+            const sessionWithFeedback = completion?.feedback
+              ? { ...retryNormalized, feedback: completion.feedback }
+              : retryNormalized;
+            setSelectedSession(sessionWithFeedback);
+            setSessionDetailSource(source);
+            setCurrentView('session-detail');
+            return;
+          } catch (retryError) {
+            console.error('Retry fetch also failed:', retryError);
+          }
+        }
         const completion = sessionCompletions.find(c => c.session === details.id);
         const sessionWithFeedback = completion?.feedback
           ? { ...details, feedback: completion.feedback }
@@ -890,9 +1127,31 @@ const EmployeeDashboard = () => {
     }
   };
 
+  // Get previous attempts for a session (sorted by attempt_number)
+  const getPreviousAttempts = (sessionId) => {
+    if (!sessionId) return [];
+    return sessionCompletions
+      .filter(c => c.session === sessionId)
+      .sort((a, b) => (b.attempt_number || 0) - (a.attempt_number || 0));
+  };
+
+  // Get latest completion for a session
+  const getLatestCompletion = (sessionId) => {
+    if (!sessionId) return null;
+    const attempts = getPreviousAttempts(sessionId);
+    return attempts.length > 0 ? attempts[0] : null; // First one is latest (sorted desc)
+  };
+
   const handleBackToCourses = () => {
     setCurrentView(null);
     setActiveTab('my-courses');
+  };
+
+  const handleRetakeAssessment = (session) => {
+    if (!session) return;
+    // Navigate to session content view to retake assessment
+    setSelectedSession(session);
+    setCurrentView('session-content');
   };
 
   const handleBackFromSessionDetail = () => {
@@ -914,16 +1173,45 @@ const EmployeeDashboard = () => {
     try {
       // Fetch full session details from API to get files, quiz, etc.
       const fullSession = await sessionAPI.getById(session.id);
+      console.log('Raw API response for session:', fullSession);
+      console.log('Certificate config from API:', fullSession?.certification || fullSession?.certificate);
       const normalized = normalizePublishedSession(fullSession);
-      setCurrentView('session-content');
+      console.log('Normalized session:', normalized);
+      console.log('Certificate config after normalization:', normalized?.certification || normalized?.certificate);
+      
+      // Verify that content fields are present
+      const hasContent = normalized.files?.length > 0 || normalized.aiContent || normalized.quiz || normalized.ai_content || normalized.creationMode || normalized.creation_mode;
+      
+      if (!hasContent) {
+        console.warn('Session fetched but no content fields found. Session data:', normalized);
+        // Log for debugging
+        console.log('Files:', normalized.files);
+        console.log('AI Content:', normalized.aiContent || normalized.ai_content);
+        console.log('Quiz:', normalized.quiz);
+        console.log('Creation Mode:', normalized.creationMode || normalized.creation_mode);
+        console.log('Raw session from API (before normalization):', fullSession);
+      }
+      
       setSelectedSession(normalized);
+      setCurrentView('session-content');
     } catch (error) {
       console.error('Failed to load session details:', error);
-      // Fallback to local session data if API call fails
+      // Fallback: try to get from publishedSessions or use local data
       const details = getSessionDetails(session);
       if (details) {
-        setCurrentView('session-content');
+        // Check if we have content, if not try fetching from publishedSessions
+        const hasContent = details.files?.length > 0 || details.aiContent || details.quiz || details.ai_content;
+        if (!hasContent) {
+          // Try to find in publishedSessions with full data
+          const publishedSession = publishedSessions.find(s => s.id === session.id);
+          if (publishedSession && (publishedSession.files?.length > 0 || publishedSession.aiContent || publishedSession.quiz)) {
+            setSelectedSession(publishedSession);
+            setCurrentView('session-content');
+            return;
+          }
+        }
         setSelectedSession(details);
+        setCurrentView('session-content');
       }
     }
   };
@@ -1002,12 +1290,25 @@ const EmployeeDashboard = () => {
     );
   };
 
-  const markNotificationAsRead = (notificationId) => {
-    setNotifications(prev => 
-      prev.map(notif => 
-        notif.id === notificationId ? { ...notif, read: true } : notif
-      )
-    );
+  const markNotificationAsRead = async (notificationId) => {
+    try {
+      // Update in backend
+      await notificationAPI.update(notificationId, { is_read: true });
+      // Update local state
+      setNotifications(prev =>
+        prev.map(notif =>
+          notif.id === notificationId ? { ...notif, read: true } : notif
+        )
+      );
+    } catch (error) {
+      console.error('Failed to mark notification as read:', error);
+      // Still update local state on error
+      setNotifications(prev =>
+        prev.map(notif =>
+          notif.id === notificationId ? { ...notif, read: true } : notif
+        )
+      );
+    }
   };
 
   const getNotificationIcon = (type) => {
@@ -1192,76 +1493,73 @@ const EmployeeDashboard = () => {
               Recommended Sessions
             </Typography>
             {(() => {
-              // Get employee skills
+              // Get employee skills for display
               const employeeSkills = (profileData.keyskills || [])
                 .map(skill => (skill || '').toString().toLowerCase().trim())
                 .filter(Boolean);
               
-              // Find sessions that match employee skills
-              const recommendedSessions = publishedSessions
-                .filter(session => {
-                  if (!session.skills || session.skills.length === 0) return false;
-                  if (employeeSkills.length === 0) return false;
-                  // Check if session has any matching skills (case-insensitive)
-                  const sessionSkills = (session.skills || [])
-                    .map(skill => (skill || '').toString().toLowerCase().trim())
-                    .filter(Boolean);
-                  return sessionSkills.some(skill => employeeSkills.includes(skill));
-                })
-                .filter(session => !completedSessions.includes(session.id))
-                .slice(0, 5); // Limit to 5 recommendations
-              
+              // Use the already-calculated recommendedSessionsList (includes scheduled sessions)
+              const recommendedSessions = recommendedSessionsList.slice(0, 5); // Limit to 5 recommendations
+
               if (recommendedSessions.length === 0) {
                 return (
                   <Typography variant="body2" color="text.secondary">
-                    {employeeSkills.length === 0 
+                    {employeeSkills.length === 0
                       ? 'Complete your profile with skills to get personalized session recommendations.'
                       : 'No sessions match your skills at the moment. Check back later for new recommendations.'}
                   </Typography>
                 );
               }
-              
+
               return (
                 <List>
-                  {recommendedSessions.map((session) => (
-                    <ListItem 
-                      key={session.id} 
-                      sx={{ px: 0, cursor: 'pointer' }}
-                      onClick={() => {
-                        const details = getSessionDetails(session);
-                        if (details) {
-                          setSelectedSession(details);
-                          setCurrentView('session-detail');
-                        }
-                      }}
-                    >
-                      <ListItemIcon>
-                        <SchoolIcon sx={{ color: '#114417DB' }} />
-                      </ListItemIcon>
-                      <ListItemText
-                        primary={session.title || 'Untitled Session'}
-                        secondary={
-                          <Box>
-                            <Typography variant="body2" color="text.secondary" component="span">
-                              {session.skills?.filter(skill => employeeSkills.includes(skill)).slice(0, 2).join(', ')}
-                            </Typography>
-                            {session.description && (
-                              <Typography variant="body2" color="text.secondary" sx={{ 
-                                display: '-webkit-box',
-                                WebkitLineClamp: 1,
-                                WebkitBoxOrient: 'vertical',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                mt: 0.5
-                              }}>
-                                {session.description}
+                  {recommendedSessions.map((session) => {
+                    // Get matching skills for this session
+                    const sessionSkills = (session.skills || [])
+                      .map(skill => (skill || '').toString().toLowerCase().trim())
+                      .filter(Boolean);
+                    const matchingSkills = sessionSkills.filter(skill => employeeSkills.includes(skill));
+                    
+                    return (
+                      <ListItem 
+                        key={session.id} 
+                        sx={{ px: 0, cursor: 'pointer' }}
+                        onClick={() => {
+                          const details = getSessionDetails(session);
+                          if (details) {
+                            setSelectedSession(details);
+                            setCurrentView('session-detail');
+                          }
+                        }}
+                      >
+                        <ListItemIcon>
+                          <SchoolIcon sx={{ color: '#114417DB' }} />
+                        </ListItemIcon>
+                        <ListItemText
+                          primary={session.title || 'Untitled Session'}
+                          secondary={
+                            <Box>
+                              <Typography variant="body2" color="text.secondary" component="span">
+                                {matchingSkills.slice(0, 2).join(', ') || sessionSkills.slice(0, 2).join(', ')}
                               </Typography>
-                            )}
-            </Box>
-                        }
-                      />
-                    </ListItem>
-                  ))}
+                              {session.description && (
+                                <Typography variant="body2" color="text.secondary" sx={{ 
+                                  display: '-webkit-box',
+                                  WebkitLineClamp: 1,
+                                  WebkitBoxOrient: 'vertical',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  mt: 0.5
+                                }}>
+                                  {session.description}
+                                </Typography>
+                              )}
+                            </Box>
+                          }
+                        />
+                      </ListItem>
+                    );
+                  })}
                 </List>
               );
             })()}
@@ -1697,13 +1995,17 @@ const EmployeeDashboard = () => {
         {/* Content */}
         {activeTab === 'profile' ? (showPasswordManager ? renderPasswordManager() : (showEditProfile ? renderEditProfile() : renderProfile())) :
          currentView === 'session-detail' ? (
-           <SessionDetail 
-             session={selectedSession} 
+           <SessionDetail
+             session={selectedSession}
              isCompleted={selectedSession && completedSessions.includes(selectedSession.id)}
              onBack={handleBackFromSessionDetail}
              backLabel={sessionDetailSource === 'course-library' ? 'Back to Session Library' : 'Back to My Sessions'}
              onGetStarted={handleGetStarted}
              onFeedbackSubmit={handleSessionFeedbackUpdate}
+             completion={selectedSession ? getLatestCompletion(selectedSession.id) : null}
+             previousAttempts={selectedSession ? getPreviousAttempts(selectedSession.id) : []}
+             onRetakeAssessment={handleRetakeAssessment}
+             employeeName={profileData.firstName && profileData.lastName ? `${profileData.firstName} ${profileData.lastName}` : profileData.firstName || profileData.lastName || 'Employee'}
            />
          ) :
          currentView === 'session-content' ? (
