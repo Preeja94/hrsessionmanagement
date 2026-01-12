@@ -14,7 +14,7 @@ from .serializers import (
     EmployeeCreateSerializer, SessionSerializer, SessionListSerializer,
     SessionRequestSerializer, SessionCompletionSerializer
 )
-from .models import User, EmployeeProfile, Session, SessionRequest, SessionCompletion
+from .models import User, EmployeeProfile, Session, SessionRequest, SessionCompletion, Notification
 
 # Try to import AI libraries (optional - will work without them)
 try:
@@ -605,7 +605,34 @@ def sessions_list(request):
     elif request.method == 'POST':
         serializer = SessionSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save(created_by=request.user)
+            created_session = serializer.save(created_by=request.user)
+            
+            # Create notifications when session is created as scheduled
+            if created_session.status == 'scheduled' and created_session.scheduled_datetime:
+                # Get all employees based on audience
+                from django.contrib.auth import get_user_model
+                User = get_user_model()
+                
+                # Determine target employees
+                if created_session.audience and created_session.audience.lower().strip() in ['all', 'all employees']:
+                    # Notify all employees
+                    employees = User.objects.filter(role='employee', is_active=True)
+                else:
+                    # Notify employees matching the audience (skills/department)
+                    # For now, notify all employees if audience is not 'all'
+                    employees = User.objects.filter(role='employee', is_active=True)
+                
+                # Create notifications for all target employees
+                scheduled_date_str = created_session.scheduled_datetime.strftime('%B %d, %Y at %I:%M %p')
+                for employee in employees:
+                    Notification.objects.create(
+                        user=employee,
+                        type='session_scheduled',
+                        title='New Session Scheduled',
+                        message=f'A new session "{created_session.title}" has been scheduled for {scheduled_date_str}.',
+                        related_session=created_session
+                    )
+            
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -627,9 +654,43 @@ def session_detail(request, pk):
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     elif request.method == 'PUT':
+        old_status = session.status
+        old_scheduled_datetime = session.scheduled_datetime
         serializer = SessionSerializer(session, data=request.data, partial=True)
         if serializer.is_valid():
-            serializer.save()
+            updated_session = serializer.save()
+            
+            # Create notifications when session is scheduled
+            if updated_session.status == 'scheduled' and updated_session.scheduled_datetime:
+                # Check if this is a new schedule or reschedule
+                is_new_schedule = old_status != 'scheduled' or old_scheduled_datetime != updated_session.scheduled_datetime
+                
+                if is_new_schedule:
+                    # Get all employees based on audience
+                    from django.contrib.auth import get_user_model
+                    User = get_user_model()
+                    
+                    # Determine target employees
+                    if updated_session.audience and updated_session.audience.lower().strip() in ['all', 'all employees']:
+                        # Notify all employees
+                        employees = User.objects.filter(role='employee', is_active=True)
+                    else:
+                        # Notify employees matching the audience (skills/department)
+                        # For now, notify all employees if audience is not 'all'
+                        # You can enhance this to filter by skills/department later
+                        employees = User.objects.filter(role='employee', is_active=True)
+                    
+                    # Create notifications for all target employees
+                    scheduled_date_str = updated_session.scheduled_datetime.strftime('%B %d, %Y at %I:%M %p')
+                    for employee in employees:
+                        Notification.objects.create(
+                            user=employee,
+                            type='session_scheduled',
+                            title='New Session Scheduled',
+                            message=f'A new session "{updated_session.title}" has been scheduled for {scheduled_date_str}.',
+                            related_session=updated_session
+                        )
+            
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
@@ -683,7 +744,30 @@ def session_request_detail(request, pk):
     elif request.method == 'PUT':
         serializer = SessionRequestSerializer(session_request, data=request.data, partial=True)
         if serializer.is_valid():
-            serializer.save()
+            old_status = session_request.status
+            updated_request = serializer.save()
+            
+            # Send notification if status changed to approved or rejected
+            if old_status != updated_request.status:
+                if updated_request.status == 'approved':
+                    # Create notification for employee
+                    Notification.objects.create(
+                        user=updated_request.employee,
+                        type='session_approved',
+                        title='Session Access Approved',
+                        message=f'Your request for "{updated_request.session.title}" has been approved. You can now access the session.',
+                        related_session=updated_request.session
+                    )
+                elif updated_request.status == 'rejected':
+                    # Create notification for employee
+                    Notification.objects.create(
+                        user=updated_request.employee,
+                        type='session_rejected',
+                        title='Session Access Rejected',
+                        message=f'Your request for "{updated_request.session.title}" has been rejected. Please contact HR for more information.',
+                        related_session=updated_request.session
+                    )
+            
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
@@ -714,11 +798,206 @@ def session_completions_list(request):
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     elif request.method == 'POST':
-        serializer = SessionCompletionSerializer(data=request.data)
+        # Calculate attempt number if not provided
+        employee_id = request.data.get('employee')
+        session_id = request.data.get('session')
+        
+        if employee_id and session_id:
+            # Get the highest attempt number for this employee-session pair
+            last_attempt = SessionCompletion.objects.filter(
+                employee_id=employee_id,
+                session_id=session_id
+            ).order_by('-attempt_number').first()
+            
+            attempt_number = 1
+            if last_attempt:
+                attempt_number = last_attempt.attempt_number + 1
+            
+            # Add attempt_number to request data if not provided
+            data = request.data.copy()
+            if 'attempt_number' not in data:
+                data['attempt_number'] = attempt_number
+        else:
+            data = request.data
+        
+        serializer = SessionCompletionSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def analytics_data(request):
+    """Get analytics data for admin dashboard"""
+    from django.db.models import Count, Avg, Q, Max
+    from django.utils import timezone
+    
+    # Get all employees with their completions
+    employees_with_completions = User.objects.filter(
+        role='employee'
+    ).prefetch_related(
+        'completed_sessions',
+        'employee_profile'
+    ).annotate(
+        sessions_completed_count=Count('completed_sessions', filter=Q(completed_sessions__passed=True)),
+        total_attempts=Count('completed_sessions'),
+        avg_score=Avg('completed_sessions__score'),
+        last_activity=Max('completed_sessions__completed_at')
+    )
+    
+    # Calculate employee performance
+    employee_performance = []
+    for user in employees_with_completions:
+        try:
+            profile = user.employee_profile
+            job_role = profile.job_role or ''
+            department = user.department or ''
+        except EmployeeProfile.DoesNotExist:
+            job_role = ''
+            department = user.department or ''
+        
+        # Get unique sessions completed (passed)
+        passed_completions = SessionCompletion.objects.filter(
+            employee=user,
+            passed=True
+        ).values('session').distinct()
+        unique_sessions_completed = passed_completions.count()
+        
+        # Get total published sessions available
+        total_sessions = Session.objects.filter(status='published').count()
+        
+        # Calculate completion rate
+        completion_rate = round((unique_sessions_completed / total_sessions * 100)) if total_sessions > 0 else 0
+        
+        # Get average rating from feedback (if available)
+        ratings = []
+        for completion in SessionCompletion.objects.filter(employee=user, passed=True):
+            if completion.feedback and isinstance(completion.feedback, dict):
+                rating = completion.feedback.get('rating')
+                if rating:
+                    try:
+                        ratings.append(float(rating))
+                    except (ValueError, TypeError):
+                        pass
+        
+        average_rating = round(sum(ratings) / len(ratings), 1) if ratings else 0
+        
+        employee_performance.append({
+            'id': user.id,
+            'name': f"{user.first_name or ''} {user.last_name or ''}".strip() or user.username,
+            'department': department,
+            'jobRole': job_role,
+            'sessionsCompleted': unique_sessions_completed,
+            'totalSessions': total_sessions,
+            'completionRate': completion_rate,
+            'averageRating': average_rating,
+            'lastActivity': user.last_activity.isoformat() if user.last_activity else None,
+            'status': 'active'
+        })
+    
+    # Calculate overall metrics
+    total_learners = len(employee_performance)
+    total_sessions_completed = sum(emp['sessionsCompleted'] for emp in employee_performance)
+    total_sessions_available = Session.objects.filter(status='published').count()
+    average_completion_rate = round((total_sessions_completed / (total_sessions_available * total_learners * 100)) * 100) if total_learners > 0 and total_sessions_available > 0 else 0
+    
+    # Recalculate average completion rate based on individual employee rates
+    if total_learners > 0:
+        average_completion_rate = round(sum(emp['completionRate'] for emp in employee_performance) / total_learners)
+    
+    # Calculate average rating
+    all_ratings = []
+    for emp in employee_performance:
+        if emp['averageRating'] > 0:
+            all_ratings.append(emp['averageRating'])
+    average_rating = round(sum(all_ratings) / len(all_ratings), 1) if all_ratings else 0
+    
+    # Get active sessions (pending/locked session requests)
+    active_sessions = SessionRequest.objects.filter(
+        Q(status='pending') | Q(status='locked')
+    ).count()
+    
+    # Sort by completion rate for top performers
+    top_performers = sorted(
+        employee_performance,
+        key=lambda x: (x['completionRate'], x['sessionsCompleted']),
+        reverse=True
+    )[:3]
+    
+    return Response({
+        'totalLearners': total_learners,
+        'completionRate': average_completion_rate,
+        'averageRating': average_rating,
+        'activeSessions': active_sessions,
+        'totalSessionsCompleted': total_sessions_completed,
+        'employeePerformance': employee_performance,
+        'topPerformers': top_performers
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def notifications_list(request):
+    """List all notifications for the current user or create a new notification"""
+    if request.method == 'GET':
+        notifications = Notification.objects.filter(user=request.user)
+        from .serializers import NotificationSerializer
+        serializer = NotificationSerializer(notifications, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    elif request.method == 'POST':
+        from .serializers import NotificationSerializer
+        serializer = NotificationSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def notification_detail(request, pk):
+    """Retrieve, update or delete a notification"""
+    try:
+        notification = Notification.objects.get(pk=pk, user=request.user)
+    except Notification.DoesNotExist:
+        return Response(
+            {'error': 'Notification not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    
+    if request.method == 'GET':
+        from .serializers import NotificationSerializer
+        serializer = NotificationSerializer(notification)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    elif request.method == 'PUT':
+        from .serializers import NotificationSerializer
+        serializer = NotificationSerializer(notification, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    elif request.method == 'DELETE':
+        notification.delete()
+        return Response(
+            {'message': 'Notification deleted successfully'},
+            status=status.HTTP_204_NO_CONTENT
+        )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def mark_notifications_read(request):
+    """Mark all notifications as read for the current user"""
+    Notification.objects.filter(user=request.user, is_read=False).update(is_read=True)
+    return Response(
+        {'message': 'All notifications marked as read'},
+        status=status.HTTP_200_OK
+    )
 
 
 @api_view(['POST'])

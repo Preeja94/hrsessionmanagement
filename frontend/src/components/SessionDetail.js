@@ -23,12 +23,24 @@ import {
 } from '@mui/icons-material';
 import { buildSessionContentItems } from '../utils/sessionContent';
 import CourseRatingFeedback from './CourseRatingFeedback';
+import CertificateOfCompletion from './CertificateOfCompletion';
 
-const SessionDetail = ({ session, onBack, onGetStarted, onFeedbackSubmit, isCompleted = false, backLabel }) => {
+const SessionDetail = ({ session, onBack, onGetStarted, onFeedbackSubmit, isCompleted = false, backLabel, completion, onRetakeAssessment, previousAttempts = [], employeeName }) => {
   const contentItems = useMemo(
     () => buildSessionContentItems(session),
     [session]
   );
+
+  // Get assessment info to check max attempts
+  const assessmentInfo = session?.quiz?.assessmentInfo || session?.assessment_info || {};
+  const maxAttempts = assessmentInfo.maxAttempts || assessmentInfo.max_attempts || null;
+  const passingScore = assessmentInfo.passingScore || assessmentInfo.passing_score || null;
+  
+  // Check if user can retake (failed and has attempts remaining)
+  const canRetake = completion && 
+                    !completion.passed && 
+                    maxAttempts && 
+                    previousAttempts.length < maxAttempts;
 
   if (!session) {
     return (
@@ -111,6 +123,55 @@ const SessionDetail = ({ session, onBack, onGetStarted, onFeedbackSubmit, isComp
       content.path ||
       null
     );
+  };
+
+  const handleDownload = (content) => {
+    const url = getContentUrl(content);
+    if (!url) {
+      console.error('No download URL available for content:', content);
+      return;
+    }
+
+    // For data URLs or regular URLs, try to download
+    if (url.startsWith('data:') || url.startsWith('http://') || url.startsWith('https://')) {
+      // Try fetch first for CORS issues, then fallback to direct link
+      if (url.startsWith('data:')) {
+        // Data URL - direct download
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = content.title || content.name || 'session-resource';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      } else {
+        // Regular URL - try fetch then download
+        fetch(url)
+          .then(response => response.blob())
+          .then(blob => {
+            const blobUrl = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = blobUrl;
+            link.download = content.title || content.name || 'session-resource';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            window.URL.revokeObjectURL(blobUrl);
+          })
+          .catch(error => {
+            console.error('Download failed, trying direct link:', error);
+            // Fallback to direct link
+            window.open(url, '_blank');
+          });
+      }
+    } else {
+      // Direct file path or other URL
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = content.title || content.name || 'session-resource';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
   };
 
   return (
@@ -230,15 +291,12 @@ const SessionDetail = ({ session, onBack, onGetStarted, onFeedbackSubmit, isComp
                       <ListItem key={content.id} sx={{ px: 0 }}>
                         <ListItemText
                           primary={content.title}
-                          secondary={content.description}
+                          secondary={content.description || `${content.size || ''}`.trim()}
                         />
                         {url && (
                           <Button
                             variant="outlined"
-                            component="a"
-                            href={url}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                            onClick={() => handleDownload(content)}
                             sx={{ ml: 2 }}
                           >
                             Download
@@ -252,13 +310,100 @@ const SessionDetail = ({ session, onBack, onGetStarted, onFeedbackSubmit, isComp
                     <ListItem sx={{ px: 0 }}>
                       <ListItemText
                         primary={assessmentItem.title || 'Assessment'}
-                        secondary="Assessment attached to this session"
+                        secondary={
+                          <Box>
+                            <Typography variant="body2" color="text.secondary">
+                              Assessment attached to this session
+                            </Typography>
+                            {completion && (
+                              <Box mt={1}>
+                                <Typography variant="body2" color="text.secondary">
+                                  Your Score: {completion.score !== null && completion.score !== undefined ? `${completion.score}%` : 'N/A'}
+                                  {completion.passed !== undefined && (
+                                    <Chip
+                                      label={completion.passed ? 'Passed' : 'Failed'}
+                                      size="small"
+                                      sx={{
+                                        ml: 1,
+                                        backgroundColor: completion.passed ? '#e8f5e9' : '#fee2e2',
+                                        color: completion.passed ? '#166534' : '#991b1b'
+                                      }}
+                                    />
+                                  )}
+                                </Typography>
+                                {completion.attempt_number && completion.attempt_number > 1 && (
+                                  <Typography variant="caption" color="text.secondary" display="block" mt={0.5}>
+                                    Attempt #{completion.attempt_number} - Completed on {completion.completed_at ? new Date(completion.completed_at).toLocaleString() : 'N/A'}
+                                  </Typography>
+                                )}
+                                {previousAttempts && previousAttempts.length > 0 && (
+                                  <Typography variant="caption" color="text.secondary" display="block" mt={0.5}>
+                                    Total Attempts: {previousAttempts.length + 1}
+                                  </Typography>
+                                )}
+                              </Box>
+                            )}
+                          </Box>
+                        }
                       />
+                      {canRetake && onRetakeAssessment && (
+                        <Button
+                          variant="contained"
+                          onClick={() => onRetakeAssessment(session)}
+                          sx={{ ml: 2, backgroundColor: '#114417DB', '&:hover': { backgroundColor: '#0a2f0e' } }}
+                        >
+                          Retake Assessment ({previousAttempts.length + 1}/{maxAttempts})
+                        </Button>
+                      )}
+                      {completion && !completion.passed && !canRetake && maxAttempts && (
+                        <Typography variant="body2" color="error" sx={{ ml: 2 }}>
+                          Max attempts ({maxAttempts}) reached
+                        </Typography>
+                      )}
                     </ListItem>
                   )}
                 </List>
               )}
             </Card>
+          )}
+
+          {/* Certificate Section - Show if certificate is configured AND employee passed */}
+          {isCompleted && completion && completion.passed && (
+            (() => {
+              // Check if certificate is configured for this session
+              const hasCertConfig = Boolean(
+                session?.has_certificate || 
+                session?.hasCertificate || 
+                session?.certification || 
+                session?.certificate
+              );
+              
+              if (!hasCertConfig) {
+                return (
+                  <Card sx={{ p: 3, mt: 3, boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+                    <Typography variant="h6" fontWeight="bold" gutterBottom>
+                      Certificate of Completion
+                    </Typography>
+                    <Typography variant="body1" color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
+                      No certificate configured for this session.
+                    </Typography>
+                  </Card>
+                );
+              }
+              
+              return (
+                <Card sx={{ p: 3, mt: 3, boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+                  <Typography variant="h6" fontWeight="bold" gutterBottom>
+                    Certificate of Completion
+                  </Typography>
+                  <CertificateOfCompletion
+                    session={session}
+                    completion={completion}
+                    employeeName={employeeName}
+                  />
+                </Card>
+              );
+            })()
           )}
 
           {/* Start Session Button (hidden after completion) */}
@@ -280,15 +425,17 @@ const SessionDetail = ({ session, onBack, onGetStarted, onFeedbackSubmit, isComp
             </Box>
           )}
 
-          {/* Feedback Section */}
-          <Box mt={0}>
-            <CourseRatingFeedback
-              session={session}
-              onSubmit={onFeedbackSubmit}
-              isViewOnly={false}
-              sectionTitle="Session Feedback"
-            />
-          </Box>
+          {/* Feedback Section - Only show after session is completed */}
+          {isCompleted && (
+            <Box mt={4}>
+              <CourseRatingFeedback
+                session={session}
+                onSubmit={onFeedbackSubmit}
+                isViewOnly={false}
+                sectionTitle="Session Feedback"
+              />
+            </Box>
+          )}
         </Grid>
       </Grid>
     </Box>

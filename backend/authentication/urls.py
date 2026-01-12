@@ -22,5 +22,13 @@ urlpatterns = [
     
     # Session Completions
     path('session-completions/', views.session_completions_list, name='session_completions_list'),
+    
+    # Analytics
+    path('analytics/', views.analytics_data, name='analytics_data'),
+    
+    # Notifications
+    path('notifications/', views.notifications_list, name='notifications_list'),
+    path('notifications/<int:pk>/', views.notification_detail, name='notification_detail'),
+    path('notifications/mark-read/', views.mark_notifications_read, name='mark_notifications_read'),
 ]
 

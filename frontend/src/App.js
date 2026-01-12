@@ -9,6 +9,7 @@ import EmployeeDashboard from './components/EmployeeDashboard';
 import AdminDashboard from './components/AdminDashboard';
 import EmployeeEngagement from './components/EmployeeEngagement';
 import PasswordResetPage from './components/PasswordResetPage';
+import ProtectedRoute from './components/ProtectedRoute';
 
 const theme = createTheme({
   palette: {
@@ -47,9 +48,30 @@ function App() {
               <Route path="/" element={<Navigate to="/login" replace />} />
               <Route path="/login" element={<LoginPage />} />
               <Route path="/reset-password" element={<PasswordResetPage />} />
-              <Route path="/employee-dashboard" element={<EmployeeDashboard />} />
-              <Route path="/admin-dashboard" element={<AdminDashboard />} />
-              <Route path="/employee-engagement" element={<EmployeeEngagement />} />
+              <Route 
+                path="/employee-dashboard" 
+                element={
+                  <ProtectedRoute requiredRole="employee">
+                    <EmployeeDashboard />
+                  </ProtectedRoute>
+                } 
+              />
+              <Route 
+                path="/admin-dashboard" 
+                element={
+                  <ProtectedRoute requiredRole="admin">
+                    <AdminDashboard />
+                  </ProtectedRoute>
+                } 
+              />
+              <Route 
+                path="/employee-engagement" 
+                element={
+                  <ProtectedRoute requiredRole="admin">
+                    <EmployeeEngagement />
+                  </ProtectedRoute>
+                } 
+              />
             </Routes>
           </Router>
         </SessionRequestProvider>

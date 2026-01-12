@@ -25,17 +25,26 @@ import CertificateOfCompletion from './CertificateOfCompletion';
 import CourseRatingFeedback from './CourseRatingFeedback';
 import { buildSessionContentItems } from '../utils/sessionContent';
 
-const SessionContentView = ({ session, onComplete, onBack }) => {
+const SessionContentView = ({ session, onComplete, onBack, completion, employeeName }) => {
   const [currentPage, setCurrentPage] = useState(0);
   const [currentView, setCurrentView] = useState('content'); // 'content', 'assessment', 'certificate', 'feedback'
   const [isCompleted, setIsCompleted] = useState(false);
   const [assessmentScore, setAssessmentScore] = useState(null);
+  const [latestCompletion, setLatestCompletion] = useState(completion);
 
+  // Show certificate ONLY if session has certificate configured AND employee passed the assessment
+  // Check for certification configuration (has_certificate flag OR certification JSON field)
+  const hasCertConfig = Boolean(
+    session?.has_certificate || 
+    session?.hasCertificate || 
+    session?.certification || 
+    session?.certificate
+  );
+  
+  // Only show certificate step if certificate is configured AND employee passed
   const hasCertificateStep = Boolean(
-    session?.hasCertificate ||
-    session?.certificate ||
-    session?.certificationId ||
-    session?.hasCertification
+    hasCertConfig && 
+    (latestCompletion && latestCompletion.passed)
   );
 
   const allContentItems = useMemo(() => {    
@@ -117,8 +126,29 @@ const SessionContentView = ({ session, onComplete, onBack }) => {
     }
   };
 
-  const handleAssessmentComplete = (score) => {
+  const handleAssessmentComplete = async (score) => {
     setAssessmentScore(score);
+    
+    // Load the latest completion record if score was saved
+    if (score !== null && session?.id) {
+      try {
+        const { sessionCompletionAPI, getUserId } = await import('../utils/api');
+        const userId = getUserId();
+        if (userId) {
+          const completions = await sessionCompletionAPI.getAll(userId, session.id);
+          if (completions && completions.length > 0) {
+            // Get the latest completion (highest attempt_number)
+            const latest = completions.sort((a, b) => 
+              (b.attempt_number || 0) - (a.attempt_number || 0)
+            )[0];
+            setLatestCompletion(latest);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to load completion data:', error);
+      }
+    }
+    
     if (hasCertificateStep) {
       setCurrentView('certificate');
     } else {
@@ -755,12 +785,62 @@ const SessionContentView = ({ session, onComplete, onBack }) => {
     );
   }
 
-  if (currentView === 'certificate' && hasCertificateStep) {
+  if (currentView === 'certificate') {
+    // Check if certificate is actually configured
+    const hasCertConfig = Boolean(
+      session?.has_certificate || 
+      session?.hasCertificate || 
+      session?.certification || 
+      session?.certificate
+    );
+    
+    if (!hasCertConfig) {
+      // No certificate configured - show message and skip to feedback
+      return (
+        <Box p={3}>
+          <Box mb={4}>
+            <Button
+              startIcon={<ArrowBackIcon />}
+              onClick={() => setCurrentView('assessment')}
+              sx={{ mb: 2 }}
+            >
+              Back to Assessment
+            </Button>
+            <Typography variant="h4" fontWeight="bold" gutterBottom>
+              Certificate of Completion
+            </Typography>
+            <Typography variant="body1" color="text.secondary">
+              No certificate configured for this session.
+            </Typography>
+          </Box>
+          <Card sx={{ p: 4, textAlign: 'center', backgroundColor: '#f8fafc' }}>
+            <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
+              This session does not have a certificate template configured.
+            </Typography>
+            <Button
+              variant="contained"
+              onClick={handleCertificateNext}
+              sx={{ 
+                backgroundColor: '#114417DB', 
+                '&:hover': { backgroundColor: '#0a2f0e' },
+                px: 4
+              }}
+            >
+              Continue to Feedback
+            </Button>
+          </Card>
+        </Box>
+      );
+    }
+    
+    // Certificate is configured - show it
     return (
       <CertificateOfCompletion
         session={session}
         onNext={handleCertificateNext}
         onBack={() => setCurrentView('assessment')}
+        completion={latestCompletion}
+        employeeName={employeeName}
       />
     );
   }

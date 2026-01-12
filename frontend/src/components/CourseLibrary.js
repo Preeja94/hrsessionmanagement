@@ -27,14 +27,17 @@ import {
   AccessTime as TimeIcon,
   Schedule as ScheduleIcon,
   Lock as LockIcon,
-  PlayArrow as PlayIcon
+  PlayArrow as PlayIcon,
+  CheckCircle as CheckCircleIcon
 } from '@mui/icons-material';
 import { useSessionRequests } from '../contexts/SessionRequestContext';
+import { useAuth } from '../contexts/AuthContext';
 
 const APPROVAL_WINDOW_DAYS = 5;
 
 const CourseLibrary = ({ lockedSessions = [], onSessionStart, onSessionClick, loading = false }) => {
-  const { addSessionRequest } = useSessionRequests();
+  const { addSessionRequest, sessionRequests } = useSessionRequests();
+  const { getUserId } = useAuth();
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [skillFilter, setSkillFilter] = useState('all');
@@ -102,31 +105,36 @@ const CourseLibrary = ({ lockedSessions = [], onSessionStart, onSessionClick, lo
     setRequestReason('');
   };
 
-  const handleSubmitRequest = () => {
+  const handleSubmitRequest = async () => {
     if (!selectedSession) return;
     if (!requestReason.trim()) {
       alert('Please provide a brief reason for your request.');
       return;
     }
 
-    const request = {
-      sessionId: selectedSession.id,
-      sessionName: selectedSession.title,
-      reason: requestReason,
-      employeeName: 'Luke Wilson',
-      employeeEmail: 'luke.wilson@company.com',
-      status: 'pending',
-      requestedAt: new Date().toISOString(),
-      lockedDate: selectedSession.lockedAt || selectedSession.dueDateTime,
-      dueDateTime: selectedSession.dueDateTime,
-      approvalWindowDays: APPROVAL_WINDOW_DAYS
-    };
+    const userId = getUserId();
+    if (!userId) {
+      alert('User ID not found. Please log in again.');
+      return;
+    }
 
-    addSessionRequest(request);
-    setShowRequestDialog(false);
-    setSelectedSession(null);
-    setRequestReason('');
-    alert('Request submitted successfully! The admin team will review it shortly.');
+    try {
+      const request = {
+        employee: parseInt(userId),
+        session: selectedSession.id,
+        reason: requestReason.trim(),
+        status: 'pending'
+      };
+
+      await addSessionRequest(request);
+      setShowRequestDialog(false);
+      setSelectedSession(null);
+      setRequestReason('');
+      alert('Request submitted successfully! The admin team will review it shortly.');
+    } catch (error) {
+      console.error('Failed to submit request:', error);
+      alert('Failed to submit request. Please try again.');
+    }
   };
 
   const renderEmptyState = (message) => (
@@ -233,68 +241,106 @@ const CourseLibrary = ({ lockedSessions = [], onSessionStart, onSessionClick, lo
     </Card>
   );
 
-  const renderLockedCard = (session) => (
-    <Card sx={{ height: '100%', '&:hover': { boxShadow: 4 } }}>
-      <CardContent>
-        <Box display="flex" justifyContent="space-between" alignItems="start" mb={2}>
-          <Typography variant="h6" fontWeight="bold" gutterBottom>
-            {session.title}
-          </Typography>
-          <Chip
-            label="Locked"
-            size="small"
-            sx={{ backgroundColor: '#ef4444', color: 'white' }}
-            icon={<LockIcon sx={{ fontSize: 16 }} />}
-          />
-        </Box>
+  const renderLockedCard = (session) => {
+    // Check if this session has an approved request
+    const userId = getUserId();
+    const approvedRequest = userId && sessionRequests?.find(req => 
+      req.session === session.id && 
+      req.employee === parseInt(userId) && 
+      req.status === 'approved'
+    );
+    const hasApprovedRequest = !!approvedRequest;
 
-        <Typography variant="body2" color="text.secondary" mb={2}>
-          {session.description || 'This session is currently locked. Request access to resume your training.'}
-        </Typography>
-
-        <Box display="flex" alignItems="center" mb={1.5} gap={0.75}>
-          <PersonIcon sx={{ fontSize: 16, color: '#6b7280' }} />
-          <Typography variant="body2" color="text.secondary">
-            {session.instructor || 'HR Team'}
-          </Typography>
-        </Box>
-
-        {session.dueDateTime && (
-          <Box display="flex" alignItems="center" mb={1} gap={0.75}>
-            <ScheduleIcon sx={{ fontSize: 16, color: '#b91c1c' }} />
-            <Typography variant="body2" color="#b91c1c">
-              Due by {formatDate(session.dueDateTime)}
+    return (
+      <Card sx={{ height: '100%', '&:hover': { boxShadow: 4 } }}>
+        <CardContent>
+          <Box display="flex" justifyContent="space-between" alignItems="start" mb={2}>
+            <Typography variant="h6" fontWeight="bold" gutterBottom>
+              {session.title}
             </Typography>
+            {hasApprovedRequest ? (
+              <Chip
+                label="Approved"
+                size="small"
+                sx={{ backgroundColor: '#10b981', color: 'white' }}
+                icon={<CheckCircleIcon sx={{ fontSize: 16 }} />}
+              />
+            ) : (
+              <Chip
+                label="Locked"
+                size="small"
+                sx={{ backgroundColor: '#ef4444', color: 'white' }}
+                icon={<LockIcon sx={{ fontSize: 16 }} />}
+              />
+            )}
           </Box>
-        )}
 
-        {session.lockedAt && (
-          <Box display="flex" alignItems="center" mb={1} gap={0.75}>
-            <TimeIcon sx={{ fontSize: 16, color: '#6b7280' }} />
+          <Typography variant="body2" color="text.secondary" mb={2}>
+            {hasApprovedRequest 
+              ? 'Your request has been approved. You can now access this session.'
+              : (session.description || 'This session is currently locked. Request access to resume your training.')}
+          </Typography>
+
+          <Box display="flex" alignItems="center" mb={1.5} gap={0.75}>
+            <PersonIcon sx={{ fontSize: 16, color: '#6b7280' }} />
             <Typography variant="body2" color="text.secondary">
-              Locked on {formatDate(session.lockedAt)}
+              {session.instructor || 'HR Team'}
             </Typography>
           </Box>
-        )}
 
-        <Box mt={2}>
-          <Button
-            variant="contained"
-            fullWidth
-            startIcon={<RequestIcon />}
-            onClick={() => handleRequestAccess(session)}
-            sx={{ backgroundColor: '#114417DB', '&:hover': { backgroundColor: '#0a2f0e' } }}
-          >
-            Request Access
-          </Button>
-        </Box>
+          {session.dueDateTime && (
+            <Box display="flex" alignItems="center" mb={1} gap={0.75}>
+              <ScheduleIcon sx={{ fontSize: 16, color: '#b91c1c' }} />
+              <Typography variant="body2" color="#b91c1c">
+                Due by {formatDate(session.dueDateTime)}
+              </Typography>
+            </Box>
+          )}
 
-        <Typography variant="caption" color="text.secondary" display="block" mt={1.5}>
-          Once approved, complete this session within {APPROVAL_WINDOW_DAYS} days to avoid relocking.
-        </Typography>
-      </CardContent>
-    </Card>
-  );
+          {session.lockedAt && (
+            <Box display="flex" alignItems="center" mb={1} gap={0.75}>
+              <TimeIcon sx={{ fontSize: 16, color: '#6b7280' }} />
+              <Typography variant="body2" color="text.secondary">
+                Locked on {formatDate(session.lockedAt)}
+              </Typography>
+            </Box>
+          )}
+
+          {!hasApprovedRequest && (
+            <Box mt={2}>
+              <Button
+                variant="contained"
+                fullWidth
+                startIcon={<RequestIcon />}
+                onClick={() => handleRequestAccess(session)}
+                sx={{ backgroundColor: '#114417DB', '&:hover': { backgroundColor: '#0a2f0e' } }}
+              >
+                Request Access
+              </Button>
+            </Box>
+          )}
+
+          {hasApprovedRequest ? (
+            <Box mt={2}>
+              <Button
+                variant="contained"
+                fullWidth
+                startIcon={<PlayIcon />}
+                onClick={() => onSessionClick && onSessionClick(session)}
+                sx={{ backgroundColor: '#10b981', '&:hover': { backgroundColor: '#059669' } }}
+              >
+                Start Session
+              </Button>
+            </Box>
+          ) : (
+            <Typography variant="caption" color="text.secondary" display="block" mt={1.5}>
+              Once approved, complete this session within {APPROVAL_WINDOW_DAYS} days to avoid relocking.
+            </Typography>
+          )}
+        </CardContent>
+      </Card>
+    );
+  };
 
   if (loading) {
     return (

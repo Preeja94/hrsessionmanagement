@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import User, EmployeeProfile, Session, SessionRequest, SessionCompletion
+from .models import User, EmployeeProfile, Session, SessionRequest, SessionCompletion, Notification
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -72,7 +72,7 @@ class SessionListSerializer(serializers.ModelSerializer):
         fields = ['id', 'title', 'description', 'type', 'status', 'creation_mode',
                   'scheduled_date', 'scheduled_time', 'scheduled_datetime',
                   'due_date', 'due_time', 'due_datetime',
-                  'has_certificate', 'skills', 'created_by', 'created_by_name',
+                  'certification', 'has_certificate', 'skills', 'audience', 'created_by', 'created_by_name',
                   'created_at', 'updated_at', 'published_at', 'saved_at']
         read_only_fields = ['id', 'created_at', 'updated_at', 'created_by_name']
 
@@ -81,6 +81,11 @@ class SessionSerializer(serializers.ModelSerializer):
     """Full serializer for session detail/create/update (includes all fields)"""
     created_by_name = serializers.CharField(source='created_by.get_full_name', read_only=True)
     skills = serializers.JSONField(default=list, allow_null=True)
+    files = serializers.JSONField(default=list, allow_null=True, required=False)
+    ai_content = serializers.JSONField(default=None, allow_null=True, required=False)
+    quiz = serializers.JSONField(default=None, allow_null=True, required=False)
+    assessment_info = serializers.JSONField(default=None, allow_null=True, required=False)
+    certification = serializers.JSONField(default=None, allow_null=True, required=False)
     
     class Meta:
         model = Session
@@ -91,6 +96,24 @@ class SessionSerializer(serializers.ModelSerializer):
                   'has_certificate', 'skills', 'audience', 'created_by', 'created_by_name',
                   'created_at', 'updated_at', 'published_at', 'saved_at']
         read_only_fields = ['id', 'created_at', 'updated_at', 'created_by_name']
+    
+    def to_representation(self, instance):
+        """Ensure JSON fields are always returned with correct defaults"""
+        representation = super().to_representation(instance)
+        # Ensure files is always an array (never None)
+        if representation.get('files') is None:
+            representation['files'] = []
+        # For other JSON fields, ensure they're present (can be null if that's the actual value)
+        # This ensures the fields are always in the response
+        if 'ai_content' not in representation:
+            representation['ai_content'] = getattr(instance, 'ai_content', None)
+        if 'quiz' not in representation:
+            representation['quiz'] = getattr(instance, 'quiz', None)
+        if 'assessment_info' not in representation:
+            representation['assessment_info'] = getattr(instance, 'assessment_info', None)
+        if 'certification' not in representation:
+            representation['certification'] = getattr(instance, 'certification', None)
+        return representation
 
 
 class SessionRequestSerializer(serializers.ModelSerializer):
@@ -113,6 +136,16 @@ class SessionCompletionSerializer(serializers.ModelSerializer):
     class Meta:
         model = SessionCompletion
         fields = ['id', 'employee', 'employee_name', 'session', 'session_name',
-                  'score', 'passed', 'completed_at', 'feedback']
+                  'score', 'passed', 'attempt_number', 'answers', 'completed_at', 'feedback']
         read_only_fields = ['id', 'completed_at']
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    session_title = serializers.CharField(source='related_session.title', read_only=True)
+    
+    class Meta:
+        model = Notification
+        fields = ['id', 'user', 'type', 'title', 'message', 'is_read', 
+                  'related_session', 'session_title', 'created_at']
+        read_only_fields = ['id', 'created_at']
 
