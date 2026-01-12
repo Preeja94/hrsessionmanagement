@@ -126,18 +126,49 @@ class SessionRequest(models.Model):
 
 
 class SessionCompletion(models.Model):
-    """Track employee session completions"""
+    """Track employee session completions and attempts"""
     employee = models.ForeignKey(User, on_delete=models.CASCADE, related_name='completed_sessions')
     session = models.ForeignKey(Session, on_delete=models.CASCADE, related_name='completions')
     score = models.FloatField(null=True, blank=True)
     passed = models.BooleanField(default=False)
+    attempt_number = models.IntegerField(default=1)  # Track which attempt this is
+    answers = models.JSONField(null=True, blank=True)  # Store user's answers for this attempt
     completed_at = models.DateTimeField(auto_now_add=True)
     feedback = models.JSONField(null=True, blank=True)
     
     class Meta:
         db_table = 'session_completions'
-        unique_together = ['employee', 'session']
+        # Allow multiple attempts per employee-session pair
+        unique_together = ['employee', 'session', 'attempt_number']
+        ordering = ['-completed_at']  # Most recent first
     
     def __str__(self):
-        return f"{self.employee.username} completed {self.session.title}"
+        return f"{self.employee.username} - {self.session.title} (Attempt {self.attempt_number})"
+
+
+class Notification(models.Model):
+    """Notifications for employees"""
+    TYPE_CHOICES = [
+        ('session_approved', 'Session Approved'),
+        ('session_rejected', 'Session Rejected'),
+        ('session_completed', 'Session Completed'),
+        ('certificate_earned', 'Certificate Earned'),
+        ('session_scheduled', 'Session Scheduled'),
+        ('general', 'General'),
+    ]
+    
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
+    type = models.CharField(max_length=50, choices=TYPE_CHOICES, default='general')
+    title = models.CharField(max_length=200)
+    message = models.TextField()
+    is_read = models.BooleanField(default=False)
+    related_session = models.ForeignKey(Session, on_delete=models.SET_NULL, null=True, blank=True, related_name='notifications')
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'notifications'
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"{self.user.username} - {self.title}"
 
